@@ -1,2 +1,6 @@
-# SMLMDriftCorrection.jl
-Algorithms for correcting sample drift in SMLM data.
+# SMLMDriftCorrection
+
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaSMLM.github.io/SMLMDriftCorrection.jl/stable)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaSMLM.github.io/SMLMDriftCorrection.jl/dev)
+[![Build Status](https://github.com/JuliaSMLM/SMLMDriftCorrection.jl/workflows/CI/badge.svg)](https://github.com/JuliaSMLM/SMLMDriftCorrection.jl/actions)
+[![Coverage](https://codecov.io/gh/JuliaSMLM/SMLMDriftCorrection.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/JuliaSMLM/SMLMDriftCorrection.jl)
