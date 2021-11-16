@@ -77,8 +77,36 @@ function correctdrift(smld::SMLMData.SMLD2D,driftmodel::Polynomial)
     return smld_shifted
 end
 
+function model2theta(p::Polynomial)
+    # assume all polynomials are same
+    nc=p.model[1].degree+1
+    θ=Array{Float64}(undef,p.ndatasets*p.ndims*nc)
 
+    for ii=1:p.ndatasets,jj=1:p.ndims
+        idx=(ii-1)*p.ndims*nc+(jj-1)*nc+1        
+        θ[idx:idx+nc-1]=p.model[ii,jj].coefficients
+    end
+    # remove first dataset offset
+    deleteat!(θ,(0:p.ndims-1).*(p.model[1].degree+1).+1)
 
+    return θ
+end
+
+function theta2model(θ, pref::Polynomial)
+    p=deepcopy(pref)
+    nc=p.model[1].degree+1
+    
+    for ii=1:p.ndims
+        insert!(θ,(ii-1)*(nc)+1,0.0)
+    end
+
+    for ii=1:p.ndatasets,jj=1:p.ndims
+        idx=(ii-1)*p.ndims*nc+(jj-1)*nc+1        
+        p.model[ii,jj].coefficients=θ[idx:idx+nc-1]
+    end
+    
+    return p
+end
 
 
 
