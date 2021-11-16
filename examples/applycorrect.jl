@@ -44,6 +44,16 @@ plt=PlotlyJS.plot(scattergl(x=smd_DC.x, y=smd_DC.y, mode="markers"))
 display(plt)
 
 
+cost=DC.NND(smd_drift)
+cost=DC.NND(smd_DC)
+
+
+θ=DC.model2theta(driftmodel)
+dm=DC.theta2model(θ,driftmodel)
+
+plt=PlotlyJS.plot(scattergl(x=smd_DC.x, y=smd_DC.y, mode="markers"))
+display(plt)
+
 
 
 
