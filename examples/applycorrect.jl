@@ -54,6 +54,9 @@ dm=DC.theta2model(θ,driftmodel)
 plt=PlotlyJS.plot(scattergl(x=smd_DC.x, y=smd_DC.y, mode="markers"))
 display(plt)
 
+##
+# dm_found=DC.finddrift(smd_drift)
+
 
 
 
