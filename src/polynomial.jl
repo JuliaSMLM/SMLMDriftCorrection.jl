@@ -1,85 +1,68 @@
 # Define polynomial methods
 
-mutable struct Polynomial1D <: DriftModel1D
+mutable struct Polynomial1D <: AbstractIntraDrift1D
     degree::Int
-    coefficients
+    coefficients::Vector{Real}
 end
 function Polynomial1D(degree::Int)
-    return Polynomial1D(degree,zeros(degree+1))
+    return Polynomial1D(degree,zeros(degree))
 end
 
-
-mutable struct Polynomial <: DriftModel
-    ndatasets::Int
+mutable struct IntraPolynomial <: AbstractIntraDrift
     ndims::Int
-    model::Array{Polynomial1D}
+    dm::Vector{Polynomial1D}
+end
+function IntraPolynomial(ndims::Int; degree::Int=2)
+    dm=Vector{Polynomial1D}(undef,ndims)
+    for ii=1:ndims
+        dm[ii]=Polynomial1D(degree)
+    end
+    return IntraPolynomial(ndims,dm)
 end
 
-function Polynomial(smld::SMLMData.SMLD2D; degree::Int=2, initialize::String="zeros")
-    
-    dm=Polynomial(smld.ndatasets,2,Array{Polynomial1D}(undef,smld.ndatasets,2))
+mutable struct Polynomial <: AbstractIntraInter
+    ndatasets::Int
+    intra::Vector{IntraPolynomial}
+    inter::Vector{InterShift}
+end
+function Polynomial(ndims::Int,ndatasets::Int, nframes::Int; degree=2, initialize::String="zeros")
+    intra=Vector{IntraPolynomial}(undef,ndatasets)
+    inter=Vector{InterShift}(undef,ndatasets)
 
-    if initialize=="zeros"
-        for ii=1:length(dm.model)
-            dm.model[ii]=Polynomial1D(degree)
-        end
+    for ii=1:ndatasets
+        intra[ii]=IntraPolynomial(ndims; degree=degree)
+        inter[ii]=InterShift(ndims)
     end
 
     if initialize=="random"
-        for ii=1:length(dm.model)
-            dm.model[ii]=Polynomial1D(degree)
-            dm.model[ii].coefficients=0.1*randn()./(smld.nframes.^(0:degree))
+        rscale=0.1
+        for ii=1:ndatasets, jj=1:ndims
+            inter[ii].dm[jj]=rscale*randn()
+            intra[ii].dm[jj].coefficients=rscale*randn()./(nframes.^(1:degree))
         end
     end
-
-    return dm
+    return Polynomial(ndatasets,intra,inter)
 end
 
+function Polynomial(smld::SMLMData.SMLD2D; degree::Int=2, initialize::String="zeros")
+    return Polynomial(2,smld.ndatasets,smld.nframes;degree=degree, initialize=initialize)
+end
 
-
-function applydrift(p::Polynomial1D,x::AbstractFloat,framenum::Int)
-    for nn=0:p.degree
-        x+=p.coefficients[nn+1]*framenum^nn
+function applydrift(x::AbstractFloat,framenum::Int,p::Polynomial1D)
+    for nn=1:p.degree
+        x+=p.coefficients[nn]*framenum^nn
     end
     return x
 end
 
-function correctdrift(p::Polynomial1D,x,framenum::Int)
-    for nn=0:p.degree
-        x-=p.coefficients[nn+1]*framenum^nn
+function correctdrift(x::AbstractFloat,framenum::Int,p::Polynomial1D)
+    for nn=1:p.degree
+        x-=p.coefficients[nn]*framenum^nn
     end
     return x
 end
 
 
-function applydrift!(smld::SMLMData.SMLD2D,driftmodel::Polynomial)
-    for nn=1:length(smld.x)        
-        smld.x[nn]=applydrift(driftmodel.model[smld.datasetnum[nn],1],smld.x[nn],smld.framenum[nn])
-        smld.y[nn]=applydrift(driftmodel.model[smld.datasetnum[nn],2],smld.y[nn],smld.framenum[nn])
-    end
-end
-
-function applydrift(smld::SMLMData.SMLD2D,driftmodel::Polynomial)
-    smld_shifted=deepcopy(smld)
-    applydrift!(smld_shifted::SMLMData.SMLD2D,driftmodel::Polynomial)
-    return smld_shifted
-end
-
-function correctdrift!(smld::SMLMData.SMLD2D,driftmodel::Polynomial)    
-    println(size(smld.x,1))
-    for nn=1:size(smld.x,1)      
-        # println(nn)
-        # println(correctdrift(driftmodel.model[smld.datasetnum[nn],1],smld.x[nn],smld.framenum[nn]))
-        smld.x[nn]=correctdrift(driftmodel.model[smld.datasetnum[nn],1],smld.x[nn],smld.framenum[nn])
-        smld.y[nn]=correctdrift(driftmodel.model[smld.datasetnum[nn],2],smld.y[nn],smld.framenum[nn])
-    end
-end
-
-function correctdrift(smld::SMLMData.SMLD2D,driftmodel::Polynomial)
-    smld_shifted=deepcopy(smld)
-    correctdrift!(smld_shifted,driftmodel)
-    return smld_shifted
-end
 
 function model2theta(p::Polynomial)
     # assume all polynomials are same
