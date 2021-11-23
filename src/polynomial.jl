@@ -2,7 +2,7 @@
 
 mutable struct Polynomial1D <: AbstractIntraDrift1D
     degree::Int
-    coefficients::Vector{Real}
+    coefficients::Vector{<:Real}
 end
 function Polynomial1D(degree::Int)
     return Polynomial1D(degree,zeros(degree))
@@ -37,10 +37,22 @@ function Polynomial(ndims::Int,ndatasets::Int, nframes::Int;
 
     if initialize=="random"
         for ii=1:ndatasets, jj=1:ndims
-            inter[ii].dm[jj]=rscale*randn()/100
+            inter[ii].dm[jj]=rscale*randn()
             intra[ii].dm[jj].coefficients=rscale*randn()./(nframes.^(1:degree))
         end
     end
+
+    if initialize=="continous"
+        for ii=1:ndatasets, jj=1:ndims
+            if ii==1
+                inter[ii].dm[jj]=rscale*randn()
+            else
+                inter[ii].dm[jj]=inter[ii-1].dm[jj]+applydrift(0.0,nframes, intra[ii-1].dm[jj])     
+            end
+            intra[ii].dm[jj].coefficients=rscale*randn()./(nframes.^(1:degree))
+        end
+    end
+
     return Polynomial(ndatasets,intra,inter)
 end
 
@@ -81,57 +93,3 @@ function theta2intra!(p::IntraPolynomial,θ::Vector{<:Real})
     end
 end
 
-
-function correctdriftPoly(θ,coords_uncorrected,smld,degree)
-    
-    coords=deepcopy(coords_uncorrected)
-    ndims=size(coords_uncorrected,2)
-    nc=degree+1
-    θ_full=deepcopy(θ)
-    for ii=1:ndims
-        insert!(θ_full,(ii-1)*(nc)+1,0.0)
-    end
-
-    for ii=1:size(coords,1),jj=1:ndims
-        f=smld.framenum[ii]
-        d=smld.datasetnum[ii]    
-        idx=(d-1)*ndims*nc+(jj-1)*nc+1        
-        coefficients=θ_full[idx:idx+nc-1]
-        # println(size(coefficients))
-        for nn=0:size(coefficients,1)-1
-            # println(coords[ii,jj])
-            # println(-coefficients[nn+1]*f^nn)
-            coords[ii,jj]=coords[ii,jj]-coefficients[nn+1]*f^nn
-        end
-    end
-    return coords
-end
-
-
-# function costfun(θ,coords_uncorrected,smld::SMLMData.SMLD2D,p::Polynomial)
-#     #  println("max: $(maximum(θ)) min: $(minimum(θ))")
-        
-#     coords=correctdriftPoly(θ,coords_uncorrected,smld,p.model[1].degree)
-#     d_cutoff=mean([mean(smld.σ_x),mean(smld.σ_y)])
-
-#     return NND(coords,d_cutoff)+sum(θ)
-# end
-
-# function costfun(θ,coords_uncorrected,kdtree::KDTree,smld::SMLMData.SMLD2D,p::Polynomial)
-#     #  println("max: $(maximum(θ)) min: $(minimum(θ))")
-        
-#     coords=correctdriftPoly(θ,coords_uncorrected,smld,p.model[1].degree)
-#     d_cutoff=mean([mean(smld.σ_x),mean(smld.σ_y)])
-    
-#     return NND(coords,kdtree,d_cutoff)+sum(θ)
-# end
-
-
-# function optimizeintra!(θ,smld::SMLMData.SMLD2D,p::Polynomial,dataset::Int)
-#     d_cutoff=mean([mean(smld.σ_x),mean(smld.σ_y)])
-#     dm=theta2model(θ,p)    
-#     idx=smld.datasetnum.==dataset
-#     coords=cat(dims=2,smld.x[idx],smld.y[idx])
-
-
-# end

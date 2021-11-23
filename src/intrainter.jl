@@ -104,10 +104,8 @@ function costfun(θ, data_uncorrected, ref_data, d_cutoff::AbstractFloat, inter:
     kdtree = KDTree(ref_data; leafsize = 10)
     idxs, dists = knn(kdtree, data, k, true)
     
-
     cost = 0.0
-    for nn = 1:size(data, 2)
-        
+    for nn = 1:size(data, 2)    
         # cost += sum(min.(dists[nn], d_cutoff))
         cost -= sum(exp.(-dists[nn]./d_cutoff))
     end
@@ -133,18 +131,25 @@ function findintra!(intra::AbstractIntraDrift, smld::SMLMData.SMLD2D, dataset::I
 
     myfun = θ -> costfun(θ, data, framenum, d_cutoff, intra)
     # println(myfun(θ0))
-    opt = Optim.Options(iterations = 10000, show_trace = true, show_every = 10)
+    opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
 
     theta2intra!(intra, θ_found)
 end
 
-function findintra(smld::SMLMData.SMLD2D)
-
-end
-
-function findinter!(dm::AbstractIntraInter, smld::SMLMData.SMLD2D, dataset1::Int, dataset2::Int, d_cutoff::AbstractFloat)
+function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int, dataset2::Int, d_cutoff::AbstractFloat)
+    
+    # correct everything but inter dataset 1
+    
+    # set inter to zero for dataset 1
+    inter=dm.inter[dataset1]
+    for jj = 1:inter.ndims
+        inter.dm[jj] = 0.0
+    end
+    # correct everything else
+    smld=correctdrift(smld_uncorrected,dm)
+    
     idx1 = smld.datasetnum .== dataset1
     idx2 = smld.datasetnum .== dataset2
     
@@ -154,29 +159,28 @@ function findinter!(dm::AbstractIntraInter, smld::SMLMData.SMLD2D, dataset1::Int
     coords2 = cat(dims = 2, smld.x[idx2], smld.y[idx2])
     data_ref = transpose(coords2)
 
-    inter=dm.inter[dataset1]
-    # rscale = 0.1
-    
-    # for jj = 1:inter.ndims
-    #     inter.dm[jj] = rscale 
-    # end
-
     #convert all intra drift parameters to a single vector for optimization
     θ0 = Float64.(inter2theta(inter))
     
     myfun = θ -> costfun(θ, data, data_ref, d_cutoff, inter)
     # println(myfun(θ0))
-    opt = Optim.Options(iterations = 10000, show_trace = true, show_every = 10)
+    opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
 
     theta2inter!(inter, θ_found)
-
-    println(θ0)
-    println(θ_found)
 end
 
-function findinter!(dm::AbstractIntraInter, smld::SMLMData.SMLD2D, dataset1::Int,  d_cutoff::AbstractFloat)
+function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int,  d_cutoff::AbstractFloat)
+    
+    # set inter to zero for dataset 1
+    inter=dm.inter[dataset1]
+    for jj = 1:inter.ndims
+        inter.dm[jj] = 0.0
+    end
+    # correct everything else
+    smld=correctdrift(smld_uncorrected,dm)
+    
     idx1 = smld.datasetnum .== dataset1
     idx2 = smld.datasetnum .!= dataset1
     
@@ -188,19 +192,15 @@ function findinter!(dm::AbstractIntraInter, smld::SMLMData.SMLD2D, dataset1::Int
 
     inter=dm.inter[dataset1]
     
-    #convert all intra drift parameters to a single vector for optimization
+    # convert all intra drift parameters to a single vector for optimization
     θ0 = Float64.(inter2theta(inter))
 
     myfun = θ -> costfun(θ, data, data_ref, d_cutoff, inter)
-    opt = Optim.Options(iterations = 10000, show_trace = true, show_every = 10)
+    opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
 
-    theta2inter!(inter, θ_found)
-
-    println(θ0)
-    println(θ_found)
-    
+    theta2inter!(inter, θ_found)    
 end
 
 
