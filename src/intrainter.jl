@@ -112,6 +112,29 @@ function costfun(θ, data_uncorrected, ref_data, d_cutoff::AbstractFloat, inter:
     return cost
 end
 
+function costfun(θ, data_uncorrected, kdtree::KDTree, d_cutoff::AbstractFloat, inter::InterShift)
+    
+    theta2inter!(inter, θ)
+    data = deepcopy(data_uncorrected)
+
+    ndims = size(data, 1)
+    nloc = size(data, 2)
+    for nn = 1:ndims, ii = 1:nloc
+        data[nn, ii] = correctdrift(data_uncorrected[nn, ii], inter, nn)
+    end
+
+    k = 10
+
+    idxs, dists = knn(kdtree, data, k, true)
+    
+    cost = 0.0
+    for nn = 1:size(data, 2)    
+        # cost += sum(min.(dists[nn], d_cutoff))
+        cost -= sum(exp.(-dists[nn]./d_cutoff))
+    end
+    return cost
+end
+
 
 function findintra!(intra::AbstractIntraDrift, smld::SMLMData.SMLD2D, dataset::Int, d_cutoff::AbstractFloat)
     idx = smld.datasetnum .== dataset
@@ -159,10 +182,12 @@ function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, d
     coords2 = cat(dims = 2, smld.x[idx2], smld.y[idx2])
     data_ref = transpose(coords2)
 
+    kdtree = KDTree(data_ref; leafsize = 10)
+
     #convert all intra drift parameters to a single vector for optimization
     θ0 = Float64.(inter2theta(inter))
     
-    myfun = θ -> costfun(θ, data, data_ref, d_cutoff, inter)
+    myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
     # println(myfun(θ0))
     opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
@@ -189,13 +214,14 @@ function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, d
     
     coords2 = cat(dims = 2, smld.x[idx2], smld.y[idx2])
     data_ref = transpose(coords2)
+    kdtree = KDTree(data_ref; leafsize = 10)
 
     inter=dm.inter[dataset1]
     
     # convert all intra drift parameters to a single vector for optimization
     θ0 = Float64.(inter2theta(inter))
 
-    myfun = θ -> costfun(θ, data, data_ref, d_cutoff, inter)
+    myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
     opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
