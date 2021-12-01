@@ -3,6 +3,8 @@ function driftcorrect(smld::SMLMData.SMLD;
     intramodel::String = "Polynomial",
     degree::Int = 2,
     d_cutoff = 0.1,
+    knn_intra::Int = 4,
+    knn_inter::Int = 4,
     verbose::Int=0)
 
     if intramodel == "Polynomial"
@@ -26,17 +28,28 @@ function driftcorrect(smld::SMLMData.SMLD;
         findinter!(driftmodel, smld, nn, refdataset, d_cutoff)
     end
 
+    # if verbose>0
+    #     @info("SMLMDriftCorrection: starting inter to all others")
+    # end
+    # # Correct each to all others
+    # for ii = 1:2, nn = 1:smld.ndatasets
+    #     if verbose>1
+    #         println("SMLMDriftCorrection: round $ii dataset $nn")
+    #     end        
+    #     findinter!(driftmodel, smld, nn, d_cutoff)
+    # end
+    
     if verbose>0
-        @info("SMLMDriftCorrection: starting inter to all others")
+        @info("SMLMDriftCorrection: starting inter to earlier")
     end
     # Correct each to all others
-    for ii = 1:2, nn = 1:smld.ndatasets
+    for ii = 2:smld.ndatasets
         if verbose>1
-            println("SMLMDriftCorrection: round $ii dataset $nn")
+            println("SMLMDriftCorrection: dataset $ii")
         end        
-        findinter!(driftmodel, smld, nn, d_cutoff)
+        findinter!(driftmodel, smld, ii, collect((1:(ii-1))),d_cutoff)
     end
-
+    
     smd_found = correctdrift(smld, driftmodel)
 
     return smd_found

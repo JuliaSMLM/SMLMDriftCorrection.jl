@@ -75,7 +75,7 @@ function costfun(θ, data_uncorrected, framenum::Vector{Int}, d_cutoff::Abstract
         data[nn, ii] = correctdrift(data_uncorrected[nn, ii], framenum[ii], intra.dm[nn])
     end
 
-    k = 10
+    k = 4
     kdtree = KDTree(data; leafsize = 10)
     idxs, dists = knn(kdtree, data, k, true)
     # println(size(dists))
@@ -100,7 +100,7 @@ function costfun(θ, data_uncorrected, ref_data, d_cutoff::AbstractFloat, inter:
         data[nn, ii] = correctdrift(data_uncorrected[nn, ii], inter, nn)
     end
 
-    k = 10
+    k = 4
     kdtree = KDTree(ref_data; leafsize = 10)
     idxs, dists = knn(kdtree, data, k, true)
     
@@ -123,7 +123,7 @@ function costfun(θ, data_uncorrected, kdtree::KDTree, d_cutoff::AbstractFloat, 
         data[nn, ii] = correctdrift(data_uncorrected[nn, ii], inter, nn)
     end
 
-    k = 10
+    k = 4
 
     idxs, dists = knn(kdtree, data, k, true)
     
@@ -192,8 +192,8 @@ function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, d
     opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
-
     theta2inter!(inter, θ_found)
+    return res.minimum
 end
 
 function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int,  d_cutoff::AbstractFloat)
@@ -226,8 +226,62 @@ function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, d
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
 
-    theta2inter!(inter, θ_found)    
+    theta2inter!(inter, θ_found)
+    return res.minimum    
 end
 
+function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int, dataset2::Vector{Int}, d_cutoff::AbstractFloat)
+    
+    # correct everything but inter dataset 1
+    
+    # set inter to zero for dataset 1
+    inter=dm.inter[dataset1]
+    for jj = 1:inter.ndims
+        inter.dm[jj] = 0.0
+    end
+    # correct everything else
+    smld=correctdrift(smld_uncorrected,dm)
+    
+    idx1 = smld.datasetnum .== dataset1
+    
+    idx2=zeros(Bool,length(smld.datasetnum))
+    for nn=1:length(dataset2)
+        idx2 = idx2.|(smld.datasetnum .== dataset2[nn])
+    end
+    coords1 = cat(dims = 2, smld.x[idx1], smld.y[idx1])
+    data = transpose(coords1)
+    
+    coords2 = cat(dims = 2, smld.x[idx2], smld.y[idx2])
+    data_ref = transpose(coords2)
 
+    kdtree = KDTree(data_ref; leafsize = 10)
+
+    #convert all intra drift parameters to a single vector for optimization
+    θ0 = Float64.(inter2theta(inter))
+    
+    myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
+    # println(myfun(θ0))
+    opt = Optim.Options(iterations = 10000, show_trace = false)
+    res = optimize(myfun, θ0, opt)
+    θ_found = res.minimizer
+
+    theta2inter!(inter, θ_found)
+    return res.minimum
+end
+
+function globalcost(smld::SMLMData.SMLD2D; k::Int=4, d_cutoff=1.0)
+    
+    coords1 = cat(dims = 2, smld.x, smld.y)
+    data = transpose(coords1)
+    
+    kdtree = KDTree(data; leafsize = 10)
+    idxs, dists = knn(kdtree, data, k+1, true)
+    
+    cost = 0.0
+    for nn = 2:size(data, 2)    
+        # cost += sum(min.(dists[nn], d_cutoff))
+        cost -= sum(exp.(-dists[nn]./d_cutoff))
+    end
+    return cost
+end
 
