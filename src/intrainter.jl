@@ -161,102 +161,29 @@ function findintra!(intra::AbstractIntraDrift, smld::SMLMData.SMLD2D, dataset::I
     theta2intra!(intra, θ_found)
 end
 
-function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int, dataset2::Int, d_cutoff::AbstractFloat)
-    
-    # correct everything but inter dataset 1
-    
-    # set inter to zero for dataset 1
-    inter=dm.inter[dataset1]
-    for jj = 1:inter.ndims
-        inter.dm[jj] = 0.0
-    end
-    # correct everything else
-    smld=correctdrift(smld_uncorrected,dm)
-    
-    idx1 = smld.datasetnum .== dataset1
-    idx2 = smld.datasetnum .== dataset2
-    
-    coords1 = cat(dims = 2, smld.x[idx1], smld.y[idx1])
-    data = transpose(coords1)
-    
-    coords2 = cat(dims = 2, smld.x[idx2], smld.y[idx2])
-    data_ref = transpose(coords2)
-
-    kdtree = KDTree(data_ref; leafsize = 10)
-
-    #convert all intra drift parameters to a single vector for optimization
-    θ0 = Float64.(inter2theta(inter))
-    
-    myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
-    # println(myfun(θ0))
-    opt = Optim.Options(iterations = 10000, show_trace = false)
-    res = optimize(myfun, θ0, opt)
-    θ_found = res.minimizer
-    theta2inter!(inter, θ_found)
-    return res.minimum
-end
-
-function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int,  d_cutoff::AbstractFloat)
-    
-    # set inter to zero for dataset 1
-    inter=dm.inter[dataset1]
-    for jj = 1:inter.ndims
-        inter.dm[jj] = 0.0
-    end
-    # correct everything else
-    smld=correctdrift(smld_uncorrected,dm)
-    
-    idx1 = smld.datasetnum .== dataset1
-    idx2 = smld.datasetnum .!= dataset1
-    
-    coords1 = cat(dims = 2, smld.x[idx1], smld.y[idx1])
-    data = transpose(coords1)
-    
-    coords2 = cat(dims = 2, smld.x[idx2], smld.y[idx2])
-    data_ref = transpose(coords2)
-    kdtree = KDTree(data_ref; leafsize = 10)
-
-    inter=dm.inter[dataset1]
-    
-    # convert all intra drift parameters to a single vector for optimization
-    θ0 = Float64.(inter2theta(inter))
-
-    myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
-    opt = Optim.Options(iterations = 10000, show_trace = false)
-    res = optimize(myfun, θ0, opt)
-    θ_found = res.minimizer
-
-    theta2inter!(inter, θ_found)
-    return res.minimum    
-end
-
 function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int, dataset2::Vector{Int}, d_cutoff::AbstractFloat)
     
-    # correct everything but inter dataset 1
+    # get uncorrected coords for dataset 1 
+    idx1 = smld_uncorrected.datasetnum .== dataset1
+    coords1 = cat(dims = 2, smld_uncorrected.x[idx1], smld_uncorrected.y[idx1])
+    data = transpose(coords1)
     
-    # set inter to zero for dataset 1
-    inter=dm.inter[dataset1]
-    for jj = 1:inter.ndims
-        inter.dm[jj] = 0.0
-    end
-    # correct everything else
+    #correct everything
     smld=correctdrift(smld_uncorrected,dm)
     
-    idx1 = smld.datasetnum .== dataset1
-    
+    # get corrected coords for reference datasets 
     idx2=zeros(Bool,length(smld.datasetnum))
     for nn=1:length(dataset2)
         idx2 = idx2.|(smld.datasetnum .== dataset2[nn])
-    end
-    coords1 = cat(dims = 2, smld.x[idx1], smld.y[idx1])
-    data = transpose(coords1)
-    
+    end   
     coords2 = cat(dims = 2, smld.x[idx2], smld.y[idx2])
     data_ref = transpose(coords2)
 
+    # build static kdtree from ref data
     kdtree = KDTree(data_ref; leafsize = 10)
 
-    #convert all intra drift parameters to a single vector for optimization
+    # use current model as starting point 
+    inter=dm.inter[dataset1]
     θ0 = Float64.(inter2theta(inter))
     
     myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
@@ -267,6 +194,13 @@ function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, d
 
     theta2inter!(inter, θ_found)
     return res.minimum
+end
+
+
+function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int,  d_cutoff::AbstractFloat)
+    refdatasets=Int.(1:smld_uncorrected.ndatasets)
+    deleteat!(refdatasets,dataset1)
+    return findinter!(dm, smld_uncorrected, dataset1, refdatasets, d_cutoff::AbstractFloat)   
 end
 
 function globalcost(smld::SMLMData.SMLD2D; k::Int=4, d_cutoff=1.0)
