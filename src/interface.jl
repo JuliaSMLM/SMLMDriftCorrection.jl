@@ -1,4 +1,17 @@
+"""
+Main interfact for drift correction (DC).  This algorithm consists of an
+    intra-dataset portion and an inter-dataset portion.
 
+# Fields
+- smld:       structure containing (X, Y) coordinates (pixel)
+- intramodel: model for intra-dataset DC= "Polynomial"
+- degree:     degree for polynomial intra-dataset DC = 2
+- d_cutoff:   distance cutoff (pixel) = 0.1
+- knn_intra:  not used = 4
+- knn_inter:  not used = 4
+- verbose:    flag for more output = 0
+
+"""
 function driftcorrect(smld::SMLMData.SMLD;
     intramodel::String = "Polynomial",
     degree::Int = 2,
