@@ -24,7 +24,7 @@ minphotons = 500 # minimum number of photons per frame accepted
 
 # Simulation sequence
 f = SMLMSim.GenericFluor(γ, q)
-pattern = SMLMSim.Nmer2D(n, d)
+pattern = SMLMSim.Nmer2D(; n, d)
 smd_true = SMLMSim.uniform2D(ρ, pattern, xsize, ysize)
 smd_model = SMLMSim.kineticmodel(smd_true, f, nframes, framerate; ndatasets = 10, minphotons = minphotons)
 smd_noisy = SMLMSim.noise(smd_model, σ_psf)
