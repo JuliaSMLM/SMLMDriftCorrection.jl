@@ -1,4 +1,4 @@
-## Demonstrate applying and correctly drift 
+## Demonstrate applying and correcting drift 
 
 using Revise
 using SMLMDriftCorrection
@@ -8,7 +8,7 @@ using SMLMSim
 using PlotlyJS
 using Statistics
 
-# make an n-mer dataset
+# make an Nmer dataset
 γ = 1e5 # Fluorophore emission rate
 q = [0 50
    5e-2 0] # Fluorophore blinking rates
@@ -45,4 +45,3 @@ display(plt)
 
 plt=PlotlyJS.plot(scattergl(x=smld_corrected.x, y=smld_corrected.y, mode="markers"))
 display(plt)
-

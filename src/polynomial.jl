@@ -20,6 +20,18 @@ function IntraPolynomial(ndims::Int; degree::Int=2)
     return IntraPolynomial(ndims,dm)
 end
 
+"""
+Initialize polynomials.
+
+# Fields:
+- ndims:      number of dimensions
+- ndaatsets:  number of datasets
+- nframes:    number of frames
+- degree:     polymomial degree = 2
+- initialize: string indicating possible initializations
+              ("zeros" [default], "random", "continuous")
+- rscale:     = scale factor for normalized random numbers = 0.1 px
+"""
 mutable struct Polynomial <: AbstractIntraInter
     ndatasets::Int
     intra::Vector{IntraPolynomial}
@@ -74,7 +86,9 @@ function correctdrift(x::AbstractFloat,framenum::Int,p::Polynomial1D)
     return x
 end
 
-
+"""
+Convert intra-dataset polynomials (p) to coefficients (θ).
+"""
 function intra2theta(p::IntraPolynomial)
     degree=p.dm[1].degree
     l=p.ndims*degree
@@ -85,6 +99,9 @@ function intra2theta(p::IntraPolynomial)
     return θ
 end
 
+"""
+Convert polynomial coefficients (θ) to intra-dataset polynomials (p).
+"""
 function theta2intra!(p::IntraPolynomial,θ::Vector{<:Real})
     degree=p.dm[1].degree
     l=p.ndims*degree
@@ -92,4 +109,3 @@ function theta2intra!(p::IntraPolynomial,θ::Vector{<:Real})
         p.dm[ii].coefficients[jj]=θ[jj+(ii-1)*degree]
     end
 end
-

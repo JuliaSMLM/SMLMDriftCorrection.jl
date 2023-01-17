@@ -22,15 +22,23 @@ function theta2inter!(s::InterShift,θ)
     s.dm.=θ
 end
 
-
+"""
+Apply drift to simulated data.
+"""
 function applydrift(x::AbstractFloat, s::InterShift, dim::Int)
     return x + s.dm[dim]
 end
 
+"""
+Apply drift correction to drifted data.
+"""
 function correctdrift(x::AbstractFloat, s::InterShift, dim::Int)
     return x - s.dm[dim]
 end
 
+"""
+Apply x- and y-drift to the data in the smld structure.
+"""
 function applydrift!(smld::SMLMData.SMLD2D, dm::AbstractIntraInter)
     for nn = 1:length(smld.x)
         smld.x[nn] = applydrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
@@ -63,8 +71,18 @@ function correctdrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
+"""
+Cost function computes the cost of a drift correction proposal.
+    Here, the cost is the sum of the scaled negative exponentials of the
+    nearest neighbor distances.
 
-
+# Fields:
+- θ:                parameters for a drift correction proposal
+- data_uncorrected: uncorrected coordinate data for each localization
+- framenum:         frame number for each localization
+- d_cutoff:         cutoff distance
+- intra:            intra-dataset data structure
+"""
 function costfun(θ, data_uncorrected, framenum::Vector{Int}, d_cutoff::AbstractFloat, intra::AbstractIntraDrift)
     theta2intra!(intra, θ)
     data = deepcopy(data_uncorrected)
@@ -89,6 +107,14 @@ function costfun(θ, data_uncorrected, framenum::Vector{Int}, d_cutoff::Abstract
     return cost
 end
 
+"""
+# Fields:
+- θ:                parameters for a drift correction proposal
+- data_uncorrected: uncorrected coordinate data for each localization
+- ref_data:         reference data for producing the KDTree
+- d_cutoff:         cutoff distance
+- inter:            inter-dataset data structure
+"""
 function costfun(θ, data_uncorrected, ref_data, d_cutoff::AbstractFloat, inter::InterShift)
     
     theta2inter!(inter, θ)
@@ -112,6 +138,14 @@ function costfun(θ, data_uncorrected, ref_data, d_cutoff::AbstractFloat, inter:
     return cost
 end
 
+"""
+# Fields:
+- θ:                parameters for a drift correction proposal
+- data_uncorrected: uncorrected coordinate data for each localization
+- kdtree:           kdtree constructed from a reference dataset (see routine above)
+- d_cutoff:         cutoff distance
+- inter:            inter-dataset data structure
+"""
 function costfun(θ, data_uncorrected, kdtree::KDTree, d_cutoff::AbstractFloat, inter::InterShift)
     
     theta2inter!(inter, θ)
@@ -135,7 +169,15 @@ function costfun(θ, data_uncorrected, kdtree::KDTree, d_cutoff::AbstractFloat, 
     return cost
 end
 
+"""
+Find and correct intra-detaset drift.
 
+# Fields:
+- intra:            intra-dataset structure
+- smld:             data structure containing coordinate data
+- dataset           dataset number to operate on
+- d_cutoff:         cutoff distance
+"""
 function findintra!(intra::AbstractIntraDrift, smld::SMLMData.SMLD2D, dataset::Int, d_cutoff::AbstractFloat)
     idx = smld.datasetnum .== dataset
     coords = cat(dims = 2, smld.x[idx], smld.y[idx])
@@ -161,6 +203,16 @@ function findintra!(intra::AbstractIntraDrift, smld::SMLMData.SMLD2D, dataset::I
     theta2intra!(intra, θ_found)
 end
 
+"""
+Find and correct inter-detaset drift.
+
+# Fields:
+- dm:               inter-dataset structure
+- smld_uncorrected: data structure containing uncorrected coordinate data
+- dataset1:         dataset number for the reference dataset
+- dataset2:         dataset numbers to operate on
+- d_cutoff:         cutoff distance
+"""
 function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, dataset1::Int, dataset2::Vector{Int}, d_cutoff::AbstractFloat)
     
     # get uncorrected coords for dataset 1 
@@ -203,6 +255,9 @@ function findinter!(dm::AbstractIntraInter, smld_uncorrected::SMLMData.SMLD2D, d
     return findinter!(dm, smld_uncorrected, dataset1, refdatasets, d_cutoff::AbstractFloat)   
 end
 
+"""
+Experimental.
+"""
 function globalcost(smld::SMLMData.SMLD2D; k::Int=4, d_cutoff=1.0)
     
     coords1 = cat(dims = 2, smld.x, smld.y)
@@ -218,4 +273,3 @@ function globalcost(smld::SMLMData.SMLD2D; k::Int=4, d_cutoff=1.0)
     end
     return cost
 end
-

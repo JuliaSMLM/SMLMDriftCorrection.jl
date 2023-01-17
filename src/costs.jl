@@ -59,5 +59,3 @@ function finddrift(smld::SMLMData.SMLD2D; degree::Int=2)
     # println(res)
     # return theta2model(minimizer(res),p)
 end
-
-
