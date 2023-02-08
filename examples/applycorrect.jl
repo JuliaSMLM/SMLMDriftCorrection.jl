@@ -31,7 +31,7 @@ plt=PlotlyJS.plot(scattergl(x=smd_noisy.x, y=smd_noisy.y, mode="markers"))
 display(plt)
 
 
-# Setup drift model 
+## Setup drift model 
 driftmodel=DC.Polynomial(smd_noisy; degree=2, initialize="random")
 smd_drift=DC.applydrift(smd_noisy,driftmodel)
 
@@ -44,15 +44,12 @@ plt=PlotlyJS.plot(scattergl(x=smd_DC.x, y=smd_DC.y, mode="markers"))
 display(plt)
 
 
-cost=DC.NND(smd_drift)
-cost=DC.NND(smd_DC)
+# cost=DC.NND(smd_drift)
+# cost=DC.NND(smd_DC)
 
 
-θ=DC.model2theta(driftmodel)
-dm=DC.theta2model(θ,driftmodel)
-
-plt=PlotlyJS.plot(scattergl(x=smd_DC.x, y=smd_DC.y, mode="markers"))
-display(plt)
+# plt=PlotlyJS.plot(scattergl(x=smd_DC.x, y=smd_DC.y, mode="markers"))
+# display(plt)
 
 ##
 # dm_found=DC.finddrift(smd_drift)
