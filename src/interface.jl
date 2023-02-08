@@ -24,8 +24,8 @@ function driftcorrect(smld::SMLMData.SMLD;
         @info("SMLMDriftCorrection: starting inter to dataset 1")
     end
     Threads.@threads  for nn = 2:smld.ndatasets
-        refdataset = 1
-        findinter!(driftmodel, smld, nn, refdataset, d_cutoff)
+        refdatasets = [1]
+        findinter!(driftmodel, smld, nn, refdatasets, d_cutoff)
     end
 
     # if verbose>0
@@ -42,7 +42,6 @@ function driftcorrect(smld::SMLMData.SMLD;
     if verbose>0
         @info("SMLMDriftCorrection: starting inter to earlier")
     end
-    # Correct each to all others
     for ii = 2:smld.ndatasets
         if verbose>1
             println("SMLMDriftCorrection: dataset $ii")
