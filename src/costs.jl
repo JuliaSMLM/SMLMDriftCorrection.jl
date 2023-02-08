@@ -17,7 +17,6 @@ NND computes the nearest neighbor distance of the given coordinates using a k-D
 
 See NearestNeighbors.jl for further info.
 """
-
 function NND(coords,d_cutoff::AbstractFloat)
     data=transpose(coords)
     kdtree = KDTree(data; leafsize = 10)
@@ -36,8 +35,6 @@ function NND(coords,kdtree::KDTree,d_cutoff::AbstractFloat; k::Int=10)
     return cost
 end
 
-function 
-
 """
 finddrift uses a polynomial drift model of the given degree and the NND cost
     function to predict the drift correction.
@@ -46,7 +43,6 @@ finddrift uses a polynomial drift model of the given degree and the NND cost
 - smld:   SMLMData.SMLM2D structure containing X and Y coordinates
 - degree: polyomial degree = 2
 """
-
 function finddrift(smld::SMLMData.SMLD2D; degree::Int=2)
     p=Polynomial(smld;degree=degree,initialize="zeros")
     θ=model2theta(p)
