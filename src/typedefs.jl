@@ -1,7 +1,11 @@
 
-abstract type DriftModel end
+abstract type AbstractDriftModel end
 
-abstract type DriftModel1D end
+
+
+
+
+
 
 
 
