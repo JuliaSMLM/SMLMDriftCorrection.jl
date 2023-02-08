@@ -6,8 +6,7 @@ function NND(coords,d_cutoff::AbstractFloat)
     return NND(coords,kdtree::KDTree,d_cutoff::AbstractFloat)
 end
 
-function NND(coords,kdtree::KDTree,d_cutoff::AbstractFloat)
-    k=10
+function NND(coords,kdtree::KDTree,d_cutoff::AbstractFloat; k::Int=10)
     data=transpose(coords)
     idxs, dists=knn(kdtree, data, k,true)
 
@@ -18,6 +17,9 @@ function NND(coords,kdtree::KDTree,d_cutoff::AbstractFloat)
     
     return cost
 end
+
+function 
+
 
 
 function finddrift(smld::SMLMData.SMLD2D; degree::Int=2)

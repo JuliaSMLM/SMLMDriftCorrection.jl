@@ -17,6 +17,12 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
 BenchmarkTools = "1"
+ForwardDiff = "0.10"
+Zygote = "0.6"
+Optim = "1"
+NearestNeighbors = "0.4"
+PlotlyJS = "0.18"
+SMLMSim = "0.1"
 julia = "1.6"
 
 [extras]
