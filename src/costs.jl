@@ -1,5 +1,22 @@
+"""
+Compute a cost function for the drift correction algorithm.
+    Currently, the cost function is the sum of the minimum nearest neighbor
+    distance for each localization, applying a distance cutoff which replaces
+    a distance too far away from its closest neighbor by the cutoff.
+"""
 
+"""
+NND computes the nearest neighbor distance of the given coordinates using a k-D
+    tree.
 
+# Fields
+- coords:   (X, Y) coordinates
+- d_cutoff: cutoff distance
+- kdtree:   KDTree structure
+- k:        10
+
+See NearestNeighbors.jl for further info.
+"""
 function NND(coords,d_cutoff::AbstractFloat)
     data=transpose(coords)
     kdtree = KDTree(data; leafsize = 10)
@@ -18,10 +35,14 @@ function NND(coords,kdtree::KDTree,d_cutoff::AbstractFloat; k::Int=10)
     return cost
 end
 
-function 
+"""
+finddrift uses a polynomial drift model of the given degree and the NND cost
+    function to predict the drift correction.
 
-
-
+#Fields
+- smld:   SMLMData.SMLM2D structure containing X and Y coordinates
+- degree: polyomial degree = 2
+"""
 function finddrift(smld::SMLMData.SMLD2D; degree::Int=2)
     p=Polynomial(smld;degree=degree,initialize="zeros")
     θ=model2theta(p)
@@ -34,5 +55,3 @@ function finddrift(smld::SMLMData.SMLD2D; degree::Int=2)
     # println(res)
     # return theta2model(minimizer(res),p)
 end
-
-

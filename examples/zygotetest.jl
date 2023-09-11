@@ -88,6 +88,3 @@ display(plt)
 
 # θ=[1]
 # g= ForwardDiff.gradient(θ->cost(θ ,data,kdtree),θ)
-
-
-

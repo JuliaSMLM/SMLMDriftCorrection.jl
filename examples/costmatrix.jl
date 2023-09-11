@@ -1,4 +1,4 @@
-## Demonstrate applying and correctly drift 
+## Demonstrate applying and correcting drift 
 
 using Revise
 using SMLMDriftCorrection
@@ -9,7 +9,7 @@ using Plots
 using PlotlyJS
 using Statistics
 
-# make an n-mer dataset
+# make an Nmer dataset
 γ = 1e5 # Fluorophore emission rate
 q = [0 50
    1e-2 0] # Fluorophore blinking rates
@@ -25,12 +25,12 @@ minphotons = 500 # minimum number of photons per frame accepted
 
 # Simulation sequence
 f = SMLMSim.GenericFluor(γ, q)
-pattern = SMLMSim.Nmer2D(n, d)
+pattern = SMLMSim.Nmer2D(; n, d)
 smd_true = SMLMSim.uniform2D(ρ, pattern, xsize, ysize)
 smd_model = SMLMSim.kineticmodel(smd_true, f, nframes, framerate; ndatasets = 100, minphotons = minphotons)
 smd_noisy = SMLMSim.noise(smd_model, σ_psf)
 
-## Setup drift model 
+## Set up drift model 
 drift_true = DC.Polynomial(smd_noisy; degree = 2, 
                initialize = "random",rscale=0.1)
 smld_drift = DC.applydrift(smd_noisy, drift_true)
@@ -58,5 +58,3 @@ end
 
 plotly()
 Plots.heatmap(costmatrix)
-
-
