@@ -1,5 +1,5 @@
 """
-Main interfact for drift correction (DC).  This algorithm consists of an
+Main interface for drift correction (DC).  This algorithm consists of an
     intra-dataset portion and an inter-dataset portion.
 
 # Fields
