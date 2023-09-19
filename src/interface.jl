@@ -4,8 +4,8 @@ Main interface for drift correction (DC).  This algorithm consists of an
 
 # Fields
 - smld:       structure containing (X, Y) coordinates (pixel)
-- intramodel: model for intra-dataset DC
-              {"Polynomial", "LegendrePolynomial"} = "Polynomial"
+- intramodel: model for intra-dataset DC:
+              {"Polynomial", "LegendrePoly"} = "Polynomial"
 - cost_fun:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
 - degree:     degree for polynomial intra-dataset DC = 2
 - d_cutoff:   distance cutoff (pixel) = 0.1
@@ -17,13 +17,13 @@ function driftcorrect(smld::SMLMData.SMLD;
     intramodel::String = "Polynomial",
     cost_fun::String = "Kdtree",
     degree::Int = 2,
-    d_cutoff = 0.1,
-    maxn = 200,
-    verbose::Int=0)
+    d_cutoff::AbstractFloat = 0.1,
+    maxn::Int = 200,
+    verbose::Int = 0)
 
     if intramodel == "Polynomial"
         driftmodel = Polynomial(smld; degree = degree)
-    elseif intramodel == "LegendrePolynomial"
+    elseif intramodel == "LegendrePoly"
         driftmodel = LegendrePolynomial(smld; degree = degree)
     end
 
