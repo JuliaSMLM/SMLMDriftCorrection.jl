@@ -1,5 +1,5 @@
 """
-Compute a cost function for the drift correction algorithm.
+Compute a mearest neighbor cost function for the drift correction algorithm.
     Currently, the cost function is the sum of the minimum nearest neighbor
     distance for each localization, applying a distance cutoff which replaces
     a distance too far away from its closest neighbor by the cutoff.

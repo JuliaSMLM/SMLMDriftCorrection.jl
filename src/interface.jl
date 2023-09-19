@@ -4,24 +4,27 @@ Main interface for drift correction (DC).  This algorithm consists of an
 
 # Fields
 - smld:       structure containing (X, Y) coordinates (pixel)
-- intramodel: model for intra-dataset DC = "Polynomial"
+- intramodel: model for intra-dataset DC
+              {"Polynomial", "LegendrePolynomial"} = "Polynomial"
+- cost_fun:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
 - degree:     degree for polynomial intra-dataset DC = 2
 - d_cutoff:   distance cutoff (pixel) = 0.1
-- knn_intra:  not used = 4
-- knn_inter:  not used = 4
+- maxn:       maximum number of neighbors considered = 200
 - verbose:    flag for more output = 0
 
 """
 function driftcorrect(smld::SMLMData.SMLD;
     intramodel::String = "Polynomial",
+    cost_fun::String = "Kdtree",
     degree::Int = 2,
     d_cutoff = 0.1,
-    knn_intra::Int = 4,
-    knn_inter::Int = 4,
+    maxn = 200,
     verbose::Int=0)
 
     if intramodel == "Polynomial"
         driftmodel = Polynomial(smld; degree = degree)
+    elseif intramodel == "LegendrePolynomial"
+        driftmodel = LegendrePolynomial(smld; degree = degree)
     end
 
     # Intra-dataset 
@@ -29,7 +32,7 @@ function driftcorrect(smld::SMLMData.SMLD;
         @info("SMLMDriftCorrection: starting intra")
     end
     Threads.@threads for nn = 1:smld.ndatasets
-        findintra!(driftmodel.intra[nn], smld, nn, d_cutoff)
+        findintra!(driftmodel.intra[nn], cost_fun, smld, nn, d_cutoff, maxn)
     end
 
     # Inter-dataset: Correct them all to datatset 1
@@ -38,7 +41,7 @@ function driftcorrect(smld::SMLMData.SMLD;
     end
     Threads.@threads  for nn = 2:smld.ndatasets
         refdatasets = [1]
-        findinter!(driftmodel, smld, nn, refdatasets, d_cutoff)
+        findinter!(driftmodel, cost_fun, smld, nn, refdatasets, d_cutoff, maxn)
     end
 
     # if verbose>0
@@ -59,7 +62,7 @@ function driftcorrect(smld::SMLMData.SMLD;
         if verbose>1
             println("SMLMDriftCorrection: dataset $ii")
         end        
-        findinter!(driftmodel, smld, ii, collect((1:(ii-1))),d_cutoff)
+        findinter!(driftmodel, cost_fun, smld, ii, collect((1:(ii-1))), d_cutoff, maxn)
     end
     
     smd_found = correctdrift(smld, driftmodel)
