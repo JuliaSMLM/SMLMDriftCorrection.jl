@@ -21,18 +21,18 @@ Compare using examples/finddrift.jl
 
 ## driftcorrect interface function
 
-driftcorrect(smld::SMLMData.SMLD;
-    intramodel::String = "Polynomial",
-    cost_fun::String = "Kdtree",
-    degree::Int = 2,
-    d_cutoff::AbstractFloat = 0.1,
-    maxn::Int = 200,
-    verbose::Int = 0)
+**driftcorrect**(***smld***::SMLMData.SMLD;
+    ***intramodel***::String = "Polynomial",
+    ***cost_fun***::String = "Kdtree",
+    ***degree***::Int = 2,
+    ***d_cutoff***::AbstractFloat = 0.1,
+    ***maxn***::Int = 200,
+    ***verbose***::Int = 0)
 
-- smld:       structure containing (X, Y) coordinates (pixel)
-- intramodel: model for intra-dataset DC: {"Polynomial", "LegendrePoly"} = "Polynomial"
-- cost_fun:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
-- degree:     degree for polynomial intra-dataset DC = 2
-- d_cutoff:   distance cutoff (pixel) = 0.1
-- maxn:       maximum number of neighbors considered = 200
-- verbose:    flag for more output = 0
+- ***smld***:       structure containing (X, Y) coordinates (pixel)
+- ***intramodel***: model for intra-dataset DC: {"Polynomial", "LegendrePoly"} = "Polynomial"
+- ***cost_fun***:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
+- ***degree***:     degree for polynomial intra-dataset DC = 2
+- ***d_cutoff***:   distance cutoff (pixel) = 0.1
+- ***maxn***:       maximum number of neighbors considered = 200
+- ***verbose***:    flag for more output = 0
