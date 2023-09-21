@@ -34,12 +34,12 @@ smld_corrected = DC.driftcorrect(smd_drift)
 
 ## driftcorrect interface function
 
-**driftcorrect**(***smld***::SMLMData.SMLD; 
-  ***intramodel***::String = "Polynomial", 
-  ***cost_fun***::String = "Kdtree", 
-  ***degree***::Int = 2, 
-  ***d_cutoff***::AbstractFloat = 0.1, 
-  ***maxn***::Int = 200, 
+**driftcorrect**(***smld***::SMLMData.SMLD;  
+  ***intramodel***::String = "Polynomial",  
+  ***cost_fun***::String = "Kdtree",  
+  ***degree***::Int = 2,  
+  ***d_cutoff***::AbstractFloat = 0.1,  
+  ***maxn***::Int = 200,  
   ***verbose***::Int = 0)
 
 ### INPUT
