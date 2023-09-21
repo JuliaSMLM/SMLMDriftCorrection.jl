@@ -11,7 +11,8 @@ Main interface for drift correction (DC).  This algorithm consists of an
 - d_cutoff:   distance cutoff (pixel) = 0.1
 - maxn:       maximum number of neighbors considered = 200
 - verbose:    flag for more output = 0
-
+# Output
+- smd_found:  structure containing drift corrected (X, Y) coordinates (pixel)
 """
 function driftcorrect(smld::SMLMData.SMLD;
     intramodel::String = "Polynomial",
