@@ -25,7 +25,7 @@ Initialize polynomials.
 
 # Fields:
 - ndims:      number of dimensions
-- ndaatsets:  number of datasets
+- ndatasets:  number of datasets
 - nframes:    number of frames
 - degree:     polymomial degree = 2
 - initialize: string indicating possible initializations
