@@ -1,5 +1,8 @@
 # Define polynomial methods
 
+"""
+Define a univariate polynomial data type.
+"""
 mutable struct Polynomial1D <: AbstractIntraDrift1D
     degree::Int
     coefficients::Vector{<:Real}
@@ -8,6 +11,10 @@ function Polynomial1D(degree::Int)
     return Polynomial1D(degree,zeros(degree))
 end
 
+"""
+Define a data type for intra-dataset drifts, which will be a collection of
+univariate polynomials indexed by each coordinate dimension and frame number.
+"""
 mutable struct IntraPolynomial <: AbstractIntraDrift
     ndims::Int
     dm::Vector{Polynomial1D}
@@ -37,7 +44,7 @@ mutable struct Polynomial <: AbstractIntraInter
     intra::Vector{IntraPolynomial}
     inter::Vector{InterShift}
 end
-function Polynomial(ndims::Int,ndatasets::Int, nframes::Int; 
+function Polynomial(ndims::Int, ndatasets::Int, nframes::Int; 
             degree=2, initialize::String="zeros", rscale=0.1)
     intra=Vector{IntraPolynomial}(undef,ndatasets)
     inter=Vector{InterShift}(undef,ndatasets)
