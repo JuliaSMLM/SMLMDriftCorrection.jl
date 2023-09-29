@@ -30,15 +30,26 @@ x1 and x2 are the differences (1 and 2) between the estimated positions
 of each localization and the corresponding drift in the frame at time
 t_1, t_2, respectively.
 """
-function divKL(x1::Vector{T}, s1::Vector{T},
-    x2::Vector{T}, s2::Vector{T}; device = CPU) where {T<:Real}
 
-    si2 = s1 .^ 2 |> device
-    sj2 = s2 .^ 2 |> device
+function divKL(x1::Vector{T}, s1::Vector{T},
+    x2::Vector{T}, s2::Vector{T}) where {T<:Real}
+
+    si2 = s1 .^ 2
+    sj2 = s2 .^ 2
     # K is the dimension of the space, typically 2.
     K = length(x1)
-    out = 1 / 2 * sum(log.(sj2 ./ si2) + si2 ./ sj2 + (x1 - x2) .^ 2 ./ sj2) - K / 2 |> device
+    out = 1 / 2 * sum(log.(sj2 ./ si2) + si2 ./ sj2 + (x1 - x2) .^ 2 ./ sj2) - K / 2
     return out
+end
+function divKL(x1::Vector{T}, s1::Vector{T},
+    x2::Vector{T}, s2::Vector{T}) where {T<:CuArray{Real}}
+
+    si2 = s1 .^ 2
+    sj2 = s2 .^ 2
+    # K is the dimension of the space, typically 2.
+    K = length(x1)
+    out = 1 / 2 * sum(log.(sj2 ./ si2) + si2 ./ sj2 + (x1 - x2) .^ 2 ./ sj2) - K / 2
+    return Array(out)
 end
 
 """
@@ -72,6 +83,7 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
             σ1 = [σ_x[i], σ_y[i]]
             σ2 = [σ_x[idx[j]], σ_y[idx[j]]]
             kldiv[j-1] = divKL(r1, σ1, r2, σ2)
+            #kldiv[j-1] = divKL(CuArray(r1), CuArray(σ1), CuArray(r2), CuArray(σ2))
         end
     
         out += logsumexp(- kldiv) - log(length(kldiv))
