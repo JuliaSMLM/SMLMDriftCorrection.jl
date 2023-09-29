@@ -31,25 +31,32 @@ of each localization and the corresponding drift in the frame at time
 t_1, t_2, respectively.
 """
 
+# function divKL(x1::Vector{T}, s1::Vector{T},
+#     x2::Vector{T}, s2::Vector{T}) where {T<:Real}
+#     # K is the dimension of the space, typically 2.
+#     K = length(x1)
+    
+#     out = 1 / 2 * sum(log.(@views s2 .^ 2 ./ s1 .^ 2) + @views s1 .^ 2 ./ s2 .^ 2 + @views (x1 - x2) .^ 2 ./ s2 .^ 2) - K / 2
+#     return out
+# end
+
 function divKL(x1::Vector{T}, s1::Vector{T},
     x2::Vector{T}, s2::Vector{T}) where {T<:Real}
+    # K is the dimension of the space, typically 2.
+    K = length(x1)
+    
+    out = 1 / 2 * sum(log.(s2 .^ 2 ./ s1 .^ 2) + s1 .^ 2 ./ s2 .^ 2 + (x1 - x2) .^ 2 ./ s2 .^ 2) - K / 2
+    return out
+end
 
+function divKL(x1::CuArray{T}, s1::CuArray{T},
+    x2::CuArray{T}, s2::CuArray{T}) where {T<:Real}
     si2 = s1 .^ 2
     sj2 = s2 .^ 2
     # K is the dimension of the space, typically 2.
     K = length(x1)
     out = 1 / 2 * sum(log.(sj2 ./ si2) + si2 ./ sj2 + (x1 - x2) .^ 2 ./ sj2) - K / 2
     return out
-end
-function divKL(x1::Vector{T}, s1::Vector{T},
-    x2::Vector{T}, s2::Vector{T}) where {T<:CuArray{Real}}
-
-    si2 = s1 .^ 2
-    sj2 = s2 .^ 2
-    # K is the dimension of the space, typically 2.
-    K = length(x1)
-    out = 1 / 2 * sum(log.(sj2 ./ si2) + si2 ./ sj2 + (x1 - x2) .^ 2 ./ sj2) - K / 2
-    return Array(out)
 end
 
 """
@@ -73,22 +80,33 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
     # length(x) number of localizations
     # maxn      number of neighbors per localizations
     # NOTE: kldiv is reused for each i
+    println("length(x) = ", length(x), ", maxn = ", maxn)
     print("In entropy1: ")
-    @time begin
+    # @time begin
+    r2 = Vector{T}(undef, 2)
+    σ2 = Vector{T}(undef, 2)
+    r1 = Vector{T}(undef, 2)
+    σ1 = Vector{T}(undef, 2)
+
+   
     for i = 1:length(x)
+        idx = idxs[i]
+        r1 .= [x[i], y[i]]
+        σ1 .= [σ_x[i], σ_y[i]]
+        
         for j = 2:maxn + 1
-            idx = idxs[i]
-            r1 = [x[i], y[i]]
-            r2 = [x[idx[j]], y[idx[j]]]
-            σ1 = [σ_x[i], σ_y[i]]
-            σ2 = [σ_x[idx[j]], σ_y[idx[j]]]
-            kldiv[j-1] = divKL(r1, σ1, r2, σ2)
+            r2 .= [x[idx[j]], y[idx[j]]]
+            σ2 .= [σ_x[idx[j]], σ_y[idx[j]]]
+            
+                kldiv[j-1] = divKL(r1, σ1, r2, σ2)
+            
             #kldiv[j-1] = divKL(CuArray(r1), CuArray(σ1), CuArray(r2), CuArray(σ2))
         end
     
         out += logsumexp(- kldiv) - log(length(kldiv))
     end
-    end
+
+    # end
 
     
     N = length(x)   # total number of localizations
