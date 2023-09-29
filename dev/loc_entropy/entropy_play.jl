@@ -45,7 +45,16 @@ function divKL(x1::Vector{T}, s1::Vector{T},
     # K is the dimension of the space, typically 2.
     K = length(x1)
     
-    out = 1 / 2 * sum(log.(s2 .^ 2 ./ s1 .^ 2) + s1 .^ 2 ./ s2 .^ 2 + (x1 - x2) .^ 2 ./ s2 .^ 2) - K / 2
+    si2 = s1 .^ 2
+    sj2 = s2 .^ 2
+
+    # out = 1 / 2 * sum(log.(s2 .^ 2 ./ s1 .^ 2) + s1 .^ 2 ./ s2 .^ 2 + (x1 - x2) .^ 2 ./ s2 .^ 2) - K / 2
+    out = T(0)
+    for i in 1:K
+        out += T(1) / T(2) * (log(sj2[i] / si2[i]) + si2[i] / sj2[i] + (x1[i] - x2[i]) ^ 2 / sj2[i])
+    end
+    out -= T(K) / 2
+ 
     return out
 end
 
@@ -75,7 +84,7 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
     # maxn is the maxinum number of neighbors allowed.
     maxn = length(idxs[1]) - 1
 
-    kldiv = zeros(Float32, maxn)
+    kldiv = zeros(T, maxn)
     #Threads.@threads 
     # length(x) number of localizations
     # maxn      number of neighbors per localizations
@@ -88,7 +97,8 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
     r1 = Vector{T}(undef, 2)
     σ1 = Vector{T}(undef, 2)
 
-   
+   println(typeof(kldiv))
+
     for i = 1:length(x)
         idx = idxs[i]
         r1 .= [x[i], y[i]]
@@ -103,7 +113,7 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
             #kldiv[j-1] = divKL(CuArray(r1), CuArray(σ1), CuArray(r2), CuArray(σ2))
         end
     
-        out += logsumexp(- kldiv) - log(length(kldiv))
+        out += logsumexp(- kldiv) - log(T(length(kldiv)))
     end
 
     # end
