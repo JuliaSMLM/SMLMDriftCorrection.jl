@@ -45,11 +45,17 @@ function histimage(x::AbstractVector{T}, y::AbstractVector{T};
     return im
 end
 
+function histimage(x::AbstractMatrix{T}, y::AbstractMatrix{T};
+    ROI::AbstractVector{T}=[], histbinsize::T=1.0,
+    ) where {T<:Real}
+    histimage(x[:], y[:]; ROI=ROI, histbinsize=histbinsize)
+end
+
 """
 Compute the cross-correlation between two 2D images.
 """
-function crosscorr(im1::T, im2::T
-    ) where {T<:Matrix{AbstractFloat}}
+function crosscorr(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
+    ) where {T<:Real}
     # Compute the Fourier transforms of the images.
     fim1 = fft(im1)
     fim2 = fft(im2)
@@ -68,9 +74,9 @@ histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates.
 """
 function findshift(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
-    ) where {T<:SMLMData.SMLD}
+    ) where {T<:SMLMData.SMLD2D}
     # Compute the histogram images assume the same size for both images).
-    ROI = [0, smld1.imagesize[1], 0, smld1.imagesize[2]]
+    ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2]])
     im1 = histimage(smld1.x, smld1.y; ROI=ROI, histbinsize=histbinsize)
     im2 = histimage(smld2.x, smld2.y; ROI=ROI, histbinsize=histbinsize)
     # Compute the cross-correlation.
@@ -78,6 +84,7 @@ function findshift(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
     # Find the maximum location in the cross-correlation, which will
     # correspond to the shift between the two images.
     shift = argmax(cc)
+    shift = float([shift[1], shift[2]]) .- 1
     # Convert the shift to an (x, y) coordinate.
     shift = histbinsize .* shift
     # Return the shift.
