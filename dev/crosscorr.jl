@@ -57,8 +57,8 @@ Compute the cross-correlation between two 2D images.
 function crosscorr(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
     ) where {T<:Real}
     # Compute the Fourier transforms of the images.
-    fim1 = fft(im1)
-    fim2 = fft(im2)
+    #fim1 = fft(im1)
+    #fim2 = fft(im2)
     # Compute the cross-correlation.
     #cc = ifft(fim1 .* conj.(fim2))
     cc = FourierTools.ccorr(im1, im2; centered=false)
@@ -82,7 +82,8 @@ function findshift(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
     # Compute the cross-correlation.
     cc = crosscorr(im1, im2)
     # Find the maximum location in the cross-correlation, which will
-    # correspond to the shift between the two images.
+    # correspond to the shift between the two images.  The -1 accounts
+    # for the fact that the first element of an array is at index 1.
     shift = argmax(cc)
     shift = float([shift[1], shift[2]]) .- 1
     # Convert the shift to an (x, y) coordinate.
