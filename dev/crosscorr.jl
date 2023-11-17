@@ -56,12 +56,33 @@ Compute the cross-correlation between two 2D images.
 """
 function crosscorr(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
     ) where {T<:Real}
-    # Compute the Fourier transforms of the images.
-    #fim1 = fft(im1)
-    #fim2 = fft(im2)
     # Compute the cross-correlation.
-    #cc = ifft(fim1 .* conj.(fim2))
     cc = FourierTools.ccorr(im1, im2; centered=false)
+    # Return the cross-correlation.
+    return cc
+end
+
+"""
+Compute the cross-correlation between two 2D images, weighted by intensity.
+"""
+function crosscorrweighted(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
+    ) where {T<:Real}
+    # Create a mask of the images (assumed the same size).
+    mask = ones(size(im1))
+    # Compute the area of the images (assumed the same).
+    A = prod(size(mask))
+    # Compute the total intensities of the images.    
+    N1 = sum(im1)
+    N2 = sum(im2)
+    # Normalization.
+    #NP = real(fftshift2d(ifft2d(abs.(fft2d(mask)).^2)))
+    NP = real(ifft2d(abs.(fft2d(mask)).^2))
+    # Compute the Fourier transforms of the images.
+    F1 = fft2d(im1 .* mask)
+    F2 = fft2d(im2 .* mask)    
+    # Compute the cross-correlation.
+    #cc = A^2/(N1*N2) .* real(fftshift2d(ifft2d(F1 .* conj(F2)))) ./ NP
+    cc = A^2/(N1*N2) .* real(ifft2d(F1 .* conj(F2))) ./ NP
     # Return the cross-correlation.
     return cc
 end
@@ -81,6 +102,7 @@ function findshift(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
     im2 = histimage(smld2.x, smld2.y; ROI=ROI, histbinsize=histbinsize)
     # Compute the cross-correlation.
     cc = crosscorr(im1, im2)
+    #cc = crosscorrweighted(im1, im2)
     # Find the maximum location in the cross-correlation, which will
     # correspond to the shift between the two images.  The -1 accounts
     # for the fact that the first element of an array is at index 1.
