@@ -6,6 +6,7 @@ using NearestNeighbors
 using Zygote
 using Statistics
 using StatsFuns
+using FourierTools
 
 include("typedefs.jl")
 include("intrainter.jl")
