@@ -11,7 +11,7 @@ from the coordinate data.
 histbinsize is the size of the bins in the same units.
 """
 function histimage(x::AbstractVector{T}, y::AbstractVector{T};
-    ROI::AbstractVector{T}=[], histbinsize::T=1.0,
+    ROI::AbstractVector{Any}=[], histbinsize::T=1.0,
     ) where {T<:Real}
     if ~isempty(ROI)
         x_min = ROI[1]
@@ -20,16 +20,16 @@ function histimage(x::AbstractVector{T}, y::AbstractVector{T};
         y_max = ROI[4]
     else
         # Find the minimum and maximum values of x and y.
-        x_min = minimum(x)
-        x_max = maximum(x)
-        y_min = minimum(y)
-        y_max = maximum(y)
+        x_min = floor(minimum(x))
+        x_max =  ceil(maximum(x))
+        y_min = floor(minimum(y))
+        y_max =  ceil(maximum(y))
     end
     # Compute the number of pixels in x and y.
     imszX = round(Int, (x_max .- x_min) ./ histbinsize)
     imszY = round(Int, (y_max .- y_min) ./ histbinsize)
     # Create a blank image.
-    im = zeros(imszX, imszY)
+    im = zeros(Int, imszX, imszY)
     # Convert (x, y) coordinates into bin size units.
     xx = round.(Int, (x .- x_min) ./ histbinsize)
     yy = round.(Int, (y .- y_min) ./ histbinsize)
@@ -95,9 +95,18 @@ histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates.
 """
 function findshift(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
-    ) where {T<:SMLMData.SMLD2D}
+    ) where {T<:SMLMData.SMLD}
     # Compute the histogram images assume the same size for both images).
-    ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2]])
+    if smld1.datasize[1] != smld2.datasize[1] &&
+       smld1.datasize[2] != smld2.datasize[2]
+        error("Images must have the same size.")
+    end
+    if smld1.datasize[1] == 0.0 || smld1.datasize[2] == 0.0
+        println("findshift: smdl.datasize(s) are zero.")
+        ROI = []
+    else
+        ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2]])
+    end
     im1 = histimage(smld1.x, smld1.y; ROI=ROI, histbinsize=histbinsize)
     im2 = histimage(smld2.x, smld2.y; ROI=ROI, histbinsize=histbinsize)
     # Compute the cross-correlation.
