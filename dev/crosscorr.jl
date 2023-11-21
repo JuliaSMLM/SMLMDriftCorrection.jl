@@ -202,8 +202,13 @@ localizations in two SMLD structures and compute the shift
 between the two original images.
 histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates.
+pixelsizeZunit is the conversion factor from (x, y) coordinates (typically,
+pixels) to the units of z coordinates (typically, um).  This is needed in
+3D to convert z into the same units as x and y so that the shifts in all
+directions are calculated in the same units.
 """
-function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
+function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
+        pixelsizeZunit::AbstractFloat=0.100
     ) where {T<:SMLMData.SMLD3D}
     # Compute the histogram images assume the same size for both images).
     if smld1.datasize[1] != smld2.datasize[1] &&
@@ -217,10 +222,12 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
         ROI = []
     else
         ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
-                     0, smld1.datasize[3]])
+                     0, smld1.datasize[3] / pixelsizeZunit])
     end
-    im1 = histimage3D(smld1.x, smld1.y, smld1.z; ROI=ROI, histbinsize=histbinsize)
-    im2 = histimage3D(smld2.x, smld2.y, smld2.z; ROI=ROI, histbinsize=histbinsize)
+    im1 = histimage3D(smld1.x, smld1.y, smld1.z ./ pixelsizeZunit;
+                      ROI=ROI, histbinsize=histbinsize)
+    im2 = histimage3D(smld2.x, smld2.y, smld2.z ./ pixelsizeZunit;
+                      ROI=ROI, histbinsize=histbinsize)
     # Compute the cross-correlation.
     cc = crosscorr3D(im1, im2)
     # Find the maximum location in the cross-correlation, which will
@@ -230,6 +237,8 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
     shift = float([shift[1], shift[2], shift[3]]) .- 1
     # Convert the shift to an (x, y, z) coordinate.
     shift = histbinsize .* shift
+    # Convert the z-shift back to original units.
+    shift[3] = shift[3] .* pixelsizeZunit
     # Return the shift.
     return shift
 end

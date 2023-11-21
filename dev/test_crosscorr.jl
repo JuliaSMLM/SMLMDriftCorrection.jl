@@ -1,6 +1,6 @@
 using Revise
-using JLD2
 using FileIO
+using JLD2
 using SMLMData
 
 dirname = "Y:\\Projects\\Super Critical Angle Localization Microscopy\\Data\\10-06-2023\\Data2\\old insitu psf and stg pos"
@@ -12,3 +12,6 @@ data = load(filepath) #To check keys use, varnames = keys(data)
 smld = data["smld"]
 
 findshift2D(smld, smld)
+
+pixelsize = 0.128 # um / pixel
+findshift3D(smld, smld; pixelsizeZunit = pixelsize)
