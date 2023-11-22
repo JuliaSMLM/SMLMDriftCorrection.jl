@@ -11,9 +11,9 @@ from the coordinate data.
 histbinsize is the size of the bins in the same units.
 """
 function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
-    ROI::AbstractVector{Any}=[], histbinsize::T=1.0,
+    ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
     ) where {T<:Real}
-    if ~isempty(ROI)
+    if size(ROI, 1) == 4 && ROI[1] >= 0.0
         x_min = ROI[1]
         x_max = ROI[2]
         y_min = ROI[3]
@@ -47,7 +47,7 @@ function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
 end
 
 function histimage2D(x::AbstractMatrix{T}, y::AbstractMatrix{T};
-    ROI::AbstractVector{T}=[], histbinsize::T=1.0,
+    ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
     ) where {T<:Real}
     histimage(x[:], y[:]; ROI=ROI, histbinsize=histbinsize)
 end
@@ -62,9 +62,9 @@ histbinsize is the size of the bins in the same units.
 """
 function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
         z::AbstractVector{T};
-    ROI::AbstractVector{Any}=[], histbinsize::T=1.0,
+    ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
     ) where {T<:Real}
-    if ~isempty(ROI)
+    if size(ROI, 1) == 6 && ROI[1] >= 0.0
         x_min = ROI[1]
         x_max = ROI[2]
         y_min = ROI[3]
@@ -108,7 +108,7 @@ end
 
 function histimage3D(x::AbstractMatrix{T}, y::AbstractMatrix{T},
         z::AbstractMatrix{T};
-    ROI::AbstractVector{T}=[], histbinsize::T=1.0,
+    ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
     ) where {T<:Real}
     histimage3D(x[:], y[:], z[:]; ROI=ROI, histbinsize=histbinsize)
 end
@@ -176,7 +176,7 @@ function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
     end
     if smld1.datasize[1] == 0.0 || smld1.datasize[2] == 0.0
         println("findshift2D: smld.datasize(s) are zero.")
-        ROI = []
+        ROI = [-1.0]
     else
         ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2]])
     end
@@ -219,7 +219,7 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     if smld1.datasize[1] == 0.0 || smld1.datasize[2] == 0.0 ||
        smld1.datasize[3] == 0.0
         println("findshift3D: smld.datasize(s) are zero.")
-        ROI = []
+        ROI = [-1.0]
     else
         ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
                      0, smld1.datasize[3] / pixelsizeZunit])

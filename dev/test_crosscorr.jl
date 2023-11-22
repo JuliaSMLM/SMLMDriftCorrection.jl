@@ -12,17 +12,17 @@ data = load(filepath) #To check keys use, varnames = keys(data)
 # Get smld
 smld = data["smld"]
 
-findshift2D(smld, smld)
+#findshift2D(smld, smld)
 
-#pixelsize = 0.128 # um / pixel
+pixelsize = 0.128 # um / pixel
 #findshift3D(smld, smld; pixelsizeZunit = pixelsize)
 
 #subind1 = collect(1 : 2 : size(smld.x, 1))
 #subind2 = collect(2 : 2 : size(smld.x, 1))
-#subind1 = collect(1 : convert(Int, size(smld.x, 1) / 2))
-#subind2 = collect(convert(Int, size(smld.x, 1) / 2) + 1 : size(smld.x, 1))
-#smld1 = SMLMData.isolatesmld(smld, subind1)
-#smld2 = SMLMData.isolatesmld(smld, subind2)
+subind1 = collect(1 : convert(Int, size(smld.x, 1) / 2))
+subind2 = collect(convert(Int, size(smld.x, 1) / 2) + 1 : size(smld.x, 1))
+smld1 = SMLMData.isolatesmld(smld, subind1)
+smld2 = SMLMData.isolatesmld(smld, subind2)
 #findshift2D(smld1, smld2)
 
 # Simulation paramters use physical units
@@ -38,4 +38,4 @@ smld_true, smld_model, smld_noisy = SMLMSim.sim(;
     molecule=SMLMSim.GenericFluor(; q=[0 50; 1e-2 0]), #1/s 
     camera=SMLMSim.IdealCamera(; xpixels=256, ypixels=256, pixelsize=0.1) #pixelsize is microns
 )
-findshift2D(smld_true, smld_model)
+#findshift2D(smld_true, smld_model)
