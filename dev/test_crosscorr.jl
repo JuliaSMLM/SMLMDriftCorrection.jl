@@ -11,6 +11,8 @@ filepath = joinpath(dirname, file)
 data = load(filepath) #To check keys use, varnames = keys(data)
 # Get smld
 smld = data["smld"]
+subind = smld.datasetnum .== 1
+smld = SMLMData.isolatesmld(smld, subind)
 
 #findshift2D(smld, smld)
 

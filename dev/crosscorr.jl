@@ -119,7 +119,7 @@ Compute the cross-correlation between two 2D images.
 function crosscorr2D(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
     ) where {T<:Real}
     # Compute the cross-correlation.
-    cc = FourierTools.ccorr(im1, im2; centered=false)
+    cc = FourierTools.ccorr(im1, im2; centered=true)
     # Return the cross-correlation.
     return cc
 end
@@ -130,7 +130,7 @@ Compute the cross-correlation between two 3D images.
 function crosscorr3D(im1::AbstractArray{T}, im2::AbstractArray{T}
     ) where {T<:Real}
     # Compute the cross-correlation.
-    cc = FourierTools.ccorr(im1, im2, [1, 2, 3]; centered=false)
+    cc = FourierTools.ccorr(im1, im2, [1, 2, 3]; centered=true)
     # Return the cross-correlation.
     return cc
 end
@@ -148,14 +148,14 @@ function crosscorr2Dweighted(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
     N1 = sum(im1)
     N2 = sum(im2)
     # Normalization.
-    #NP = real(fftshift2d(ifft2d(abs.(fft2d(mask)).^2)))
-    NP = real(ifft2d(abs.(fft2d(mask)).^2))
+    NP = real(fftshift2d(ifft2d(abs.(fft2d(mask)).^2)))
+    #NP = real(ifft2d(abs.(fft2d(mask)).^2))
     # Compute the Fourier transforms of the images.
     F1 = fft2d(im1 .* mask)
     F2 = fft2d(im2 .* mask)    
     # Compute the cross-correlation.
-    #cc = A^2/(N1*N2) .* real(fftshift2d(ifft2d(F1 .* conj(F2)))) ./ NP
-    cc = A^2/(N1*N2) .* real(ifft2d(F1 .* conj(F2))) ./ NP
+    cc = A^2/(N1*N2) .* real(fftshift2d(ifft2d(F1 .* conj(F2)))) ./ NP
+    #cc = A^2/(N1*N2) .* real(ifft2d(F1 .* conj(F2))) ./ NP
     # Return the cross-correlation.
     return cc
 end
@@ -182,14 +182,24 @@ function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
     end
     im1 = histimage2D(smld1.x, smld1.y; ROI=ROI, histbinsize=histbinsize)
     im2 = histimage2D(smld2.x, smld2.y; ROI=ROI, histbinsize=histbinsize)
+    # Determine the midpoints of the histogram images.
+    mid1 = round(Int, size(im1, 1) / 2)
+    mid2 = round(Int, size(im1, 2) / 2)
+    println("findshift2D: mid1 = $mid1, mid2 = $mid2")
     # Compute the cross-correlation.
     cc = crosscorr2D(im1, im2)
-    #cc = crosscorr2Dweighted(im1, im2)
+    ccw = crosscorr2Dweighted(im1, im2)
+    println("findshift2D: shift  = $(argmax(cc))")
+    println("findshift2D: shiftw = $(argmax(ccw))")
     # Find the maximum location in the cross-correlation, which will
-    # correspond to the shift between the two images.  The -1 accounts
-    # for the fact that the first element of an array is at index 1.
+    # correspond to the shift between the two images.
     shift = argmax(cc)
-    shift = float([shift[1], shift[2]]) .- 1
+    # The -1 accounts for the fact that the first element of an array is
+    # at index 1.
+    #shift = float([shift[1], shift[2]]) .- 1
+    # Since the FFT has been centered, the shift is relative to the
+    # center of the histogram images.
+    shift = float([shift[1] - mid1, shift[2] - mid2])
     # Convert the shift to an (x, y) coordinate.
     shift = histbinsize .* shift
     # Return the shift.
@@ -228,13 +238,21 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
                       ROI=ROI, histbinsize=histbinsize)
     im2 = histimage3D(smld2.x, smld2.y, smld2.z ./ pixelsizeZunit;
                       ROI=ROI, histbinsize=histbinsize)
+                      # Determine the midpoints of the histogram images.
+    mid1 = round(Int, size(im1, 1) / 2)
+    mid2 = round(Int, size(im1, 2) / 2)
+    mid3 = round(Int, size(im1, 3) / 2)
     # Compute the cross-correlation.
     cc = crosscorr3D(im1, im2)
     # Find the maximum location in the cross-correlation, which will
-    # correspond to the shift between the two images.  The -1 accounts
-    # for the fact that the first element of an array is at index 1.
+    # correspond to the shift between the two images.
     shift = argmax(cc)
-    shift = float([shift[1], shift[2], shift[3]]) .- 1
+    # The -1 accounts for the fact that the first element of an array is
+    # at index 1.
+    #shift = float([shift[1], shift[2], shift[3]]) .- 1
+    # Since the FFT has been centered, the shift is relative to the
+    # center of the histogram images.
+    shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
     # Convert the shift to an (x, y, z) coordinate.
     shift = histbinsize .* shift
     # Convert the z-shift back to original units.
