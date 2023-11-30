@@ -17,7 +17,7 @@ smld = SMLMData.isolatesmld(smld, subind)
 #findshift2D(smld, smld)
 
 pixelsize = 0.128 # um / pixel
-#findshift3D(smld, smld; pixelsizeZunit = pixelsize)
+#findshift3D(smld, smld; pixelsizeZunit=pixelsize)
 
 #subind1 = collect(1 : 2 : size(smld.x, 1))
 #subind2 = collect(2 : 2 : size(smld.x, 1))
@@ -25,7 +25,11 @@ subind1 = collect(1 : convert(Int, size(smld.x, 1) / 2))
 subind2 = collect(convert(Int, size(smld.x, 1) / 2) + 1 : size(smld.x, 1))
 smld1 = SMLMData.isolatesmld(smld, subind1)
 smld2 = SMLMData.isolatesmld(smld, subind2)
-#findshift2D(smld1, smld2)
+smld2.x .+= 0.75
+smld2.y .+= 0.50
+smld2.x .= min.(smld2.x, 256)
+smld2.y .= min.(smld2.y, 256)
+findshift2D(smld1, smld2)
 
 # Simulation paramters use physical units
 # smld structures are in units of pixels and frames 

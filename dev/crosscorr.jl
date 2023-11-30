@@ -25,9 +25,17 @@ function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
         y_min = floor(minimum(y))
         y_max =  ceil(maximum(y))
     end
+    #println("histimage2D: $x_min, $x_max, $y_min, $y_max") 
     # Compute the number of pixels in x and y.
     imszX = round(Int, (x_max .- x_min) ./ histbinsize)
     imszY = round(Int, (y_max .- y_min) ./ histbinsize)
+    # Make sure the number of pixels in each coordinate is odd.
+    if mod(imszX, 2) == 0
+        imszX += 1
+    end
+    if mod(imszY, 2) == 0
+        imszY += 1
+    end
     println("histimage2D: imsx = $imszX, imsy = $imszY")
     # Create a blank image.
     im = zeros(Int, imszX, imszY)
@@ -84,6 +92,16 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
     imszX = round(Int, (x_max .- x_min) ./ histbinsize)
     imszY = round(Int, (y_max .- y_min) ./ histbinsize)
     imszZ = round(Int, (z_max .- z_min) ./ histbinsize)
+    # Make sure the number of pixels in each coordinate is odd.
+    if mod(imszX, 2) == 0
+        imszX += 1
+    end
+    if mod(imszY, 2) == 0
+        imszY += 1
+    end
+    if mod(imszZ, 2) == 0
+        imszZ += 1
+    end 
     println("histimage3D: imsx = $imszX, imsy = $imszY, imsz = $imszZ")
     # Create a blank image.
     im = zeros(Int, imszX, imszY, imszZ)
@@ -198,7 +216,7 @@ function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
     # at index 1.
     #shift = float([shift[1], shift[2]]) .- 1
     # Since the FFT has been centered, the shift is relative to the
-    # center of the histogram images.
+    # center of the transformed histogram images.
     shift = float([shift[1] - mid1, shift[2] - mid2])
     # Convert the shift to an (x, y) coordinate.
     shift = histbinsize .* shift
@@ -251,7 +269,7 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     # at index 1.
     #shift = float([shift[1], shift[2], shift[3]]) .- 1
     # Since the FFT has been centered, the shift is relative to the
-    # center of the histogram images.
+    # center of the transformed histogram images.
     shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
     # Convert the shift to an (x, y, z) coordinate.
     shift = histbinsize .* shift
