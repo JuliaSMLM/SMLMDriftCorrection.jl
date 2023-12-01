@@ -12,7 +12,7 @@ histbinsize is the size of the bins in the same units.
 """
 function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
     ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
-    ) where {T<:Real}
+) where {T<:Real}
     if size(ROI, 1) == 4 && ROI[1] >= 0.0
         x_min = ROI[1]
         x_max = ROI[2]
@@ -21,9 +21,9 @@ function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
     else
         # Find the minimum and maximum values of x and y.
         x_min = floor(minimum(x))
-        x_max =  ceil(maximum(x))
+        x_max = ceil(maximum(x))
         y_min = floor(minimum(y))
-        y_max =  ceil(maximum(y))
+        y_max = ceil(maximum(y))
     end
     #println("histimage2D: $x_min, $x_max, $y_min, $y_max") 
     # Compute the number of pixels in x and y.
@@ -56,7 +56,7 @@ end
 
 function histimage2D(x::AbstractMatrix{T}, y::AbstractMatrix{T};
     ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
-    ) where {T<:Real}
+) where {T<:Real}
     histimage(x[:], y[:]; ROI=ROI, histbinsize=histbinsize)
 end
 
@@ -69,9 +69,9 @@ are estimated from the coordinate data.
 histbinsize is the size of the bins in the same units.
 """
 function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
-        z::AbstractVector{T};
+    z::AbstractVector{T};
     ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
-    ) where {T<:Real}
+) where {T<:Real}
     if size(ROI, 1) == 6 && ROI[1] >= 0.0
         x_min = ROI[1]
         x_max = ROI[2]
@@ -82,11 +82,11 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
     else
         # Find the minimum and maximum values of x, y and z.
         x_min = floor(minimum(x))
-        x_max =  ceil(maximum(x))
+        x_max = ceil(maximum(x))
         y_min = floor(minimum(y))
-        y_max =  ceil(maximum(y))
+        y_max = ceil(maximum(y))
         z_min = floor(minimum(z))
-        z_max =  ceil(maximum(z))
+        z_max = ceil(maximum(z))
     end
     # Compute the number of pixels in x, y and z.
     imszX = round(Int, (x_max .- x_min) ./ histbinsize)
@@ -101,7 +101,7 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
     end
     if mod(imszZ, 2) == 0
         imszZ += 1
-    end 
+    end
     println("histimage3D: imsx = $imszX, imsy = $imszY, imsz = $imszZ")
     # Create a blank image.
     im = zeros(Int, imszX, imszY, imszZ)
@@ -125,9 +125,9 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
 end
 
 function histimage3D(x::AbstractMatrix{T}, y::AbstractMatrix{T},
-        z::AbstractMatrix{T};
+    z::AbstractMatrix{T};
     ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
-    ) where {T<:Real}
+) where {T<:Real}
     histimage3D(x[:], y[:], z[:]; ROI=ROI, histbinsize=histbinsize)
 end
 
@@ -135,7 +135,7 @@ end
 Compute the cross-correlation between two 2D images.
 """
 function crosscorr2D(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
-    ) where {T<:Real}
+) where {T<:Real}
     # Compute the cross-correlation.
     cc = FourierTools.ccorr(im1, im2; centered=true)
     # Return the cross-correlation.
@@ -146,7 +146,7 @@ end
 Compute the cross-correlation between two 3D images.
 """
 function crosscorr3D(im1::AbstractArray{T}, im2::AbstractArray{T}
-    ) where {T<:Real}
+) where {T<:Real}
     # Compute the cross-correlation.
     cc = FourierTools.ccorr(im1, im2, [1, 2, 3]; centered=true)
     # Return the cross-correlation.
@@ -157,7 +157,7 @@ end
 Compute the cross-correlation between two 2D images, weighted by intensity.
 """
 function crosscorr2Dweighted(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
-    ) where {T<:Real}
+) where {T<:Real}
     # Create a mask of the images (assumed the same size).
     mask = ones(size(im1))
     # Compute the area of the images (assumed the same).
@@ -166,13 +166,13 @@ function crosscorr2Dweighted(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
     N1 = sum(im1)
     N2 = sum(im2)
     # Normalization.
-    NP = real(fftshift2d(ifft2d(abs.(fft2d(mask)).^2)))
+    NP = real(fftshift2d(ifft2d(abs.(fft2d(mask)) .^ 2)))
     #NP = real(ifft2d(abs.(fft2d(mask)).^2))
     # Compute the Fourier transforms of the images.
     F1 = fft2d(im1 .* mask)
-    F2 = fft2d(im2 .* mask)    
+    F2 = fft2d(im2 .* mask)
     # Compute the cross-correlation.
-    cc = A^2/(N1*N2) .* real(fftshift2d(ifft2d(F1 .* conj(F2)))) ./ NP
+    cc = A^2 / (N1 * N2) .* real(fftshift2d(ifft2d(F1 .* conj(F2)))) ./ NP
     #cc = A^2/(N1*N2) .* real(ifft2d(F1 .* conj(F2))) ./ NP
     # Return the cross-correlation.
     return cc
@@ -186,7 +186,7 @@ histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates.
 """
 function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
-    ) where {T<:SMLMData.SMLD}
+) where {T<:SMLMData.SMLD}
     # Compute the histogram images assume the same size for both images).
     if smld1.datasize[1] != smld2.datasize[1] &&
        smld1.datasize[2] != smld2.datasize[2]
@@ -201,8 +201,21 @@ function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
     im1 = histimage2D(smld1.x, smld1.y; ROI=ROI, histbinsize=histbinsize)
     im2 = histimage2D(smld2.x, smld2.y; ROI=ROI, histbinsize=histbinsize)
     # Determine the midpoints of the histogram images.
-    mid1 = round(Int, size(im1, 1) / 2)
-    mid2 = round(Int, size(im1, 2) / 2)
+    # calculate the FFT center zero frequency index of im
+    if mod(size(im1, 1), 2) == 0
+        mid1 = size(im1, 1) / 2 + 1
+    else
+        mid1 = (size(im1, 1) + 1) / 2
+    end
+
+    if mod(size(im1, 2), 2) == 0
+        mid2 = size(im1, 2) / 2 + 1
+    else
+        mid2 = (size(im1, 2) + 1) / 2
+    end
+
+    # mid1 = round(Int, size(im1, 1) / 2)
+    # mid2 = round(Int, size(im1, 2) / 2)
     println("findshift2D: mid1 = $mid1, mid2 = $mid2")
     # Compute the cross-correlation.
     cc = crosscorr2D(im1, im2)
@@ -236,8 +249,8 @@ pixels) to the units of z coordinates (typically, um).  This is needed in
 directions are calculated in the same units.
 """
 function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
-        pixelsizeZunit::AbstractFloat=0.100
-    ) where {T<:SMLMData.SMLD3D}
+    pixelsizeZunit::AbstractFloat=0.100
+) where {T<:SMLMData.SMLD3D}
     # Compute the histogram images assume the same size for both images).
     if smld1.datasize[1] != smld2.datasize[1] &&
        smld1.datasize[2] != smld2.datasize[2] &&
@@ -250,16 +263,32 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
         ROI = [-1.0]
     else
         ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
-                     0, smld1.datasize[3] / pixelsizeZunit])
+            0, smld1.datasize[3] / pixelsizeZunit])
     end
     im1 = histimage3D(smld1.x, smld1.y, smld1.z ./ pixelsizeZunit;
-                      ROI=ROI, histbinsize=histbinsize)
+        ROI=ROI, histbinsize=histbinsize)
     im2 = histimage3D(smld2.x, smld2.y, smld2.z ./ pixelsizeZunit;
-                      ROI=ROI, histbinsize=histbinsize)
-                      # Determine the midpoints of the histogram images.
-    mid1 = round(Int, size(im1, 1) / 2)
-    mid2 = round(Int, size(im1, 2) / 2)
-    mid3 = round(Int, size(im1, 3) / 2)
+        ROI=ROI, histbinsize=histbinsize)
+    # Determine the midpoints of the histogram images.
+
+    if mod(size(im1, 1), 2) == 0
+        mid1 = size(im1, 1) / 2 + 1
+    else
+        mid1 = (size(im1, 1) + 1) / 2
+    end
+
+    if mod(size(im1, 2), 2) == 0
+        mid2 = size(im1, 2) / 2 + 1
+    else
+        mid2 = (size(im1, 2) + 1) / 2
+    end
+
+    if mod(size(im1, 3), 2) == 0
+        mid3 = size(im1, 3) / 2 + 1
+    else
+        mid3 = (size(im1, 3) + 1) / 2
+    end
+
     # Compute the cross-correlation.
     cc = crosscorr3D(im1, im2)
     # Find the maximum location in the cross-correlation, which will

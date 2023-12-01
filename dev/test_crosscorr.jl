@@ -4,6 +4,8 @@ using JLD2
 using SMLMData
 using SMLMSim
 
+includet("crosscorr.jl")
+
 # Simulation paramters use physical units
 # smld structures are in units of pixels and frames 
 smld_true, smld_model, smld_noisy = SMLMSim.sim(;
@@ -33,18 +35,24 @@ smld.datasize = [255, 255, 1]
 #findshift2D(smld, smld)
 
 pixelsize = 0.128 # um / pixel
-#findshift3D(smld, smld; pixelsizeZunit=pixelsize)
+# findshift3D(smld, smld; pixelsizeZunit=pixelsize)
 
 #subind1 = collect(1 : 2 : size(smld.x, 1))
 #subind2 = collect(2 : 2 : size(smld.x, 1))
 #subind1 = collect(1 : convert(Int, size(smld.x, 1) / 2))
 #subind2 = collect(convert(Int, size(smld.x, 1) / 2) + 1 : size(smld.x, 1))
+
+begin 
 subind1 = smld.framenum .<= 1000
 subind2 = smld.framenum .> 1000
 smld1 = SMLMData.isolatesmld(smld, subind1)
-smld2 = SMLMData.isolatesmld(smld, subind2)
-smld2.x .+= 0.75
-smld2.y .+= 0.50
+# smld2 = SMLMData.isolatesmld(smld, subind2)
+smld2 = SMLMData.isolatesmld(smld, subind1) #to give identical datasets
+smld2.x .+= 4.3
+smld2.y .-= 2.7
+smld2.z .+= 0.2
 smld2.x .= max.(0, min.(smld2.x, 256))
 smld2.y .= max.(0, min.(smld2.y, 256))
-findshift2D(smld1, smld2, histbinsize=1.0)
+findshift3D(smld1, smld2; histbinsize=0.25)
+end
+
