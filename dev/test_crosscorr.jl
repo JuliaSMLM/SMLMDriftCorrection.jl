@@ -28,6 +28,7 @@ data = load(filepath) #To check keys use, varnames = keys(data)
 smld = data["smld"]
 subind = smld.datasetnum .== 1
 smld = SMLMData.isolatesmld(smld, subind)
+smld.datasize = [255, 255, 1]
 
 #findshift2D(smld, smld)
 
