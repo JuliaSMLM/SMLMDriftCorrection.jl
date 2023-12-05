@@ -1,7 +1,6 @@
 using SMLMDriftCorrection
 DC = SMLMDriftCorrection
 using SMLMSim
-using FourierTools
 using Test
 
 @testset "SMLMDriftCorrection.jl" begin
@@ -44,13 +43,16 @@ smld_true, smld_model, smld_noisy = SMLMSim.sim(;
     molecule=SMLMSim.GenericFluor(; q=[0 50; 1e-2 0]), #1/s 
     camera=SMLMSim.IdealCamera(; xpixels=256, ypixels=256, pixelsize=0.1) #pixelsize is microns
 )
+
 println("N = $(size(smld_noisy.x, 1))")
-println(findshift2D(smld_noisy, smld_noisy; histbinsize=0.25))
+drift = DC.findshift2D(smld_noisy, smld_noisy; histbinsize=0.25)
+@test all(drift .≈ [0.0, 0.0])
+
 smldn = deepcopy(smld_noisy)
 smldn.x .+= 4.3
 smldn.y .+= -2.8
 smldn.x .= max.(0, min.(smldn.x, 256))
 smldn.y .= max.(0, min.(smldn.y, 256))
-drift = findshift2D(smld_noisy, smldn; histbinsize=0.25)
+drift = DC.findshift2D(smld_noisy, smldn; histbinsize=0.25)
 @test all(drift .≈ [-4.25, 2.75])
 end

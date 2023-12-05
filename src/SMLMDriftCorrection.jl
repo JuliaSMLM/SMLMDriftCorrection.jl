@@ -15,5 +15,6 @@ include("interface.jl")
 #include("costs.jl")
 include("costfuns.jl")
 include("cost_entropy.jl")
+include("crosscorr.jl")
 
 end
