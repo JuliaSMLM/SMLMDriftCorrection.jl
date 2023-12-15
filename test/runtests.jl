@@ -26,11 +26,22 @@ using Test
     smd_model=SMLMSim.kineticmodel(smd_true,f,nframes,framerate;ndatasets=10,minphotons=minphotons)
     smd_noisy=SMLMSim.noise(smd_model,σ_psf)
     ## Set up drift model
+    N = length(smd_noisy.x)
     driftmodel=DC.Polynomial(smd_noisy; degree=2, initialize="random")
     smd_drift=DC.applydrift(smd_noisy,driftmodel)
     smd_DC=DC.correctdrift(smd_drift,driftmodel)
-    rmsd = sqrt(sum((smd_DC.x .- smd_noisy.x).^2 .+ (smd_DC.y .- smd_noisy.y).^2))
+    rmsd = sqrt(sum((smd_DC.x .- smd_noisy.x).^2 .+ (smd_DC.y .- smd_noisy.y).^2) ./ N)
     @test isapprox(rmsd, 0.0; atol=1e-10)
+
+    smd_DC = DC.driftcorrect(smd_drift)
+    rmsd = sqrt(sum((smd_DC.x .- smd_noisy.x).^2 .+ (smd_DC.y .- smd_noisy.y).^2) ./ N)
+    print("rmsd (K-d tree) = $rmsd\n")
+    @test isapprox(rmsd, 0.0; atol = 1.0)
+
+    smd_DC = DC.driftcorrect(smd_drift; histbinsize=0.25)
+    rmsd = sqrt(sum((smd_DC.x .- smd_noisy.x).^2 .+ (smd_DC.y .- smd_noisy.y).^2) ./ N)
+    print("rmsd (PairCorr) = $rmsd\n")
+    @test isapprox(rmsd, 0.0; atol = 1.0)
 
 smld_true, smld_model, smld_noisy = SMLMSim.sim(;
     ρ=1.0,

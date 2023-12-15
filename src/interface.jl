@@ -10,6 +10,9 @@ Main interface for drift correction (DC).  This algorithm consists of an
 - degree:     degree for polynomial intra-dataset DC = 2
 - d_cutoff:   distance cutoff (pixel) = 0.1
 - maxn:       maximum number of neighbors considered = 200
+- crosscorr:  flag for inter-dataset cross-correlation correction = false
+- histbinsize: histogram bin size for inter-datset cross-correlation
+               correction (pixel) = -1.0 [< 0 means no correction]
 - verbose:    flag for more output = 0
 # Output
 - smd_found:  structure containing drift corrected (X, Y) coordinates (pixel)
@@ -20,6 +23,7 @@ function driftcorrect(smld::SMLMData.SMLD;
     degree::Int = 2,
     d_cutoff::AbstractFloat = 0.1,
     maxn::Int = 200,
+    histbinsize::AbstractFloat = -1.0,
     verbose::Int = 0)
 
     if intramodel == "Polynomial"
@@ -40,9 +44,10 @@ function driftcorrect(smld::SMLMData.SMLD;
     if verbose>0
         @info("SMLMDriftCorrection: starting inter to dataset 1")
     end
-    Threads.@threads  for nn = 2:smld.ndatasets
+    Threads.@threads for nn = 2:smld.ndatasets
         refdatasets = [1]
-        findinter!(driftmodel, cost_fun, smld, nn, refdatasets, d_cutoff, maxn)
+        findinter!(driftmodel, cost_fun, smld, nn, refdatasets, d_cutoff, maxn,
+                   histbinsize)
     end
 
     # if verbose>0
@@ -63,7 +68,8 @@ function driftcorrect(smld::SMLMData.SMLD;
         if verbose>1
             println("SMLMDriftCorrection: dataset $ii")
         end        
-        findinter!(driftmodel, cost_fun, smld, ii, collect((1:(ii-1))), d_cutoff, maxn)
+        findinter!(driftmodel, cost_fun, smld, ii, collect((1:(ii-1))), 
+                   d_cutoff, maxn, histbinsize)
     end
     
     smd_found = correctdrift(smld, driftmodel)

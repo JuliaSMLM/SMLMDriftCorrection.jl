@@ -72,6 +72,14 @@ function correctdrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
+#function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{AbstractFloat})
+function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{Float64})
+    smld_shifted = deepcopy(smld)
+    smld_shifted.x .-= shift[1]
+    smld_shifted.y .-= shift[2]
+    return smld_shifted
+end
+
 """
 Find and correct intra-detaset drift.
 
@@ -131,6 +139,7 @@ Find and correct inter-detaset drift.
 - dataset2:         dataset numbers to operate on
 - d_cutoff:         cutoff distance
 - maxn:             maximum number of neighbors considered
+- histbinsize:      histogram bin size for optional cross-correlation correction
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
@@ -138,7 +147,25 @@ function findinter!(dm::AbstractIntraInter,
     dataset1::Int,
     dataset2::Vector{Int},
     d_cutoff::AbstractFloat,
-    maxn::Int)
+    maxn::Int,
+    histbinsize::AbstractFloat
+    )
+
+    if histbinsize > 0.0
+        # Apply an optional cross-correlation correction before applying the
+        # kD-tree correction.
+        subind1 = smld_uncorrected.datasetnum .== dataset1
+        smld1 = SMLMData.isolatesmld(smld_uncorrected, subind1)
+        for nn = 1:length(dataset2)
+            subind2 = smld_uncorrected.datasetnum .== dataset2[nn]
+            smld2 = SMLMData.isolatesmld(smld_uncorrected, subind2)
+            shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
+            shift = .-shift # correct sign of shift
+            println("shift = $shift")
+            correctdrift!(smld2, shift)
+            #smld_uncorrected[nn] = smld2
+        end
+    end
     
     # get uncorrected coords for dataset 1 
     idx1 = smld_uncorrected.datasetnum .== dataset1
@@ -146,10 +173,10 @@ function findinter!(dm::AbstractIntraInter,
     data = transpose(coords1)
     stderr1 = cat(dims = 2, smld_uncorrected.σ_x[idx1], smld_uncorrected.σ_y[idx1])
     se = transpose(stderr1)
-    
-    #correct everything
-    smld=correctdrift(smld_uncorrected,dm)
-    
+
+    # correct everything
+    smld = correctdrift(smld_uncorrected,dm)
+
     # get corrected coords for reference datasets 
     idx2=zeros(Bool,length(smld.datasetnum))
     for nn=1:length(dataset2)
@@ -189,16 +216,19 @@ Find and correct inter-detaset drift.
 - dataset1:         dataset number for the reference dataset
 - d_cutoff:         cutoff distance
 - maxn:             maximum number of neighbors considered
+- histbinsize:      histogram bin size for optional cross-correlation correction
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
     smld_uncorrected::SMLMData.SMLD2D,
     dataset1::Int,
     d_cutoff::AbstractFloat,
-    maxn::Int)
+    maxn::Int,
+    histbinsize::AbstractFloat)
     refdatasets=Int.(1:smld_uncorrected.ndatasets)
     deleteat!(refdatasets,dataset1)
-    return findinter!(dm, cost_fun,  smld_uncorrected, dataset1, refdatasets, d_cutoff::AbstractFloat, maxn::Int)   
+    return findinter!(dm, cost_fun,  smld_uncorrected, dataset1, refdatasets,
+                      d_cutoff, maxn, histbinsize)   
 end
 
 """
