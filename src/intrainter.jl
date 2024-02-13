@@ -75,6 +75,7 @@ end
 #function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{AbstractFloat})
 function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{Float64})
     smld_shifted = deepcopy(smld)
+    #println("correctdrift: shift = $shift")
     smld_shifted.x .-= shift[1]
     smld_shifted.y .-= shift[2]
     return smld_shifted
@@ -161,9 +162,10 @@ function findinter!(dm::AbstractIntraInter,
             smld2 = SMLMData.isolatesmld(smld_uncorrected, subind2)
             shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
             shift = .-shift # correct sign of shift
-            println("shift = $shift")
+            #println("nn = $nn, shift = $shift")
             correctdrift!(smld2, shift)
-            #smld_uncorrected[nn] = smld2
+            smld_uncorrected.x[subind2] = smld2.x
+            smld_uncorrected.y[subind2] = smld2.y
         end
     end
     
@@ -197,11 +199,12 @@ function findinter!(dm::AbstractIntraInter,
     elseif cost_fun == "Entropy"
         myfun = θ -> costfun(θ, data, se, maxn, inter)
     end
-    # println(myfun(θ0))
+    #println(myfun(θ0))
     opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
-
+    #println("θ_found = $θ_found")
+    
     theta2inter!(inter, θ_found)
     return res.minimum
 end

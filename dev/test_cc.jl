@@ -23,16 +23,22 @@ smd_model = SMLMSim.kineticmodel(smd_true, f, nframes, framerate; ndatasets=10, 
 smd_noisy = SMLMSim.noise(smd_model, σ_psf)
 ## Set up drift model
 driftmodel = DC.Polynomial(smd_noisy; degree=2, initialize="random")
+# Apply drift to the noisy dataset using the drift model
 smd_drift = DC.applydrift(smd_noisy, driftmodel)
+# Apply drift correction [correctdrift] to the drifted dataset using the drift model
 smd_DC = DC.correctdrift(smd_drift, driftmodel)
 N = length(smd_noisy.x)
 rmsd = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
 
+# Apply drift to the noisy dataset using the drift model
 smd_drift = DC.applydrift(smd_noisy, driftmodel)
+# Apply drift correction [driftcorrect] to the drifted dataset
 smd_DC = DC.driftcorrect(smd_drift)
 rmsd1 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
 
+# Apply drift to the noisy dataset using the drift model
 smd_drift = DC.applydrift(smd_noisy, driftmodel)
+# Apply drift correction [driftcorrect + findshift2D] to the drifted dataset
 smd_DC = DC.driftcorrect(smd_drift; histbinsize=0.25)
 rmsd2 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
 

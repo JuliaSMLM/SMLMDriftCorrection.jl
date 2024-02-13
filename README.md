@@ -39,17 +39,20 @@ smld_corrected = DC.driftcorrect(smd_drift)
   ***cost_fun***::String = "Kdtree",  
   ***degree***::Int = 2,  
   ***d_cutoff***::AbstractFloat = 0.1,  
-  ***maxn***::Int = 200,  
+  ***maxn***::Int = 200,
+  ***histbinsize***::AbstractFloat = -1.0, 
   ***verbose***::Int = 0)
 
 ### INPUT
-- ***smld***:       structure containing (X, Y) coordinates (pixel)
+- ***smld***:        structure containing (X, Y) coordinates (pixel)
 ### Optional keyword INPUTs
-- ***intramodel***: model for intra-dataset DC: {"Polynomial", "LegendrePoly"} = "Polynomial"
-- ***cost_fun***:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
-- ***degree***:     degree for polynomial intra-dataset DC = 2
-- ***d_cutoff***:   distance cutoff (pixel) = 0.1
-- ***maxn***:       maximum number of neighbors considered = 200
-- ***verbose***:    flag for more output = 0
+- ***intramodel***:  model for intra-dataset DC: {"Polynomial", "LegendrePoly"} = "Polynomial"
+- ***cost_fun***:    intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
+- ***degree***:      degree for polynomial intra-dataset DC = 2
+- ***d_cutoff***:    distance cutoff (pixel) = 0.1
+- ***maxn***:        maximum number of neighbors considered = 200
+- ***histbinsize***: histogram bin size for inter-datset cross-correlation
+                     correction (pixel) = -1.0 [< 0 means no correction]
+- ***verbose***:     flag for more output = 0
 ### OUTPUT
 - ***smd_found***:  structure containing drift corrected (X, Y) coordinates (pixel)
