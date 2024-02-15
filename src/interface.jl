@@ -6,8 +6,9 @@ Main interface for drift correction (DC).  This algorithm consists of an
 - smld:       structure containing (X, Y) coordinates (pixel)
 - intramodel: model for intra-dataset DC:
               {"Polynomial", "LegendrePoly"} = "Polynomial"
-- cost_fun_intra: intra cost function: {"Kdtree", "Entropy"} = "Kdtree"
-- cost_fun_inter: inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
+- cost_fun:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
+- cost_fun_intra: intra cost function override: ""
+- cost_fun_inter: inter cost function override: ""
 - degree:     degree for polynomial intra-dataset DC = 2
 - d_cutoff:   distance cutoff (pixel) = 0.1
 - maxn:       maximum number of neighbors considered = 200
@@ -20,13 +21,22 @@ Main interface for drift correction (DC).  This algorithm consists of an
 """
 function driftcorrect(smld::SMLMData.SMLD;
     intramodel::String = "Polynomial",
-    cost_fun_intra::String = "Kdtree",
-    cost_fun_inter::String = "Kdtree",
+    cost_fun::String = "Kdtree",
+    cost_fun_intra::String = "",
+    cost_fun_inter::String = "",
     degree::Int = 2,
     d_cutoff::AbstractFloat = 0.1,
     maxn::Int = 200,
     histbinsize::AbstractFloat = -1.0,
     verbose::Int = 0)
+
+    # Overrides for cost function specifications
+    if isempty(cost_fun_intra)
+        cost_fun_intra = cost_fun
+    end
+    if isempty(cost_fun_inter)
+        cost_fun_inter = cost_fun
+    end
 
     if intramodel == "Polynomial"
         driftmodel = Polynomial(smld; degree = degree)
