@@ -201,6 +201,8 @@ function findinter!(dm::AbstractIntraInter,
         myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
     elseif cost_fun == "Entropy"
         myfun = θ -> costfun(θ, data, se, maxn, inter)
+    else
+        error("cost_fun not recognized")
     end
     #println(myfun(θ0))
     opt = Optim.Options(iterations = 10000, show_trace = false)

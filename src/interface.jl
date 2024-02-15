@@ -6,7 +6,8 @@ Main interface for drift correction (DC).  This algorithm consists of an
 - smld:       structure containing (X, Y) coordinates (pixel)
 - intramodel: model for intra-dataset DC:
               {"Polynomial", "LegendrePoly"} = "Polynomial"
-- cost_fun:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
+- cost_fun_intra: intra cost function: {"Kdtree", "Entropy"} = "Kdtree"
+- cost_fun_inter: inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
 - degree:     degree for polynomial intra-dataset DC = 2
 - d_cutoff:   distance cutoff (pixel) = 0.1
 - maxn:       maximum number of neighbors considered = 200
@@ -19,7 +20,8 @@ Main interface for drift correction (DC).  This algorithm consists of an
 """
 function driftcorrect(smld::SMLMData.SMLD;
     intramodel::String = "Polynomial",
-    cost_fun::String = "Kdtree",
+    cost_fun_intra::String = "Kdtree",
+    cost_fun_inter::String = "Kdtree",
     degree::Int = 2,
     d_cutoff::AbstractFloat = 0.1,
     maxn::Int = 200,
@@ -37,7 +39,7 @@ function driftcorrect(smld::SMLMData.SMLD;
         @info("SMLMDriftCorrection: starting intra")
     end
     Threads.@threads for nn = 1:smld.ndatasets
-        findintra!(driftmodel.intra[nn], cost_fun, smld, nn, d_cutoff, maxn)
+        findintra!(driftmodel.intra[nn], cost_fun_intra, smld, nn, d_cutoff, maxn)
     end
 
     # Inter-dataset: Correct them all to datatset 1
@@ -46,7 +48,7 @@ function driftcorrect(smld::SMLMData.SMLD;
     end
     Threads.@threads for nn = 2:smld.ndatasets
         refdatasets = [1]
-        findinter!(driftmodel, cost_fun, smld, nn, refdatasets, d_cutoff, maxn,
+        findinter!(driftmodel, cost_fun_inter, smld, nn, refdatasets, d_cutoff, maxn,
                    histbinsize)
     end
 
@@ -68,7 +70,7 @@ function driftcorrect(smld::SMLMData.SMLD;
         if verbose>1
             println("SMLMDriftCorrection: dataset $ii")
         end        
-        findinter!(driftmodel, cost_fun, smld, ii, collect((1:(ii-1))), 
+        findinter!(driftmodel, cost_fun_inter, smld, ii, collect((1:(ii-1))), 
                    d_cutoff, maxn, histbinsize)
     end
     

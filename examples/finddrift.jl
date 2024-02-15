@@ -49,13 +49,13 @@ smld_correctedKd = DC.driftcorrect(smd_drift; verbose = 1)
 #display(plt3)
 
 ## Correct drift (Entropy cost function --- slow compared to Kdtree)
-smld_correctedE = DC.driftcorrect(smd_drift; cost_fun = "Entropy", maxn = 100, verbose = 1)
+smld_correctedE = DC.driftcorrect(smd_drift; cost_fun_intra="Entropy", cost_fun_inter="Entropy", maxn=100, verbose=1)
 
 #plt4=PlotlyJS.plot(scattergl(x=smld_correctedE.x, y=smld_correctedE.y, mode="markers"), Layout(title="cost=Entropy"))
 #display(plt4)
 
 ## Correct drift (Entropy cost function --- slow compared to Kdtree + findshift2D (inter-datset pair correlation)
-smld_correctedECC = DC.driftcorrect(smd_drift; cost_fun = "Entropy", maxn = 100, histbinsize = 0.05, verbose = 1)
+smld_correctedECC = DC.driftcorrect(smd_drift; cost_fun_intra="Entropy", cost_fun_inter="Entropy", maxn=100, histbinsize=0.05, verbose=1)
 
 #plt5=PlotlyJS.plot(scattergl(x=smld_correctedECC.x, y=smld_correctedECC.y, mode="markers"), Layout(title="cost=Entropy + findshift2D"))
 #display(plt5)
