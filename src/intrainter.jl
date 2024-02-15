@@ -74,11 +74,10 @@ end
 
 #function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{AbstractFloat})
 function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{Float64})
-    smld_shifted = deepcopy(smld)
-    #println("correctdrift: shift = $shift")
-    smld_shifted.x .-= shift[1]
-    smld_shifted.y .-= shift[2]
-    return smld_shifted
+    #smld_shifted = deepcopy(smld)
+    println("correctdrift!: shift = $shift")
+    smld.x .-= shift[1]
+    smld.y .-= shift[2]
 end
 
 """
@@ -157,13 +156,17 @@ function findinter!(dm::AbstractIntraInter,
         # kD-tree correction.
         subind1 = smld_uncorrected.datasetnum .== dataset1
         smld1 = SMLMData.isolatesmld(smld_uncorrected, subind1)
+        println("=== dataset1 = $dataset1, dataset2 = $dataset2")
         for nn = 1:length(dataset2)
             subind2 = smld_uncorrected.datasetnum .== dataset2[nn]
             smld2 = SMLMData.isolatesmld(smld_uncorrected, subind2)
             shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
             shift = .-shift # correct sign of shift
-            #println("nn = $nn, shift = $shift")
+            println()
+            println("nn = $nn, shift = $shift")
+            #println("--- A smld2.x[1:3] = $(smld2.x[1:3])")
             correctdrift!(smld2, shift)
+            #println("--- B smld2.x[1:3] = $(smld2.x[1:3])")
             smld_uncorrected.x[subind2] = smld2.x
             smld_uncorrected.y[subind2] = smld2.y
         end
