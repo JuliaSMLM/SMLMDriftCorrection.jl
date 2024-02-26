@@ -45,8 +45,11 @@ rmsd2 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 
 # Apply drift to the noisy dataset using the drift model
 smd_drift = DC.applydrift(smd_noisy, driftmodel)
 # Apply drift correction [driftcorrect + findshift2] to the drifted dataset
-smd_DC = DC.driftcorrect(smd_drift; cost_fun_inter="Kdtree", histbinsize=0.05)
+smd_DC = DC.driftcorrect(smd_drift; cost_fun_inter="None", histbinsize=0.05)
 rmsd3 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
 
-[rmsd, rmsd1, rmsd2, rmsd3]
+println("correctdrift rmsd              = $rmsd")
+println("driftcorrect rmsd (Kdtree)     = $rmsd1")
+println("driftcorrect + findshift2 rmsd = $rmsd2")
+println("driftcorrect intra = Kdtree, inter = findshift2 rmsd = $rmsd3")
 #isapprox(rmsd, 0.0; atol=1e-10)

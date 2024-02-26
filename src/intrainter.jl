@@ -75,7 +75,7 @@ end
 #function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{AbstractFloat})
 function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{Float64})
     #smld_shifted = deepcopy(smld)
-    println("correctdrift!: shift = $shift")
+    #println("correctdrift!: shift = $shift")
     smld.x .-= shift[1]
     smld.y .-= shift[2]
 end
@@ -169,9 +169,16 @@ function findinter!(dm::AbstractIntraInter,
             #println("--- B smld2.x[1:3] = $(smld2.x[1:3])")
             smld_uncorrected.x[subind2] = smld2.x
             smld_uncorrected.y[subind2] = smld2.y
+            if costfun == "None"
+                inter = dm.inter[dataset1]
+                theta2inter!(inter, shift)
+            end
+        end
+        if cost_fun == "None"
+            return 0.0
         end
     end
-    
+
     # get uncorrected coords for dataset 1 
     idx1 = smld_uncorrected.datasetnum .== dataset1
     coords1 = cat(dims = 2, smld_uncorrected.x[idx1], smld_uncorrected.y[idx1])
