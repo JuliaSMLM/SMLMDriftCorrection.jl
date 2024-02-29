@@ -151,31 +151,6 @@ function findinter!(dm::AbstractIntraInter,
     histbinsize::AbstractFloat
     )
 
-    #if histbinsize > 0.0
-    #   # Apply an optional cross-correlation correction before applying the
-    #   # kD-tree or entropy correction.
-    #   subind1 = smld_uncorrected.datasetnum .== dataset1
-    #   smld1 = SMLMData.isolatesmld(smld_uncorrected, subind1)
-    #   println("=== dataset1 = $dataset1, dataset2 = $dataset2")
-    #    for nn = 1:length(dataset2)
-    #        subind2 = smld_uncorrected.datasetnum .== dataset2[nn]
-    #        smld2 = SMLMData.isolatesmld(smld_uncorrected, subind2)
-    #        shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
-    #        shift = .-shift # correct sign of shift
-    #        #println()
-    #        #println("nn = $nn, shift = $shift")
-    #        correctdrift!(smld2, shift)
-    #        smld_uncorrected.x[subind2] = smld2.x
-    #        smld_uncorrected.y[subind2] = smld2.y
-    #        if costfun == "None"
-    #            theta2inter!(dm.inter[dataset1], shift)
-    #        end
-    #    end
-    #    if cost_fun == "None"
-    #        return 0.0
-    #    end
-    #end
-
     # get uncorrected coords for dataset 1 
     idx1 = smld_uncorrected.datasetnum .== dataset1
     coords1 = cat(dims = 2, smld_uncorrected.x[idx1], smld_uncorrected.y[idx1])
@@ -197,17 +172,17 @@ function findinter!(dm::AbstractIntraInter,
 
     if histbinsize > 0.0
         # Apply an optional cross-correlation correction.
-        println("=== dataset1 = $dataset1, dataset2 = $dataset2")
+        #println("=== dataset1 = $dataset1, dataset2 = $dataset2")
         smld1 = SMLMData.isolatesmld(smld, idx1)
         smld2 = SMLMData.isolatesmld(smld, idx2)
         shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
-        shift = .-shift # correct sign of shift
-        println("shift = $shift")
-        correctdrift!(smld2, shift)
-        smld.x[idx2] = smld2.x
-        smld.y[idx2] = smld2.y
+        #shift = .-shift # correct sign of shift
+        #println("shift = $shift")
+        correctdrift!(smld1, shift)
+        smld.x[idx1] = smld1.x
+        smld.y[idx1] = smld1.y
         if cost_fun == "None"
-            #theta2inter!(dm.inter[dataset1], shift)
+            theta2inter!(dm.inter[dataset1], shift)
             return 0.0
         end
     end

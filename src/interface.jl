@@ -12,7 +12,7 @@ Main interface for drift correction (DC).  This algorithm consists of an
 - degree:     degree for polynomial intra-dataset DC = 2
 - d_cutoff:   distance cutoff (pixel) = 0.1
 - maxn:       maximum number of neighbors considered = 200
-- crosscorr:  flag for inter-dataset cross-correlation correction = false
+
 - histbinsize: histogram bin size for inter-datset cross-correlation
                correction (pixel) = -1.0 [< 0 means no correction]
 - verbose:    flag for more output = 0

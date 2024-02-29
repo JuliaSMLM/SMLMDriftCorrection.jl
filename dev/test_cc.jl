@@ -28,6 +28,7 @@ smd_drift = DC.applydrift(smd_noisy, driftmodel)
 # Apply drift correction [correctdrift] to the drifted dataset using the drift model
 smd_DC = DC.correctdrift(smd_drift, driftmodel)
 N = length(smd_noisy.x)
+println("N = $N")
 rmsd = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
 
 # Apply drift to the noisy dataset using the drift model
