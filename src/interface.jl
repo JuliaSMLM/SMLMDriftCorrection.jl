@@ -56,7 +56,8 @@ function driftcorrect(smld::SMLMData.SMLD;
     if verbose>0
         @info("SMLMDriftCorrection: starting inter to dataset 1")
     end
-    Threads.@threads for nn = 2:smld.ndatasets
+    #Threads.@threads
+    for nn = 2:smld.ndatasets
         refdatasets = [1]
         findinter!(driftmodel, cost_fun_inter, smld, nn, refdatasets, d_cutoff, maxn,
                    histbinsize)

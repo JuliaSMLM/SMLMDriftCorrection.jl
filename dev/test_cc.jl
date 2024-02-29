@@ -32,14 +32,14 @@ rmsd = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2
 
 # Apply drift to the noisy dataset using the drift model
 smd_drift = DC.applydrift(smd_noisy, driftmodel)
-# Apply drift correction [driftcorrect] to the drifted dataset
-smd_DC = DC.driftcorrect(smd_drift)
+# Apply drift correction [driftcorrect (Kdtree)] to the drifted dataset
+smd_DC = DC.driftcorrect(smd_drift; cost_fun = "Kdtree")
 rmsd1 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
 
 # Apply drift to the noisy dataset using the drift model
 smd_drift = DC.applydrift(smd_noisy, driftmodel)
-# Apply drift correction [driftcorrect + findshift2] to the drifted dataset
-smd_DC = DC.driftcorrect(smd_drift; histbinsize=0.05)
+# Apply drift correction [driftcorrect (Kdtree) + findshift2] to the drifted dataset
+smd_DC = DC.driftcorrect(smd_drift; cost_fun = "Kdtree", histbinsize=0.05)
 rmsd2 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
 
 # Apply drift to the noisy dataset using the drift model
@@ -48,8 +48,24 @@ smd_drift = DC.applydrift(smd_noisy, driftmodel)
 smd_DC = DC.driftcorrect(smd_drift; cost_fun_inter="None", histbinsize=0.05)
 rmsd3 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
 
-println("correctdrift rmsd              = $rmsd")
-println("driftcorrect rmsd (Kdtree)     = $rmsd1")
-println("driftcorrect + findshift2 rmsd = $rmsd2")
-println("driftcorrect intra = Kdtree, inter = findshift2 rmsd = $rmsd3")
+# Apply drift to the noisy dataset using the drift model
+println("Entropy")
+smd_drift = DC.applydrift(smd_noisy, driftmodel)
+# Apply drift correction [driftcorrect (Entropy)] to the drifted dataset
+smd_DC = DC.driftcorrect(smd_drift; cost_fun="Entropy", maxn=100)
+rmsd4 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
+
+# Apply drift to the noisy dataset using the drift model
+println("Entropy + findshift2D")
+smd_drift = DC.applydrift(smd_noisy, driftmodel)
+# Apply drift correction [driftcorrect (Entropy) + findshift2] to the drifted dataset
+smd_DC = DC.driftcorrect(smd_drift; cost_fun="Entropy", maxn=100, histbinsize=0.05)
+rmsd5 = sqrt(sum((smd_DC.x .- smd_noisy.x) .^ 2 .+ (smd_DC.y .- smd_noisy.y) .^ 2) ./ N)
+
+println("correctdrift rmsd                                               = $rmsd")
+println("driftcorrect intra = Kdtree,  inter = Kdtree rmsd               = $rmsd1")
+println("driftcorrect intra = Kdtree,  inter = Kdtree + findshift2 rmsd  = $rmsd2")
+println("driftcorrect intra = Kdtree,  inter = findshift2 rmsd           = $rmsd3")
+println("driftcorrect intra = Entropy, inter = Entropy rmsd              = $rmsd4")
+println("driftcorrect intra = Entropy, inter = Rntropy + findshift2 rmsd = $rmsd5")
 #isapprox(rmsd, 0.0; atol=1e-10)
