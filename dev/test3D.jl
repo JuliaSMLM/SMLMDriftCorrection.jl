@@ -32,5 +32,9 @@ data = load(filepath) #To check keys use, varnames = keys(data)
 smld3 = data["smld"]
 
 smld2 = convert2D(smld3)
+println("N_smld2 = $(length(smld2.x))")
+subind = (smld2.x .> 10.0) .& (smld2.y .> 10.0) .& (smld2.x .< 15.0) .& (smld2.y .< 15.0)
+smld2 = SMLMData.isolatesmld(smld2, subind)
+println("N_smld2 = $(length(smld2.x))")
 
 smld_DC = SMLMDriftCorrection.driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
