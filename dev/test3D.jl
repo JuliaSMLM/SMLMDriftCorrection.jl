@@ -18,8 +18,8 @@ function convert2D(smld3::SMLMData.SMLD3D)
     smld2.framenum = smld3.framenum
     smld2.datasetnum = smld3.datasetnum
     #smld2.datasize = smld3.datasize
-    #smld2.nframes = smld3.nframes
-    #smld2.ndatasets = smld3.ndatasets
+    smld2.nframes = maximum(smld3.framenum)
+    smld2.ndatasets = maximum(smld3.datasetnum)
     return smld2
 end
 
@@ -33,4 +33,4 @@ smld3 = data["smld"]
 
 smld2 = convert2D(smld3)
 
-smld_DC = SMLMDriftCorrection.driftcorrect(smld2; cost_fun = "Kdtree")
+smld_DC = SMLMDriftCorrection.driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
