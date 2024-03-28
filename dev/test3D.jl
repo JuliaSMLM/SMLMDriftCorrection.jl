@@ -1,6 +1,7 @@
 using Revise
 using JLD2
 using FileIO
+using GLMakie
 using SMLMData
 using SMLMDriftCorrection
 
@@ -18,8 +19,14 @@ function convert2D(smld3::SMLMData.SMLD3D)
     smld2.framenum = smld3.framenum
     smld2.datasetnum = smld3.datasetnum
     #smld2.datasize = smld3.datasize
-    smld2.nframes = maximum(smld3.framenum)
-    smld2.ndatasets = maximum(smld3.datasetnum)
+    smld2.ndatasets = smld3.ndatasets
+    smld2.nframes = smld3.nframes
+    if smld2.ndatasets == 0
+        smld2.ndatasets = maximum(smld2.datasetnum)
+    end
+    if smld2.nframes == 0
+        smld2.nframes = maximum(smld2.framenum)
+    end
     return smld2
 end
 
@@ -33,8 +40,17 @@ smld3 = data["smld"]
 
 smld2 = convert2D(smld3)
 println("N_smld2 = $(length(smld2.x))")
-subind = (smld2.x .> 10.0) .& (smld2.y .> 10.0) .& (smld2.x .< 15.0) .& (smld2.y .< 15.0)
+subind = (smld2.x .> 10.0) .& (smld2.x .< 15.0) .& (smld2.y .> 10.0) .& (smld2.y .< 15.0)
 smld2 = SMLMData.isolatesmld(smld2, subind)
 println("N_smld2 = $(length(smld2.x))")
 
 smld_DC = SMLMDriftCorrection.driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
+
+f = Figure()
+ax1 = Axis(f[1, 1], aspect=DataAspect(), title="original")
+scatter!(smld2.x, smld_DC.y, markersize = 5)
+ax2 = Axis(f[1, 2], aspect=DataAspect(), title="DC: Kd-tree")
+scatter!(smld_DC.x, smld_DC.y, markersize = 5)
+linkxaxes!(ax1, ax2)
+linkyaxes!(ax1, ax2)
+display(f)
