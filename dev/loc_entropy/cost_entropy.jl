@@ -67,8 +67,8 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
     # length(x) number of localizations
     # maxn      number of neighbors per localizations
     # NOTE: kldiv is reused for each i
-    println("length(x) = ", length(x), ", maxn = ", maxn)
-    print("In entropy1: ")
+    # println("length(x) = ", length(x), ", maxn = ", maxn)
+    # print("In entropy1: ")
     # @time begin
     r1 = Vector{T}(undef, 2)
     σ1 = Vector{T}(undef, 2)
@@ -112,13 +112,14 @@ function ub_entropy(x::Vector{T}, y::Vector{T},
 
     data = transpose(coords)
 
-    print("KDTree: ")
-    @time kdtree = KDTree(data; leafsize=10)
+    #print("KDTree: ") @time 
+    kdtree = KDTree(data; leafsize=10)
     # true below so that results are sorted into increasing order of distance
-    print("knn: ")
-    @time idxs, dists = knn(kdtree, data, maxn + 1, true)
+    #print("knn: ") @time
+    idxs, dists = knn(kdtree, data, maxn + 1, true)
     #idxs = inrange(kdtree, data, maxn + 1)
     #println("Calculating Entropy...")
-    @time entropy1(idxs, x, y, σ_x, σ_y)
+    #@time 
+    entropy1(idxs, x, y, σ_x, σ_y)
 
 end

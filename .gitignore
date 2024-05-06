@@ -4,3 +4,5 @@
 /docs/build/
 .vscode/*
 Manifest.toml
+dev/loc_entropy/cost_entropy.jl.20240506
+dev/loc_entropy/test_entropy.jl.20240506

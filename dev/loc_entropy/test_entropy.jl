@@ -1,7 +1,7 @@
 using Revise
 using CairoMakie
 
-includet("entropy.jl")
+includet("cost_entropy.jl")
 includet("gen_data.jl")
 
 # Generated blinking data: 2D positions and uncertainties.
