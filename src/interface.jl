@@ -43,7 +43,6 @@ function driftcorrect(smld::SMLMData.SMLD;
     elseif intramodel == "LegendrePoly"
         driftmodel = LegendrePolynomial(smld; degree = degree)
     end
-    println("###SMLMDriftCorrection: $(driftmodel)")
 
     # Intra-dataset 
     if verbose>0

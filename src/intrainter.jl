@@ -140,14 +140,21 @@ Find and correct intra-detaset drift.
 """
 function findintra!(intra::AbstractIntraDrift,
     cost_fun::String,
-    smld::SMLMData.SMLD2D,
+    smld::SMLMData.SMLD,
     dataset::Int,
     d_cutoff::AbstractFloat,
     maxn::Int)
 
     idx = smld.datasetnum .== dataset
-    coords = cat(dims = 2, smld.x[idx], smld.y[idx])
-    stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
+    if intra.ndims == 2
+        coords = cat(dims = 2, smld.x[idx], smld.y[idx])
+        stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
+    elseif intra.ndims == 3
+        coords = cat(dims = 2, smld.x[idx], smld.y[idx], smld.z[idx])
+        stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx], smld.σ_z[idx])
+    end
+    #coords = cat(dims = 2, smld.x[idx], smld.y[idx])
+    #stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
     framenum = smld.framenum[idx]
     data = transpose(coords)
     se = transpose(stderr)
