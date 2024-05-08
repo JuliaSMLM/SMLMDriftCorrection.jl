@@ -3,7 +3,9 @@ Main interface for drift correction (DC).  This algorithm consists of an
     intra-dataset portion and an inter-dataset portion.
 
 # Fields
-- smld:       structure containing (X, Y) coordinates (pixel)
+- smld:       structure containing (X, Y) coordinates (pixel), and possibly
+              Z coordinates (μm)
+- pixelsize:  pixel size (μm) needed for z unit conversion = 0.1
 - intramodel: model for intra-dataset DC:
               {"Polynomial", "LegendrePoly"} = "Polynomial"
 - cost_fun:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
@@ -20,6 +22,7 @@ Main interface for drift correction (DC).  This algorithm consists of an
 - smd_found:  structure containing drift corrected (X, Y) coordinates (pixel)
 """
 function driftcorrect(smld::SMLMData.SMLD;
+    pixelsize::AbstractFloat = 0.1,
     intramodel::String = "Polynomial",
     cost_fun::String = "Kdtree",
     cost_fun_intra::String = "",
@@ -36,6 +39,16 @@ function driftcorrect(smld::SMLMData.SMLD;
     end
     if isempty(cost_fun_inter)
         cost_fun_inter = cost_fun
+    end
+
+    ndims = 2
+    if :z in fieldnames(typeof(smld))
+        ndims = 3
+        # Convert Z coordinates/σ to pixel units (and back to μm
+        # at the end of this function), so that drift correction
+        # is done entirely in the same units for all coordinates.
+        smld.z = smld.z ./ pixelsize
+        smld.σ_z = smld.σ_z ./ pixelsize
     end
 
     if intramodel == "Polynomial"
@@ -86,6 +99,11 @@ function driftcorrect(smld::SMLMData.SMLD;
     end
     
     smd_found = correctdrift(smld, driftmodel)
+    # Convert Z coordinates/σ if present back to μm.
+    if ndims == 3
+        smd_found.z = smd_found.z .* pixelsize
+        smd_found.σ_z = smd_found.σ_z .* pixelsize
+    end
 
     return smd_found
 end

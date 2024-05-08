@@ -33,8 +33,12 @@ end
 dir = "Y:\\Projects\\Super Critical Angle Localization Microscopy\\Data\\10-06-2023\\Data2\\old insitu psf and stg pos"
 file = "Data2-2023-10-6-17-11-54deepfit1.jld2"
 filepath = joinpath(dir, file)
-# Load the file
-data = load(filepath) #To check keys use, varnames = keys(data)
+# Load the file if not done previously
+if !isdefined(Main, :data)
+    println("Loading file: $file")
+    @time data = load(filepath) #To check keys use, varnames = keys(data)
+    println("Loaded file: $file")
+end
 # Get smld
 smld3 = data["smld"]
 if smld3.ndatasets == 0
@@ -43,39 +47,36 @@ end
 if smld3.nframes == 0
     smld3.nframes = maximum(smld3.framenum)
 end
-smld3SAVE = smld3
-
 smld2 = convert2D(smld3)
 println("N_smld2 = $(length(smld2.x))")
 subind = (smld2.x .> 10.0) .& (smld2.x .< 15.0) .& (smld2.y .> 10.0) .& (smld2.y .< 15.0)
-smld2 = SMLMData.isolatesmld(smld2, subind)
-println("N_smld2 = $(length(smld2.x))")
+smld2roi = SMLMData.isolatesmld(smld2, subind)
+println("N_smld2 = $(length(smld2roi.x))")
 
-smld_DC = SMLMDriftCorrection.driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
-
-f = Figure()
-ax1 = Axis(f[1, 1], aspect=DataAspect(), title="original2")
-scatter!(smld2.x, smld2.y, markersize = 5)
-ax2 = Axis(f[1, 2], aspect=DataAspect(), title="DC: Kd-tree")
-scatter!(smld_DC.x, smld_DC.y, markersize = 5)
-linkxaxes!(ax1, ax2)
-linkyaxes!(ax1, ax2)
-display(f)
+smld2_DC = SMLMDriftCorrection.driftcorrect(smld2roi; verbose = 1, cost_fun = "Kdtree")
 
 println("N_smld3 = $(length(smld3.x))")
 zmin = minimum(smld3.z)
 zmax = maximum(smld3.z)
 subind = (smld3.x .> 10.0) .& (smld3.x .< 15.0) .& (smld3.y .> 10.0) .& (smld3.y .< 15.0) .& (smld3.z .> zmin) .& (smld3.z .< zmax)
-smld3 = SMLMData.isolatesmld(smld3, subind)
-println("N_smld3 = $(length(smld3.x))")
+smld3roi = SMLMData.isolatesmld(smld3, subind)
+println("N_smld3 = $(length(smld3roi.x))")
 
-smld_DC = SMLMDriftCorrection.driftcorrect(smld3; verbose = 1, cost_fun = "Kdtree")
+smld3_DC = SMLMDriftCorrection.driftcorrect(smld3roi; verbose = 1, cost_fun = "Kdtree")
 
 f = Figure()
-ax1 = Axis(f[1, 1], aspect=DataAspect(), title="original3")
-scatter!(smld3.x, smld3.y, markersize = 5)
-ax2 = Axis(f[1, 2], aspect=DataAspect(), title="DC: Kd-tree")
-scatter!(smld_DC.x, smld_DC.y, markersize = 5)
-linkxaxes!(ax1, ax2)
-linkyaxes!(ax1, ax2)
+ax11 = Axis(f[1, 1], aspect=DataAspect(), title="smld2 roi")
+scatter!(smld2roi.x, smld2roi.y, markersize = 5)
+ax12 = Axis(f[1, 2], aspect=DataAspect(), title="DC2")
+scatter!(smld2_DC.x, smld3_DC.y, markersize = 5)
+ax21 = Axis(f[2, 1], aspect=DataAspect(), title="smld3 roi")
+scatter!(smld3roi.x, smld3roi.y, markersize = 5)
+ax22 = Axis(f[2, 2], aspect=DataAspect(), title="DC3")
+scatter!(smld3_DC.x, smld3_DC.y, markersize = 5)
+linkxaxes!(ax11, ax12)
+linkxaxes!(ax11, ax21)
+linkxaxes!(ax11, ax22)
+linkyaxes!(ax11, ax12)
+linkyaxes!(ax11, ax21)
+linkyaxes!(ax11, ax22)
 display(f)
