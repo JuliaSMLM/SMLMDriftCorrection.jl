@@ -50,9 +50,28 @@ function applydrift!(smld::SMLMData.SMLD2D, dm::AbstractIntraInter)
     end
 end
 
+function applydrift!(smld::SMLMData.SMLD3D, dm::AbstractIntraInter)
+    for nn = 1:length(smld.x)
+        smld.x[nn] = applydrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
+        smld.x[nn] = applydrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
+
+        smld.y[nn] = applydrift(smld.y[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[2])
+        smld.y[nn] = applydrift(smld.y[nn], dm.inter[smld.datasetnum[nn]], 2)
+
+        smld.z[nn] = applydrift(smld.z[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[3])
+        smld.z[nn] = applydrift(smld.z[nn], dm.inter[smld.datasetnum[nn]], 3)
+    end
+end
+
 function applydrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
     applydrift!(smld_shifted::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
+    return smld_shifted
+end
+
+function applydrift(smld::SMLMData.SMLD3D, driftmodel::AbstractIntraInter)
+    smld_shifted = deepcopy(smld)
+    applydrift!(smld_shifted::SMLMData.SMLD3D, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
@@ -66,7 +85,26 @@ function correctdrift!(smld::SMLMData.SMLD2D, dm::AbstractIntraInter)
     end
 end
 
+function correctdrift!(smld::SMLMData.SMLD3D, dm::AbstractIntraInter)
+    for nn = 1:length(smld.x)
+        smld.x[nn] = correctdrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
+        smld.x[nn] = correctdrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
+
+        smld.y[nn] = correctdrift(smld.y[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[2])
+        smld.y[nn] = correctdrift(smld.y[nn], dm.inter[smld.datasetnum[nn]], 2)
+
+        smld.z[nn] = correctdrift(smld.z[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[3])
+        smld.z[nn] = correctdrift(smld.z[nn], dm.inter[smld.datasetnum[nn]], 3)
+    end
+end
+
 function correctdrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
+    smld_shifted = deepcopy(smld)
+    correctdrift!(smld_shifted, driftmodel)
+    return smld_shifted
+end
+
+function correctdrift(smld::SMLMData.SMLD3D, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
     correctdrift!(smld_shifted, driftmodel)
     return smld_shifted
@@ -78,6 +116,15 @@ function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{Float64})
     #println("correctdrift!: shift = $shift")
     smld.x .-= shift[1]
     smld.y .-= shift[2]
+end
+
+#function correctdrift!(smld::SMLMData.SMLD3D, shift::Vector{AbstractFloat})
+function correctdrift!(smld::SMLMData.SMLD3D, shift::Vector{Float64})
+    #smld_shifted = deepcopy(smld)
+    #println("correctdrift!: shift = $shift")
+    smld.x .-= shift[1]
+    smld.y .-= shift[2]
+    smld.z .-= shift[3]
 end
 
 """

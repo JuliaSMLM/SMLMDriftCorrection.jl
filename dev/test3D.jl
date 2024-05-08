@@ -37,6 +37,13 @@ filepath = joinpath(dir, file)
 data = load(filepath) #To check keys use, varnames = keys(data)
 # Get smld
 smld3 = data["smld"]
+if smld3.ndatasets == 0
+    smld3.ndatasets = maximum(smld3.datasetnum)
+end
+if smld3.nframes == 0
+    smld3.nframes = maximum(smld3.framenum)
+end
+smld3SAVE = smld3
 
 smld2 = convert2D(smld3)
 println("N_smld2 = $(length(smld2.x))")
@@ -45,6 +52,24 @@ smld2 = SMLMData.isolatesmld(smld2, subind)
 println("N_smld2 = $(length(smld2.x))")
 
 smld_DC = SMLMDriftCorrection.driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
+
+f = Figure()
+ax1 = Axis(f[1, 1], aspect=DataAspect(), title="original")
+scatter!(smld2.x, smld_DC.y, markersize = 5)
+ax2 = Axis(f[1, 2], aspect=DataAspect(), title="DC: Kd-tree")
+scatter!(smld_DC.x, smld_DC.y, markersize = 5)
+linkxaxes!(ax1, ax2)
+linkyaxes!(ax1, ax2)
+display(f)
+
+println("N_smld3 = $(length(smld3.x))")
+zmin = minimum(smld3.z)
+zmax = maximum(smld3.z)
+subind = (smld3.x .> 10.0) .& (smld3.x .< 15.0) .& (smld3.y .> 10.0) .& (smld3.y .< 15.0) .& (smld3.z .> zmin) .& (smld3.z .< zmax)
+smld3 = SMLMData.isolatesmld(smld3, subind)
+println("N_smld3 = $(length(smld3.x))")
+
+smld_DC = SMLMDriftCorrection.driftcorrect(smld3; verbose = 1, cost_fun = "Kdtree")
 
 f = Figure()
 ax1 = Axis(f[1, 1], aspect=DataAspect(), title="original")

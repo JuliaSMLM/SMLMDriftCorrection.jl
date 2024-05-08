@@ -79,6 +79,10 @@ function Polynomial(smld::SMLMData.SMLD2D; degree::Int=2, initialize::String="ze
     return Polynomial(2,smld.ndatasets,smld.nframes;degree=degree, initialize=initialize,rscale=rscale)
 end
 
+function Polynomial(smld::SMLMData.SMLD3D; degree::Int=2, initialize::String="zeros",rscale=0.1)
+    return Polynomial(3,smld.ndatasets,smld.nframes;degree=degree, initialize=initialize,rscale=rscale)
+end
+
 function applydrift(x::AbstractFloat,framenum::Int,p::Polynomial1D)
     for nn=1:p.degree
         x+=p.coefficients[nn]*framenum^nn

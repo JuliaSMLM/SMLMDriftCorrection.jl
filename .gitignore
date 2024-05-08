@@ -6,3 +6,12 @@
 Manifest.toml
 dev/loc_entropy/cost_entropy.jl.20240506
 dev/loc_entropy/test_entropy.jl.20240506
+src/SAVE/cost_entropy.jl
+src/SAVE/costfuns.jl
+src/SAVE/costs.jl
+src/SAVE/crosscorr.jl
+src/SAVE/interface.jl
+src/SAVE/intrainter.jl
+src/SAVE/polynomial.jl
+src/SAVE/SMLMDriftCorrection.jl
+src/SAVE/typedefs.jl
