@@ -1,16 +1,42 @@
 using Revise
 using CairoMakie
+using FileIO
 using NearestNeighbors
 using Statistics
 using StatsFuns
+using SMLMData
 using SMLMDriftCorrection
 
-#includet("cost_entropy.jl")
+includet("cost_entropy.jl")
 includet("gen_data.jl")
 
 # Generated blinking data: 2D positions and uncertainties.
 x, y, σ_x, σ_y = gendata(;n_blink = 10)
 #plot(x,y)
+
+realdata = true
+if realdata
+    # Real data
+    dir = "Y:\\Projects\\Super Critical Angle Localization Microscopy\\Data\\10-06-2023\\Data2\\old insitu psf and stg pos"
+    file = "Data2-2023-10-6-17-11-54deepfit1.jld2"
+    filepath = joinpath(dir, file)
+    # Load the file if not done previously
+    if !isdefined(Main, :data)
+        println("Loading file: $file")
+        data = load(filepath) #To check keys use, varnames = keys(data)
+        println("Loaded file: $file")
+    end
+    # Get smld
+    smld3 = data["smld"]
+
+    smld2 = smld3
+    println("N_smld2 = $(length(smld2.x))")
+    subind = (smld2.x .> 10.0) .& (smld2.x .< 15.0) .& (smld2.y .> 10.0) .& (smld2.y .< 15.0)
+    smld2roi = SMLMData.isolatesmld(smld2, subind)
+    println("N_smld2roi = $(length(smld2roi.x))")
+
+    x, y, σ_x, σ_y = smld2roi.x, smld2roi.y, smld2roi.σ_x, smld2roi.σ_y
+end
 
 N = length(x)
 println("N = ", N)
