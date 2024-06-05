@@ -79,21 +79,23 @@ end
 end
 
 ## SE_Adjust-like plot
+# sigma' = a + b * sigma
 # xs = [10^(-1), 10^1]
 xs = 10.0.^s
-f,ax = plot(xs, sigma_scan; yscale = :identity, xlabel="x", color = :red, label = "ub")
+f,ax = plot(xs, sigma_scan; yscale = :identity, xlabel="b", color = :red, label = "ub")
 plot!(ax, xs, hd, color = :green, label = "HD")
-plot!(ax, xs, sigma_scan - 1 .* hd, color = :black, label = "ub - hd")
+plot!(ax, xs, sigma_scan - 1 .* hd, color = :black, label = "ub - HD")
 ax.xscale = log10
-ax.xlabel = "sigma x"
+#ax.lablel = "sigma x"
+ax.xlabel = "b"
 ax.ylabel = "entropy"
 axislegend()
 #ylims!(ax,-100,100)
 display(f)
 
 ff,aax = plot(xs, sigma_scan - 1 .* hd, color = :black)
-aax.xlabel = "sigma x"
-aax.ylabel = "ub - hd"
+aax.xlabel = "b"
+aax.ylabel = "ub_entropy - entropy_HD"
 display(ff)
 
 ## Plot on a linear scale
@@ -104,20 +106,25 @@ display(g)
 
 h,cx = plot(xs, sigma_scan, color = :red)
 cx.xlabel = "b"
-cx.ylabel = "ub"
+cx.ylabel = "entropy_ub"
 display(h)
 
 # xs1 = [-100, 100]
 xs1 = 100.0 .* s
 g1,bx1 = plot(xs1, hd1, color = :green)
 bx1.xlabel = "a"
-bx1.ylabel = "HD"
+bx1.ylabel = "entropy_HD"
 display(g1)
 
 h1,cx1 = plot(xs1, sigma_scan1, color = :red)
 cx1.xlabel = "a"
-cx1.ylabel = "ub"
+cx1.ylabel = "ub_entropy"
 display(h1)
+
+ff1,aax1 = plot(xs1, sigma_scan1 - 1 .* hd1, color = :black)
+aax1.xlabel = "a"
+aax1.ylabel = "ub_entropy - entropy_HD"
+display(ff1)
 
 ## 
 
