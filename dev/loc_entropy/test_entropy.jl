@@ -15,7 +15,7 @@ includet("gen_data.jl")
 x, y, σ_x, σ_y = gendata(;n_blink = 10)
 #plot(x,y)
 
-realdata = true
+realdata = false
 if realdata
     # Real data
     dir = "Y:\\Projects\\Super Critical Angle Localization Microscopy\\Data\\10-06-2023\\Data2\\old insitu psf and stg pos"
@@ -42,6 +42,10 @@ end
 N = length(x)
 println("N = ", N)
 println("ub_entropy = ", ub_entropy(x, y, σ_x, σ_y))
+println("entropy_HD = ", entropy_HD(σ_x, σ_y))
+z = zeros(Float32, size(σ_x))
+println("ub_entropy (σ = 0) = ", ub_entropy(x, y, z, z))
+println("entropy_HD (σ = 0) = ", entropy_HD(z, z))
 
 ## 
 # s in [-1, 1] in 201 steps of size .01
@@ -49,29 +53,32 @@ s = Float32.(range(-1,1, step = .01))
 sigma_scan = zeros(length(s))
 hd = zeros(length(s))
 
-s1 = Float32.(range(-1,1, step = .01))
-sigma_scan1 = zeros(length(s))
-hd1 = zeros(length(s))
-
-for i in 1:length(s)
+@time for i in 1:length(s)
     sx = 10f0^s[i]*σ_x
     sy = sx
     # ub_entropy is an upper bound on the entropy based on NN
     sigma_scan[i] = ub_entropy(x, y, sx, sy)
     # entropy_HD is the entropy summed over all/NN localizations
     hd[i] = entropy_HD(sx, sy)
+end
 
+s1 = Float32.(range(-1,1, step = .01))
+sigma_scan1 = zeros(length(s1))
+hd1 = zeros(length(s1))
+
+@time for i in 1:length(s1)
     sx = σ_x .+ 100f0*s[i]
     sy = sx
     sigma_scan1[i] = ub_entropy(x, y, sx, sy)
     hd1[i] = entropy_HD(sx, sy)
 end
+
 ## SE_Adjust-like plot
 # xs = [10^(-1), 10^1]
 xs = 10.0.^s
-f,ax = plot(xs, sigma_scan; yscale = :identity, xlabel="x", color = :black, label = "ub")
-plot!(ax, xs, hd, color = :green, label = "hd")
-plot!(ax, xs, sigma_scan + 1 .* hd, color = :red, label = "ub + hd")
+f,ax = plot(xs, sigma_scan; yscale = :identity, xlabel="x", color = :red, label = "ub")
+plot!(ax, xs, hd, color = :green, label = "HD")
+plot!(ax, xs, sigma_scan + 1 .* hd, color = :black, label = "ub + hd")
 ax.xscale = log10
 ax.xlabel = "sigma x"
 ax.ylabel = "entropy"
@@ -81,17 +88,20 @@ display(f)
 
 ## Plot on a linear scale
 g,bx = plot(xs, hd, color = :green)
-bx.ylabel = "hd"
+bx.xlabel = "b"
+bx.ylabel = "entropy_HD"
 display(g)
 
-h,cx = plot(xs, sigma_scan + 1 .* hd, color = :red)
-cx.ylabel = "ub + hd"
+h,cx = plot(xs, sigma_scan, color = :red)
+cx.xlabel = "b"
+cx.ylabel = "ub"
 display(h)
 
+# xs1 = [-100, 100]
 xs1 = 100.0 .* s
 g1,bx1 = plot(xs1, hd1, color = :green)
 bx1.xlabel = "a"
-bx1.ylabel = "hd"
+bx1.ylabel = "HD"
 display(g1)
 
 h1,cx1 = plot(xs1, sigma_scan1, color = :red)
@@ -101,6 +111,6 @@ display(h1)
 
 ## 
 
-println(ub_entropy(x, y, 10f0*σ_x, σ_y))
+#println(ub_entropy(x, y, 10f0*σ_x, σ_y))
 
-println(ub_entropy(x+10f0*randn(Float32,length(x)), y, σ_x, σ_y))
+#println(ub_entropy(x+10f0*randn(Float32,length(x)), y, σ_x, σ_y))
