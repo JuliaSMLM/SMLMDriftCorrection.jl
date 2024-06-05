@@ -44,8 +44,8 @@ println("N = ", N)
 println("ub_entropy = ", ub_entropy(x, y, σ_x, σ_y))
 println("entropy_HD = ", entropy_HD(σ_x, σ_y))
 z = zeros(Float32, size(σ_x))
-println("ub_entropy (σ = 0) = ", ub_entropy(x, y, z, z))
-println("entropy_HD (σ = 0) = ", entropy_HD(z, z))
+#println("ub_entropy (σ = 0) = ", ub_entropy(x, y, z, z))
+#println("entropy_HD (σ = 0) = ", entropy_HD(z, z))
 
 ## 
 # s in [-1, 1] in 201 steps of size .01
@@ -53,7 +53,7 @@ s = Float32.(range(-1,1, step = .01))
 sigma_scan = zeros(length(s))
 hd = zeros(length(s))
 
-@time for i in 1:length(s)
+for i in 1:length(s)
     sx = 10f0^s[i]*σ_x
     sy = sx
     # ub_entropy is an upper bound on the entropy based on NN
@@ -70,6 +70,11 @@ hd1 = zeros(length(s1))
     sx = σ_x .+ 100f0*s[i]
     sy = sx
     sigma_scan1[i] = ub_entropy(x, y, sx, sy)
+end
+
+@time for i in 1:length(s1)
+    sx = σ_x .+ 100f0*s[i]
+    sy = sx
     hd1[i] = entropy_HD(sx, sy)
 end
 
@@ -78,13 +83,18 @@ end
 xs = 10.0.^s
 f,ax = plot(xs, sigma_scan; yscale = :identity, xlabel="x", color = :red, label = "ub")
 plot!(ax, xs, hd, color = :green, label = "HD")
-plot!(ax, xs, sigma_scan + 1 .* hd, color = :black, label = "ub + hd")
+plot!(ax, xs, sigma_scan - 1 .* hd, color = :black, label = "ub - hd")
 ax.xscale = log10
 ax.xlabel = "sigma x"
 ax.ylabel = "entropy"
 axislegend()
 #ylims!(ax,-100,100)
 display(f)
+
+ff,aax = plot(xs, sigma_scan - 1 .* hd, color = :black)
+aax.xlabel = "sigma x"
+aax.ylabel = "ub - hd"
+display(ff)
 
 ## Plot on a linear scale
 g,bx = plot(xs, hd, color = :green)
