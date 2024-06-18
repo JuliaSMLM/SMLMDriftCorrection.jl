@@ -49,6 +49,20 @@ function applydrift!(smld::SMLMData.SMLD2D, dm::AbstractIntraInter)
     end
 end
 
+""" 
+
+  applydrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter) -> SMLMData.SMLD2D
+
+Applies a drift model to the Single-Molecule Localization Microscopy (SMLM) data and returns the drift-corrected data.
+
+# Arguments
+- `smld::SMLMData.SMLD2D`: The SMLM data structure containing the original localization data.
+- `driftmodel::AbstractIntraInter`: The drift model to be applied to the SMLM data. This model should account for both intra- and inter-frame drift corrections.
+
+# Returns
+- `SMLMData.SMLD2D`: A new SMLM data structure with the drift corrections applied.
+
+"""
 function applydrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
     applydrift!(smld_shifted::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
