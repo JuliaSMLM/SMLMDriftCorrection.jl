@@ -16,15 +16,15 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
-SMLMData = "0.1"
-ProfileView = "1"
 BenchmarkTools = "1"
 ForwardDiff = "0.10"
-Zygote = "0.6"
-Optim = "1"
 NearestNeighbors = "0.4"
+Optim = "1"
 PlotlyJS = "0.18"
-SMLMSim = "0.1"
+ProfileView = "1"
+SMLMData = "0.1"
+SMLMSim = "0.1, 0.2"
+Zygote = "0.6"
 julia = "1.6"
 
 [extras]
