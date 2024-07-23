@@ -36,9 +36,10 @@ drift_true = DC.Polynomial(smd_noisy; degree = 2,
 smld_drift = DC.applydrift(smd_noisy, drift_true)
 
 #correct intra
-Threads.@threads for nn = 1:smld_drift.ndatasets
-    DC.findintra!(driftmodel.intra[nn], smld_drift, nn, d_cutoff)
-end
+#d_cutoff=.1
+#Threads.@threads for nn = 1:smld_drift.ndatasets
+#    DC.findintra!(driftmodel.intra[nn], smld_drift, nn, d_cutoff)
+#end
 
 plt=PlotlyJS.plot(scattergl(x=smld_drift.x, y=smld_drift.y, mode="markers"))
 display(plt)

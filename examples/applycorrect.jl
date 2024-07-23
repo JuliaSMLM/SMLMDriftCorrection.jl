@@ -38,7 +38,7 @@ smd_drift=DC.applydrift(smd_noisy,driftmodel)
 plt=PlotlyJS.plot(scattergl(x=smd_drift.x, y=smd_drift.y, mode="markers"))
 display(plt)
 
-smd_DC=DC.correctdrift(smd_drift,driftmodel)
+smd_DC=DC.correctdrift(smd_drift, driftmodel)
 
 plt=PlotlyJS.plot(scattergl(x=smd_DC.x, y=smd_DC.y, mode="markers"))
 display(plt)
