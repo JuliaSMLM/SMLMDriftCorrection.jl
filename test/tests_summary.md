@@ -5,7 +5,7 @@
 - examples/applycorrect.jl
   demonstrate applying and correcting drift to simulated data (plotlyJS)
 - examples/finddrift.jl
-  as applycorrect,jl, but more elaborate (GLMakie)
+  as applycorrect.jl, but more elaborate (GLMakie)
 - examples/test_entropy.jl
   Keith's original SEAdjust-like plots
 - dev/test_cc.jl
