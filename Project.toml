@@ -41,7 +41,7 @@ SMLMData = "0.1"
 SMLMSim = "0.1, 0.2"
 Statistics = "1"
 StatsFuns = "1"
-Zygote = "0.6"
+Zygote = "0.6, 0.7"
 julia = "1.6"
 
 [extras]
