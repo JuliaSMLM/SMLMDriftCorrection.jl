@@ -25,7 +25,7 @@ for i in 1:length(s)
 end
 ## SE_Adjust-like plot
 xs = 10.0.^s
-f,ax = CairoMakie.plot(xs,sigma_scan; yscale = :identity, xlabel="x")
+f,ax = CairoMakie.plot(xs,sigma_scan)
 CairoMakie.plot!(ax,xs,hd)
 CairoMakie.plot!(ax,xs,sigma_scan + 1 .*hd)
 ax.xscale = log10

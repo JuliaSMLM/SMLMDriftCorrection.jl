@@ -68,5 +68,5 @@ println("driftcorrect intra = Kdtree,  inter = Kdtree rmsd               = $rmsd
 println("driftcorrect intra = Kdtree,  inter = Kdtree + findshift2 rmsd  = $rmsd2")
 println("driftcorrect intra = Kdtree,  inter = findshift2 rmsd           = $rmsd3")
 println("driftcorrect intra = Entropy, inter = Entropy rmsd              = $rmsd4")
-println("driftcorrect intra = Entropy, inter = Rntropy + findshift2 rmsd = $rmsd5")
+println("driftcorrect intra = Entropy, inter = Entropy + findshift2 rmsd = $rmsd5")
 #isapprox(rmsd, 0.0; atol=1e-10)
