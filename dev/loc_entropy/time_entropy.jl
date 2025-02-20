@@ -1,6 +1,6 @@
 using Revise
 using CairoMakie
-using CUDA
+#using CUDA
 using NearestNeighbors
 using StatsFuns
 
