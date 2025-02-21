@@ -1,6 +1,5 @@
 using Revise
 using CairoMakie
-#using GLMakie
 using FileIO
 using NearestNeighbors
 using Statistics
@@ -82,7 +81,8 @@ end
 # sigma' = a + b * sigma
 # xs = [10^(-1), 10^1]
 xs = 10.0.^s
-f,ax = plot(xs, sigma_scan; yscale = :identity, xlabel="b", color = :red, label = "ub")
+#f,ax = plot(xs, sigma_scan; yscale = :identity, xlabel="b", color = :red, label = "ub")
+f,ax = CairoMakie.scatter(xs, sigma_scan; color = :red, label = "ub")
 plot!(ax, xs, hd, color = :green, label = "HD")
 plot!(ax, xs, sigma_scan - 1 .* hd, color = :black, label = "ub - HD")
 ax.xscale = log10
