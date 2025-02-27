@@ -168,7 +168,7 @@ histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates.
 """
 function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
-) where {T<:SMLMData.SMLD}
+) where {T<:SMLMData.Emitter2DFit}
     # Compute the histogram images assume the same size for both images).
     if smld1.datasize[1] != smld2.datasize[1] &&
        smld1.datasize[2] != smld2.datasize[2]
@@ -225,7 +225,7 @@ directions are calculated in the same units.
 """
 function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     pixelsizeZunit::AbstractFloat=0.100
-) where {T<:SMLMData.SMLD3D}
+) where {T<:SMLMData.Emitter3DFit}
     # Compute the histogram images assume the same size for both images).
     if smld1.datasize[1] != smld2.datasize[1] &&
        smld1.datasize[2] != smld2.datasize[2] &&

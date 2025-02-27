@@ -40,7 +40,7 @@ end
 """
 Apply x- and y-drift to the data in the smld structure.
 """
-function applydrift!(smld::SMLMData.SMLD2D, dm::AbstractIntraInter)
+function applydrift!(smld::SMLMData.Emitter2DFit, dm::AbstractIntraInter)
     for nn = 1:length(smld.x)
         smld.x[nn] = applydrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
         smld.x[nn] = applydrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
@@ -51,7 +51,7 @@ function applydrift!(smld::SMLMData.SMLD2D, dm::AbstractIntraInter)
 end
 
 
-function applydrift!(smld::SMLMData.SMLD3D, dm::AbstractIntraInter)
+function applydrift!(smld::SMLMData.Emitter3DFit, dm::AbstractIntraInter)
     for nn = 1:length(smld.x)
         smld.x[nn] = applydrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
         smld.x[nn] = applydrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
@@ -66,31 +66,31 @@ end
 
 
 """ 
-  applydrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter) -> SMLMData.SMLD2D
+  applydrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter) -> SMLMData.Emitter2DFit
 
 Applies a drift model to the Single-Molecule Localization Microscopy (SMLM) data and returns the drift-corrected data.
 
 # Arguments
-- `smld::SMLMData.SMLD2D`: The SMLM data structure containing the original localization data.
+- `smld::SMLMData.Emitter2DFit`: The SMLM data structure containing the original localization data.
 - `driftmodel::AbstractIntraInter`: The drift model to be applied to the SMLM data. This model should account for both intra- and inter-frame drift corrections.
 
 # Returns
-- `SMLMData.SMLD2D`: A new SMLM data structure with the drift corrections applied.
+- `SMLMData.Emitter2DFit`: A new SMLM data structure with the drift corrections applied.
 
 """
-function applydrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
+function applydrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
-    applydrift!(smld_shifted::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
+    applydrift!(smld_shifted::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
-function applydrift(smld::SMLMData.SMLD3D, driftmodel::AbstractIntraInter)
+function applydrift(smld::SMLMData.Emitter3DFit, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
-    applydrift!(smld_shifted::SMLMData.SMLD3D, driftmodel::AbstractIntraInter)
+    applydrift!(smld_shifted::SMLMData.Emitter3DFit, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
-function correctdrift!(smld::SMLMData.SMLD2D, dm::AbstractIntraInter)
+function correctdrift!(smld::SMLMData.Emitter2DFit, dm::AbstractIntraInter)
     for nn = 1:length(smld.x)
         smld.x[nn] = correctdrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
         smld.x[nn] = correctdrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
@@ -100,7 +100,7 @@ function correctdrift!(smld::SMLMData.SMLD2D, dm::AbstractIntraInter)
     end
 end
 
-function correctdrift!(smld::SMLMData.SMLD3D, dm::AbstractIntraInter)
+function correctdrift!(smld::SMLMData.Emitter3DFit, dm::AbstractIntraInter)
     for nn = 1:length(smld.x)
         smld.x[nn] = correctdrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
         smld.x[nn] = correctdrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
@@ -113,28 +113,28 @@ function correctdrift!(smld::SMLMData.SMLD3D, dm::AbstractIntraInter)
     end
 end
 
-function correctdrift(smld::SMLMData.SMLD2D, driftmodel::AbstractIntraInter)
+function correctdrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
     correctdrift!(smld_shifted, driftmodel)
     return smld_shifted
 end
 
-function correctdrift(smld::SMLMData.SMLD3D, driftmodel::AbstractIntraInter)
+function correctdrift(smld::SMLMData.Emitter3DFit, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
     correctdrift!(smld_shifted, driftmodel)
     return smld_shifted
 end
 
-#function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{AbstractFloat})
-function correctdrift!(smld::SMLMData.SMLD2D, shift::Vector{Float64})
+#function correctdrift!(smld::SMLMData.Emitter2DFit, shift::Vector{AbstractFloat})
+function correctdrift!(smld::SMLMData.Emitter2DFit, shift::Vector{Float64})
     #smld_shifted = deepcopy(smld)
     #println("correctdrift!: shift = $shift")
     smld.x .-= shift[1]
     smld.y .-= shift[2]
 end
 
-#function correctdrift!(smld::SMLMData.SMLD3D, shift::Vector{AbstractFloat})
-function correctdrift!(smld::SMLMData.SMLD3D, shift::Vector{Float64})
+#function correctdrift!(smld::SMLMData.Emitter3DFit, shift::Vector{AbstractFloat})
+function correctdrift!(smld::SMLMData.Emitter3DFit, shift::Vector{Float64})
     #smld_shifted = deepcopy(smld)
     #println("correctdrift!: shift = $shift")
     smld.x .-= shift[1]
@@ -212,7 +212,7 @@ Find and correct inter-detaset drift.
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
-    smld_uncorrected::SMLMData.SMLD2D,
+    smld_uncorrected::SMLMData.Emitter2DFit,
     dataset1::Int,
     dataset2::Vector{Int},
     d_cutoff::AbstractFloat,
@@ -294,7 +294,7 @@ Find and correct inter-detaset drift.
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
-    smld_uncorrected::SMLMData.SMLD2D,
+    smld_uncorrected::SMLMData.Emitter2DFit,
     dataset1::Int,
     d_cutoff::AbstractFloat,
     maxn::Int,
@@ -308,7 +308,7 @@ end
 """
 Experimental.
 """
-function globalcost(smld::SMLMData.SMLD2D; k::Int=4, d_cutoff=1.0)
+function globalcost(smld::SMLMData.Emitter2DFit; k::Int=4, d_cutoff=1.0)
     
     coords1 = cat(dims = 2, smld.x, smld.y)
     data = transpose(coords1)

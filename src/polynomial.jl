@@ -75,11 +75,11 @@ function Polynomial(ndims::Int, ndatasets::Int, nframes::Int;
     return Polynomial(ndatasets,intra,inter)
 end
 
-function Polynomial(smld::SMLMData.SMLD2D; degree::Int=2, initialize::String="zeros",rscale=0.1)
+function Polynomial(smld::SMLMData.Emitter2DFit; degree::Int=2, initialize::String="zeros",rscale=0.1)
     return Polynomial(2,smld.ndatasets,smld.nframes;degree=degree, initialize=initialize,rscale=rscale)
 end
 
-function Polynomial(smld::SMLMData.SMLD3D; degree::Int=2, initialize::String="zeros",rscale=0.1)
+function Polynomial(smld::SMLMData.Emitter3DFit; degree::Int=2, initialize::String="zeros",rscale=0.1)
     return Polynomial(3,smld.ndatasets,smld.nframes;degree=degree, initialize=initialize,rscale=rscale)
 end
 
