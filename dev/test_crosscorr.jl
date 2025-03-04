@@ -6,19 +6,21 @@ using SMLMSim
 
 includet("crosscorr.jl")
 
-# Simulation paramters use physical units
-# smld structures are in units of pixels and frames 
-smld_true, smld_model, smld_noisy = SMLMSim.sim(;
-    ρ=1.0,
-    σ_PSF=0.13, #micron 
-    minphotons=50,
-    ndatasets=10,
-    nframes=1000,
-    framerate=50.0, # 1/s
-    pattern=SMLMSim.Nmer2D(),
-    molecule=SMLMSim.GenericFluor(; q=[0 50; 1e-2 0]), #1/s 
-    camera=SMLMSim.IdealCamera(; xpixels=256, ypixels=256, pixelsize=0.1) #pixelsize is microns
+# make an Nmer dataset
+# Simulation parameters use physical units
+# smld structures are in units of pixels and frames
+smld_true, smld_model, smld_noisy = simulate(;
+ρ=1.0,                # emitters per μm²
+σ_psf=0.13,           # PSF width in μm (130nm)
+minphotons=50,        # minimum photons for detection
+ndatasets=10,         # number of independent datasets
+nframes=1000,         # frames per dataset
+framerate=50.0,       # frames per second
+pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
+molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
+camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
 )
+
 begin
 println("N = $(size(smld_noisy.x, 1))")
 println(findshift2D(smld_noisy, smld_noisy; histbinsize=0.25))
