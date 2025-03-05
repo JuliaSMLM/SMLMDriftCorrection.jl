@@ -90,43 +90,43 @@ function applydrift(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, driftmodel:
     return smld_shifted
 end
 
-function correctdrift!(smld::SMLMData.Emitter2DFit, dm::AbstractIntraInter)
-    for nn = 1:length(smld.x)
-        smld.x[nn] = correctdrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
-        smld.x[nn] = correctdrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
+function correctdrift!(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, dm::AbstractIntraInter)
+    for nn = 1:length(smld.emitters)
+        smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
+        smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
 
-        smld.y[nn] = correctdrift(smld.y[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[2])
-        smld.y[nn] = correctdrift(smld.y[nn], dm.inter[smld.datasetnum[nn]], 2)
+        smld.emitters[nn].y = correctdrift(smld.emitters[nn].y, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[2])
+        smld.emitters[nn].y = correctdrift(smld.emitters[nn].y, dm.inter[smld.emitters[nn].dataset], 2)
     end
 end
 
-function correctdrift!(smld::SMLMData.Emitter3DFit, dm::AbstractIntraInter)
-    for nn = 1:length(smld.x)
-        smld.x[nn] = correctdrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
-        smld.x[nn] = correctdrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
+function correctdrift!(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, dm::AbstractIntraInter)
+    for nn = 1:length(smld.emitters)
+        smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
+        smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
 
-        smld.y[nn] = correctdrift(smld.y[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[2])
-        smld.y[nn] = correctdrift(smld.y[nn], dm.inter[smld.datasetnum[nn]], 2)
+        smld.emitters[nn].y = correctdrift(smld.emitters[nn].y, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[2])
+        smld.emitters[nn].y = correctdrift(smld.emitters[nn].y, dm.inter[smld.emitters[nn].dataset], 2)
 
-        smld.z[nn] = correctdrift(smld.z[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[3])
-        smld.z[nn] = correctdrift(smld.z[nn], dm.inter[smld.datasetnum[nn]], 3)
+        smld.emitters[nn].z = correctdrift(smld.emitters[nn].z, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[3])
+        smld.emitters[nn].z = correctdrift(smld.emitters[nn].z, dm.inter[smld.emitters[nn].dataset], 3)
     end
 end
 
-function correctdrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter)
+function correctdrift(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
     correctdrift!(smld_shifted, driftmodel)
     return smld_shifted
 end
 
-function correctdrift(smld::SMLMData.Emitter3DFit, driftmodel::AbstractIntraInter)
+function correctdrift(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
     correctdrift!(smld_shifted, driftmodel)
     return smld_shifted
 end
 
 #function correctdrift!(smld::SMLMData.Emitter2DFit, shift::Vector{AbstractFloat})
-function correctdrift!(smld::SMLMData.Emitter2DFit, shift::Vector{Float64})
+function correctdrift!(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, shift::Vector{Float64})
     #smld_shifted = deepcopy(smld)
     #println("correctdrift!: shift = $shift")
     smld.x .-= shift[1]
@@ -134,7 +134,7 @@ function correctdrift!(smld::SMLMData.Emitter2DFit, shift::Vector{Float64})
 end
 
 #function correctdrift!(smld::SMLMData.Emitter3DFit, shift::Vector{AbstractFloat})
-function correctdrift!(smld::SMLMData.Emitter3DFit, shift::Vector{Float64})
+function correctdrift!(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, shift::Vector{Float64})
     #smld_shifted = deepcopy(smld)
     #println("correctdrift!: shift = $shift")
     smld.x .-= shift[1]

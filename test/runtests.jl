@@ -26,7 +26,12 @@ using Test
     driftmodel=DC.Polynomial(smld_noisy; degree=2, initialize="random")
     smld_drift=DC.applydrift(smld_noisy,driftmodel)
     smld_DC=DC.correctdrift(smld_drift,driftmodel)
-    rmsd = sqrt(sum((smld_DC.x .- smld_noisy.x).^2 .+ (smld_DC.y .- smld_noisy.y).^2) ./ N)
+
+    smld_noisy_x = [e.x for e in smld_noisy.emitters]
+    smld_noisy_y = [e.y for e in smld_noisy.emitters]
+    smld_DC_x = [e.x for e in smld_DC.emitters]
+    smld_DC_y = [e.y for e in smld_DC.emitters]
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
     smld_DC = DC.driftcorrect(smld_drift)
