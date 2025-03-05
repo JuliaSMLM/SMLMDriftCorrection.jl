@@ -40,27 +40,27 @@ end
 """
 Apply x- and y-drift to the data in the smld structure.
 """
-function applydrift!(smld::SMLMData.Emitter2DFit, dm::AbstractIntraInter)
-    for nn = 1:length(smld.x)
-        smld.x[nn] = applydrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
-        smld.x[nn] = applydrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
+function applydrift!(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, dm::AbstractIntraInter)
+    for nn = 1:length(smld.emitters)
+        smld.emitters[nn].x = applydrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
+        smld.emitters[nn].x = applydrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
 
-        smld.y[nn] = applydrift(smld.y[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[2])
-        smld.y[nn] = applydrift(smld.y[nn], dm.inter[smld.datasetnum[nn]], 2)
+        smld.emitters[nn].y = applydrift(smld.emitters[nn].y, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[2])
+        smld.emitters[nn].y = applydrift(smld.emitters[nn].y, dm.inter[smld.emitters[nn].dataset], 2)
     end
 end
 
 
-function applydrift!(smld::SMLMData.Emitter3DFit, dm::AbstractIntraInter)
-    for nn = 1:length(smld.x)
-        smld.x[nn] = applydrift(smld.x[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[1])
-        smld.x[nn] = applydrift(smld.x[nn], dm.inter[smld.datasetnum[nn]], 1)
+function applydrift!(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, dm::AbstractIntraInter)
+    for nn = 1:length(smld.emitters)
+        smld.emitters[nn].x = applydrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
+        smld.emitters[nn].x = applydrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
 
-        smld.y[nn] = applydrift(smld.y[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[2])
-        smld.y[nn] = applydrift(smld.y[nn], dm.inter[smld.datasetnum[nn]], 2)
+        smld.emitters[nn].y = applydrift(smld.emitters[nn].y, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[2])
+        smld.emitters[nn].y = applydrift(smld.emitters[nn].y, dm.inter[smld.emitters[nn].dataset], 2)
 
-        smld.z[nn] = applydrift(smld.z[nn], smld.framenum[nn], dm.intra[smld.datasetnum[nn]].dm[3])
-        smld.z[nn] = applydrift(smld.z[nn], dm.inter[smld.datasetnum[nn]], 3)
+        smld.emitters[nn].z = applydrift(smld.emitters[nn].z, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[3])
+        smld.emitters[nn].z = applydrift(smld.emitters[nn].z, dm.inter[smld.emitters[nn].dataset], 3)
     end
 end
 
@@ -78,15 +78,15 @@ Applies a drift model to the Single-Molecule Localization Microscopy (SMLM) data
 - `SMLMData.Emitter2DFit`: A new SMLM data structure with the drift corrections applied.
 
 """
-function applydrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter)
+function applydrift(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
-    applydrift!(smld_shifted::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter)
+    applydrift!(smld_shifted::BasicSMLD{Float64, Emitter2DFit{Float64}}, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
-function applydrift(smld::SMLMData.Emitter3DFit, driftmodel::AbstractIntraInter)
+function applydrift(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
-    applydrift!(smld_shifted::SMLMData.Emitter3DFit, driftmodel::AbstractIntraInter)
+    applydrift!(smld_shifted::BasicSMLD{Float64, Emitter3DFit{Float64}}, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
