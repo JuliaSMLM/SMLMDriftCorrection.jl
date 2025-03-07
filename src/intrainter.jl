@@ -155,27 +155,55 @@ Find and correct intra-detaset drift.
 """
 function findintra!(intra::AbstractIntraDrift,
     cost_fun::String,
-    smld::SMLMData.SMLD,
+    smld::BasicSMLD,
     dataset::Int,
     d_cutoff::AbstractFloat,
     maxn::Int)
 
-    idx = smld.datasetnum .== dataset
+#   idx = smld.datasetnum .== dataset
+    idx = [e.dataset for e in smld.emitters] .== dataset
     if intra.ndims == 2
-        coords = cat(dims = 2, smld.x[idx], smld.y[idx])
-        stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
+        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
+                               [e.y for e in smld.emitters[idx]])
+        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
+                               [e.σ_y for e in smld.emitters[idx]])
     elseif intra.ndims == 3
-        coords = cat(dims = 2, smld.x[idx], smld.y[idx], smld.z[idx])
-        stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx], smld.σ_z[idx])
+        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
+                               [e.y for e in smld.emitters[idx]],
+                               [e.z for e in smld.emitters[idx]])
+        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
+                               [e.σ_y for e in smld.emitters[idx]],
+                               [e.σ_z for e in smld.emitters[idx]])
     end
     #coords = cat(dims = 2, smld.x[idx], smld.y[idx])
     #stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
-    framenum = smld.framenum[idx]
+    framenum = [e.frame for e in smld.emitters[idx]]
     data = transpose(coords)
     se = transpose(stderr)
 
     rscale = 0.01
-    nframes = smld.nframes
+    if intra.ndims == 2
+        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
+                               [e.y for e in smld.emitters[idx]])
+        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
+                               [e.σ_y for e in smld.emitters[idx]])
+    elseif intra.ndims == 3
+        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
+                               [e.y for e in smld.emitters[idx]],
+                               [e.z for e in smld.emitters[idx]])
+        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
+                               [e.σ_y for e in smld.emitters[idx]],
+                               [e.σ_z for e in smld.emitters[idx]])
+    end
+    #coords = cat(dims = 2, smld.x[idx], smld.y[idx])
+    #stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
+#   framenum = smld.framenum[idx]
+    framenum = [e.frame for e in smld.emitters[idx]]
+    data = transpose(coords)
+    se = transpose(stderr)
+
+    rscale = 0.01
+    nframes = smld.n_frames
     for jj = 1:intra.ndims
         degree = intra.dm[jj].degree
         intra.dm[jj].coefficients = rscale * randn() ./ (nframes .^ (1:degree))
@@ -212,7 +240,7 @@ Find and correct inter-detaset drift.
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
-    smld_uncorrected::SMLMData.Emitter2DFit,
+    smld_uncorrected::BasicSMLD{Float64, Emitter2DFit{Float64}},
     dataset1::Int,
     dataset2::Vector{Int},
     d_cutoff::AbstractFloat,
@@ -221,22 +249,27 @@ function findinter!(dm::AbstractIntraInter,
     )
 
     # get uncorrected coords for dataset 1 
-    idx1 = smld_uncorrected.datasetnum .== dataset1
-    coords1 = cat(dims = 2, smld_uncorrected.x[idx1], smld_uncorrected.y[idx1])
+#   idx1 = smld_uncorrected.datasetnum .== dataset1
+    idx1 = [e.dataset for e in smld_uncorrected.emitters] .== dataset1
+    coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
+                            [e.y for e in smld_uncorrected.emitters[idx1]])
     data = transpose(coords1)
-    stderr1 = cat(dims = 2, smld_uncorrected.σ_x[idx1], smld_uncorrected.σ_y[idx1])
+    stderr1 = cat(dims = 2, [e.σ_x for e in smld_uncorrected.emitters[idx1]],
+                            [e.σ_y for e in smld_uncorrected.emitters[idx1]])
     se = transpose(stderr1)
 
     # correct everything
-    smld = correctdrift(smld_uncorrected,dm)
+    smld = correctdrift(smld_uncorrected, dm)
 
     # get corrected coords for reference datasets
     # (in other words, make a sum image)
-    idx2 = zeros(Bool,length(smld.datasetnum))
+    idx2 = zeros(Bool, length(smld.emitters))
     for nn=1:length(dataset2)
-        idx2 = idx2.|(smld.datasetnum .== dataset2[nn])
+#       idx2 = idx2 .| (smld.emitters.dataset .== dataset2[nn])
+        idx2 = idx2 .| ([e.dataset for e in smld.emitters] .== dataset2[nn])
     end   
-    coords2 = cat(dims = 2, smld.x[idx2], smld.y[idx2])
+    coords2 = cat(dims = 2, [e.x for e in smld.emitters[idx2]],
+                            [e.y for e in smld.emitters[idx2]])
     data_ref = transpose(coords2)
 
     if histbinsize > 0.0
@@ -248,8 +281,12 @@ function findinter!(dm::AbstractIntraInter,
         #shift = .-shift # correct sign of shift
         #println("shift = $shift")
         correctdrift!(smld1, shift)
-        smld.x[idx1] = smld1.x
-        smld.y[idx1] = smld1.y
+#       smld.x[idx1] = smld1.x
+#       smld.y[idx1] = smld1.y
+        for nn = 1:length(idx1)
+	    smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
+	    smld.emitters[idx1[nn]].y = smld1.emitters[nn].y
+	end
         if cost_fun == "None"
             theta2inter!(dm.inter[dataset1], shift)
             return 0.0
@@ -294,13 +331,13 @@ Find and correct inter-detaset drift.
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
-    smld_uncorrected::SMLMData.Emitter2DFit,
+    smld_uncorrected::BasicSMLD,
     dataset1::Int,
     d_cutoff::AbstractFloat,
     maxn::Int,
     histbinsize::AbstractFloat)
-    refdatasets=Int.(1:smld_uncorrected.ndatasets)
-    deleteat!(refdatasets,dataset1)
+    refdatasets = Int.(1:smld_uncorrected.n_datasets)
+    deleteat!(refdatasets, dataset1)
     return findinter!(dm, cost_fun,  smld_uncorrected, dataset1, refdatasets,
                       d_cutoff, maxn, histbinsize)   
 end
@@ -308,9 +345,10 @@ end
 """
 Experimental.
 """
-function globalcost(smld::SMLMData.Emitter2DFit; k::Int=4, d_cutoff=1.0)
+function globalcost(smld::BasicSMLD; k::Int=4, d_cutoff=1.0)
     
-    coords1 = cat(dims = 2, smld.x, smld.y)
+    coords1 = cat(dims = 2, [e.x for e in smld.emitters[idx]],
+                            [e.y for e in smld.emitters[idx]])
     data = transpose(coords1)
     
     kdtree = KDTree(data; leafsize = 10)

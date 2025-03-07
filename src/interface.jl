@@ -21,7 +21,7 @@ Main interface for drift correction (DC).  This algorithm consists of an
 # Output
 - smd_found:  structure containing drift corrected (X, Y) coordinates (pixel)
 """
-function driftcorrect(smld::SMLMData.AbstractEmitter;
+function driftcorrect(smld::BasicSMLD;
     pixelsize::AbstractFloat = 0.1,
     intramodel::String = "Polynomial",
     cost_fun::String = "Kdtree",
@@ -61,7 +61,7 @@ function driftcorrect(smld::SMLMData.AbstractEmitter;
     if verbose>0
         @info("SMLMDriftCorrection: starting intra")
     end
-    Threads.@threads for nn = 1:smld.ndatasets
+    Threads.@threads for nn = 1:smld.n_datasets
         findintra!(driftmodel.intra[nn], cost_fun_intra, smld, nn, d_cutoff, maxn)
     end
 
@@ -70,7 +70,7 @@ function driftcorrect(smld::SMLMData.AbstractEmitter;
         @info("SMLMDriftCorrection: starting inter to dataset 1")
     end
     #Threads.@threads
-    for nn = 2:smld.ndatasets
+    for nn = 2:smld.n_datasets
         refdatasets = [1]
         findinter!(driftmodel, cost_fun_inter, smld, nn, refdatasets, d_cutoff, maxn,
                    histbinsize)
@@ -80,7 +80,7 @@ function driftcorrect(smld::SMLMData.AbstractEmitter;
     #     @info("SMLMDriftCorrection: starting inter to all others")
     # end
     # # Correct each to all others
-    # for ii = 1:2, nn = 1:smld.ndatasets
+    # for ii = 1:2, nn = 1:smld.n_datasets
     #     if verbose>1
     #         println("SMLMDriftCorrection: round $ii dataset $nn")
     #     end        
@@ -90,7 +90,7 @@ function driftcorrect(smld::SMLMData.AbstractEmitter;
     if verbose>0
         @info("SMLMDriftCorrection: starting inter to earlier")
     end
-    for ii = 2:smld.ndatasets
+    for ii = 2:smld.n_datasets
         if verbose>1
             println("SMLMDriftCorrection: dataset $ii")
         end        
