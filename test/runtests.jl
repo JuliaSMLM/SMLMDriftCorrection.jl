@@ -41,7 +41,7 @@ using Test
     print("rmsd (K-d tree) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 1.0)
 
-    smld_DC = DC.driftcorrect(smld_drift; histbinsize=0.25)
+    smld_DC = DC.driftcorrect(smld_drift; histbinsize=0.1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
@@ -61,20 +61,16 @@ using Test
     )
 
     println("N = $(size(smld_noisy_x, 1))")
-    drift = DC.findshift2D(smld_noisy, smld_noisy; histbinsize=0.25)
+    drift = DC.findshift2D(smld_noisy, smld_noisy; histbinsize=0.1)
     @test all(drift .≈ [0.0, 0.0])
 
     smldn = deepcopy(smld_noisy)
-#   smldn.x .+= 4.3
-#   smldn.y .+= -2.8
-#   smldn.x .= max.(0, min.(smldn.x, 256))
-#   smldn.y .= max.(0, min.(smldn.y, 256))
     for nn = 1:length(smldn.emitters)
         smldn.emitters[nn].x += 4.3
         smldn.emitters[nn].y += -2.8
-        smldn.emitters[nn].x = max.(0, min.(smldn.emitters[nn].x, 256))
-        smldn.emitters[nn].y = max.(0, min.(smldn.emitters[nn].y, 256))
+        smldn.emitters[nn].x = max.(0, min.(smldn.emitters[nn].x, 25.6))
+        smldn.emitters[nn].y = max.(0, min.(smldn.emitters[nn].y, 25.6))
     end
-    drift = DC.findshift2D(smld_noisy, smldn; histbinsize=0.25)
+    drift = DC.findshift2D(smld_noisy, smldn; histbinsize=0.1)
     @test all(drift .≈ [-4.25, 2.75])
 end

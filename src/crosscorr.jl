@@ -168,20 +168,36 @@ histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates.
 """
 function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
-) where {T<:SMLMData.Emitter2DFit}
+) where {T<:BasicSMLD{Float64, Emitter2DFit{Float64}}}
     # Compute the histogram images assume the same size for both images).
-    if smld1.datasize[1] != smld2.datasize[1] &&
-       smld1.datasize[2] != smld2.datasize[2]
+    if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
+       smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
+       smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
+       smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
         error("Images must have the same size.")
     end
-    if smld1.datasize[1] == 0.0 || smld1.datasize[2] == 0.0
-        println("findshift2D: smld.datasize(s) are zero.")
-        ROI = [-1.0]
-    else
-        ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2]])
+#   if smld1.datasize[1] == 0.0 || smld1.datasize[2] == 0.0
+#       println("findshift2D: smld.datasize(s) are zero.")
+#       ROI = [-1.0]
+#   else
+#       ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2]])
+        ROI = float([smld1.camera.pixel_edges_x[1],
+	             smld1.camera.pixel_edges_x[end],
+	             smld1.camera.pixel_edges_y[1],
+	             smld1.camera.pixel_edges_y[end]])
+#   end
+    imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
+    imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
+    if imsz_x % histbinsize != 0.0 || imsz_y % histbinsize != 0.0
+        println("findshift2D: histbinsize does not divide evenly
+	     into the image size: ($imsz_x, $imsz_y) % $histbinsize")
     end
-    im1 = histimage2D(smld1.x, smld1.y; ROI=ROI, histbinsize=histbinsize)
-    im2 = histimage2D(smld2.x, smld2.y; ROI=ROI, histbinsize=histbinsize)
+    smld1_x = [e.x for e in smld1.emitters]
+    smld1_y = [e.y for e in smld1.emitters]
+    smld2_x = [e.x for e in smld2.emitters]
+    smld2_y = [e.y for e in smld2.emitters]
+    im1 = histimage2D(smld1_x, smld1_y; ROI=ROI, histbinsize=histbinsize)
+    im2 = histimage2D(smld2_x, smld2_y; ROI=ROI, histbinsize=histbinsize)
     # Calculate the FFT center zero frequency location index (midpoint)
     # of the histogram images, which are assumed to have the same size.
     if mod(size(im1, 1), 2) == 0
@@ -225,25 +241,47 @@ directions are calculated in the same units.
 """
 function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     pixelsizeZunit::AbstractFloat=0.100
-) where {T<:SMLMData.Emitter3DFit}
+) where {T<:BasicSMLD{Float64, Emitter3DFit{Float64}}}
     # Compute the histogram images assume the same size for both images).
-    if smld1.datasize[1] != smld2.datasize[1] &&
-       smld1.datasize[2] != smld2.datasize[2] &&
-       smld1.datasize[3] != smld2.datasize[3]
+    if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
+       smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
+       smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
+       smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end] &&
+       smld1.camera.pixel_edges_z[1]   != smld2.camera.pixel_edges_z[1]   &&
+       smld1.camera.pixel_edges_z[end] != smld2.camera.pixel_edges_z[end]
         error("Images must have the same size.")
     end
-    if smld1.datasize[1] == 0.0 || smld1.datasize[2] == 0.0 ||
-       smld1.datasize[3] == 0.0
-        println("findshift3D: smld.datasize(s) are zero.")
-        ROI = [-1.0]
-    else
-        ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
-            0, smld1.datasize[3] / pixelsizeZunit])
+    ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
+        0, smld1.datasize[3] / pixelsizeZunit])
+    ROI = float([smld1.camera.pixel_edges_x[1],
+                 smld1.camera.pixel_edges_x[end],
+                 smld1.camera.pixel_edges_y[1],
+                 smld1.camera.pixel_edges_y[end],
+                 smld1.camera.pixel_edges_z[1],
+                 smld1.camera.pixel_edges_z[end]])
+#   im1 = histimage3D(smld1.x, smld1.y, smld1.z ./ pixelsizeZunit;
+#       ROI=ROI, histbinsize=histbinsize)
+#   im2 = histimage3D(smld2.x, smld2.y, smld2.z ./ pixelsizeZunit;
+#       ROI=ROI, histbinsize=histbinsize)
+    imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
+    imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
+    imsz_z = smld1.camera.pixel_edges_z[end] - smld1.camera.pixel_edges_z[1]
+    if imsz_x % histbinsize != 0.0 ||
+       imsz_y % histbinsize != 0.0 ||
+       imsz_z % histbinsize != 0.0
+        println("findshift2D: histbinsize does not divide evenly
+	     into the image size: ($imsz_x, $imsz_y, $imsz_z) % $histbinsize")
     end
-    im1 = histimage3D(smld1.x, smld1.y, smld1.z ./ pixelsizeZunit;
-        ROI=ROI, histbinsize=histbinsize)
-    im2 = histimage3D(smld2.x, smld2.y, smld2.z ./ pixelsizeZunit;
-        ROI=ROI, histbinsize=histbinsize)
+    smld1_x = [e.x for e in smld1.emitters]
+    smld1_y = [e.y for e in smld1.emitters]
+    smld1_z = [e.z for e in smld1.emitters]
+    smld2_x = [e.x for e in smld2.emitters]
+    smld2_y = [e.y for e in smld2.emitters]
+    smld2_z = [e.z for e in smld2.emitters]
+    im1 = histimage2D(smld1_x, smld1_y, smld1_z;
+                      ROI=ROI, histbinsize=histbinsize)
+    im2 = histimage2D(smld2_x, smld2_y, smld2_z;
+                      ROI=ROI, histbinsize=histbinsize)
     # Calculate the FFT center zero frequency location index (midpoint)
     # of the histogram images, which are assumed to have the same size.
     if mod(size(im1, 1), 2) == 0
@@ -271,8 +309,8 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
     # Convert the shift to an (x, y, z) coordinate.
     shift = histbinsize .* shift
-    # Convert the z-shift back to original units.
-    shift[3] = shift[3] .* pixelsizeZunit
+#   # Convert the z-shift back to original units.
+#   shift[3] = shift[3] .* pixelsizeZunit
     # Return the shift.
     return shift
 end

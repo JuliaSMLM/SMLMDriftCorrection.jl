@@ -129,17 +129,26 @@ end
 function correctdrift!(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, shift::Vector{Float64})
     #smld_shifted = deepcopy(smld)
     #println("correctdrift!: shift = $shift")
-    smld.x .-= shift[1]
-    smld.y .-= shift[2]
+    #smld.x .-= shift[1]
+    #smld.y .-= shift[2]
+    for nn = 1 : length(smld.emitters)
+        smld.emitters[nn].x -= shift[1]
+        smld.emitters[nn].y -= shift[2]
+    end
 end
 
 #function correctdrift!(smld::SMLMData.Emitter3DFit, shift::Vector{AbstractFloat})
 function correctdrift!(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, shift::Vector{Float64})
     #smld_shifted = deepcopy(smld)
     #println("correctdrift!: shift = $shift")
-    smld.x .-= shift[1]
-    smld.y .-= shift[2]
-    smld.z .-= shift[3]
+    #smld.x .-= shift[1]
+    #smld.y .-= shift[2]
+    #smld.z .-= shift[3]
+    for nn = 1 : length(smld.emitters)
+        smld.emitters[nn].x -= shift[1]
+        smld.emitters[nn].y -= shift[2]
+        smld.emitters[nn].z -= shift[3]
+    end
 end
 
 """
@@ -275,8 +284,10 @@ function findinter!(dm::AbstractIntraInter,
     if histbinsize > 0.0
         # Apply an optional cross-correlation correction.
         #println("=== dataset1 = $dataset1, dataset2 = $dataset2")
-        smld1 = SMLMData.isolatesmld(smld, idx1)
-        smld2 = SMLMData.isolatesmld(smld, idx2)
+#       smld1 = SMLMData.isolatesmld(smld, idx1)
+#       smld2 = SMLMData.isolatesmld(smld, idx2)
+        smld1 = filter_emitters(smld, idx1)
+        smld2 = filter_emitters(smld, idx2)
         shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
         #shift = .-shift # correct sign of shift
         #println("shift = $shift")

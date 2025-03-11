@@ -6,15 +6,15 @@ using SMLMSim
 # Simulation parameters use physical units
 # smld structures are in units of pixels and frames
 smld_true, smld_model, smld_noisy = simulate(;
-ρ=1.0,                # emitters per μm²
-σ_psf=0.13,           # PSF width in μm (130nm)
-minphotons=50,        # minimum photons for detection
-ndatasets=10,         # number of independent datasets
-nframes=1000,         # frames per dataset
-framerate=50.0,       # frames per second
-pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
-molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
-camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
+    ρ=1.0,                # emitters per μm²
+    σ_psf=0.13,           # PSF width in μm (130nm)
+    minphotons=50,        # minimum photons for detection
+    ndatasets=10,         # number of independent datasets
+    nframes=1000,         # frames per dataset
+    framerate=50.0,       # frames per second
+    pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
+    molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
+    camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
 )
 
 ## Set up drift model

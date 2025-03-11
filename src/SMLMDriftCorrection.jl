@@ -1,14 +1,15 @@
 module SMLMDriftCorrection
 
 using SMLMData
-using Optim
+using FourierTools
 using NearestNeighbors
-using Zygote
+using Optim
+#using Zygote
 using Statistics
 using StatsFuns
-using FourierTools
 
 include("typedefs.jl")
+include("filter.jl")
 include("intrainter.jl")
 include("polynomial.jl")
 include("interface.jl")
