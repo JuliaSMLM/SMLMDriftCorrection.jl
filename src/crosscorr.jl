@@ -1,6 +1,5 @@
-using Revise
-using SMLMData
 using FourierTools
+using SMLMData
 
 """
 Produce a histogram image from the localization coordinates x and y,
@@ -246,30 +245,28 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
        smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
        smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
-       smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end] &&
-       smld1.camera.pixel_edges_z[1]   != smld2.camera.pixel_edges_z[1]   &&
-       smld1.camera.pixel_edges_z[end] != smld2.camera.pixel_edges_z[end]
+       smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
         error("Images must have the same size.")
     end
-    ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
-        0, smld1.datasize[3] / pixelsizeZunit])
+#   ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
+#       0, smld1.datasize[3] / pixelsizeZunit])
     ROI = float([smld1.camera.pixel_edges_x[1],
                  smld1.camera.pixel_edges_x[end],
                  smld1.camera.pixel_edges_y[1],
                  smld1.camera.pixel_edges_y[end],
-                 smld1.camera.pixel_edges_z[1],
-                 smld1.camera.pixel_edges_z[end]])
+		 minimum(smld1.emitters.z),
+		 maximum(smld1.emitters.z)])
+#                smld1.camera.pixel_edges_z[1],
+#                smld1.camera.pixel_edges_z[end]])
 #   im1 = histimage3D(smld1.x, smld1.y, smld1.z ./ pixelsizeZunit;
 #       ROI=ROI, histbinsize=histbinsize)
 #   im2 = histimage3D(smld2.x, smld2.y, smld2.z ./ pixelsizeZunit;
 #       ROI=ROI, histbinsize=histbinsize)
     imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
     imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
-    imsz_z = smld1.camera.pixel_edges_z[end] - smld1.camera.pixel_edges_z[1]
-    if imsz_x % histbinsize != 0.0 ||
-       imsz_y % histbinsize != 0.0 ||
-       imsz_z % histbinsize != 0.0
-        println("findshift2D: histbinsize does not divide evenly
+    imsz_z = maximum(smld1.emitters.z) - minimum(smld1.emitters.z)
+    if imsz_x % histbinsize != 0.0 || imsz_y % histbinsize != 0.0 
+        println("findshift3D: histbinsize does not divide evenly
 	     into the image size: ($imsz_x, $imsz_y, $imsz_z) % $histbinsize")
     end
     smld1_x = [e.x for e in smld1.emitters]

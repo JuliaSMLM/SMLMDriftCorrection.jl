@@ -1,12 +1,14 @@
 module SMLMDriftCorrection
 
-using SMLMData
+using Revise
+#using Debugger
 using FourierTools
 using NearestNeighbors
 using Optim
-#using Zygote
-using Statistics
+using SMLMData
 using StatsFuns
+using Statistics
+#using Zygote
 
 include("typedefs.jl")
 include("filter.jl")

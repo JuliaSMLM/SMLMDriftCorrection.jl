@@ -260,6 +260,7 @@ function findinter!(dm::AbstractIntraInter,
     # get uncorrected coords for dataset 1 
 #   idx1 = smld_uncorrected.datasetnum .== dataset1
     idx1 = [e.dataset for e in smld_uncorrected.emitters] .== dataset1
+    idx1 = findall(idx1)
     coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
                             [e.y for e in smld_uncorrected.emitters[idx1]])
     data = transpose(coords1)
@@ -294,6 +295,7 @@ function findinter!(dm::AbstractIntraInter,
         correctdrift!(smld1, shift)
 #       smld.x[idx1] = smld1.x
 #       smld.y[idx1] = smld1.y
+println(typeof(idx1))
         for nn = 1:length(idx1)
 	    smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
 	    smld.emitters[idx1[nn]].y = smld1.emitters[nn].y
