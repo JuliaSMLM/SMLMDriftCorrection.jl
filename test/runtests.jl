@@ -111,7 +111,7 @@ using Test
     @test isapprox(rmsd, 0.0; atol = 1.0)
 
     # --- Test driftcorrect (Entropy) ---
-#   smld_DC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100, verbose=1)
+    smld_DC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100, verbose=1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
