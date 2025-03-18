@@ -295,7 +295,6 @@ function findinter!(dm::AbstractIntraInter,
         correctdrift!(smld1, shift)
 #       smld.x[idx1] = smld1.x
 #       smld.y[idx1] = smld1.y
-println(typeof(idx1))
         for nn = 1:length(idx1)
 	    smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
 	    smld.emitters[idx1[nn]].y = smld1.emitters[nn].y

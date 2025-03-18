@@ -250,12 +250,13 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     end
 #   ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
 #       0, smld1.datasize[3] / pixelsizeZunit])
+    smld1_z = [e.z for e in smld1.emitters]
     ROI = float([smld1.camera.pixel_edges_x[1],
                  smld1.camera.pixel_edges_x[end],
                  smld1.camera.pixel_edges_y[1],
                  smld1.camera.pixel_edges_y[end],
-		 minimum(smld1.emitters.z),
-		 maximum(smld1.emitters.z)])
+		 round(minimum(smld1_z)),
+		 round(maximum(smld1_z))])
 #                smld1.camera.pixel_edges_z[1],
 #                smld1.camera.pixel_edges_z[end]])
 #   im1 = histimage3D(smld1.x, smld1.y, smld1.z ./ pixelsizeZunit;
@@ -264,7 +265,7 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
 #       ROI=ROI, histbinsize=histbinsize)
     imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
     imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
-    imsz_z = maximum(smld1.emitters.z) - minimum(smld1.emitters.z)
+    imsz_z = maximum(smld1_z) - minimum(smld1_z)
     if imsz_x % histbinsize != 0.0 || imsz_y % histbinsize != 0.0 
         println("findshift3D: histbinsize does not divide evenly
 	     into the image size: ($imsz_x, $imsz_y, $imsz_z) % $histbinsize")
@@ -275,9 +276,9 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     smld2_x = [e.x for e in smld2.emitters]
     smld2_y = [e.y for e in smld2.emitters]
     smld2_z = [e.z for e in smld2.emitters]
-    im1 = histimage2D(smld1_x, smld1_y, smld1_z;
+    im1 = histimage3D(smld1_x, smld1_y, smld1_z;
                       ROI=ROI, histbinsize=histbinsize)
-    im2 = histimage2D(smld2_x, smld2_y, smld2_z;
+    im2 = histimage3D(smld2_x, smld2_y, smld2_z;
                       ROI=ROI, histbinsize=histbinsize)
     # Calculate the FFT center zero frequency location index (midpoint)
     # of the histogram images, which are assumed to have the same size.

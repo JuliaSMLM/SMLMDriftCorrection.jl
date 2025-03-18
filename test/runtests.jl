@@ -23,21 +23,34 @@ using Test
 
     # make a 3D Nmer dataset
     smld_true3, smld_model3, smld_noisy3 = simulate(;
-        ρ=1.0,                # emitters per μm²
+        ρ=0.1,                # emitters per μm²
         σ_psf=0.13,           # PSF width in μm (130nm)
         minphotons=50,        # minimum photons for detection
         ndatasets=10,         # number of independent datasets
-        nframes=1000,         # frames per dataset
+        nframes=100,          # frames per dataset
         framerate=50.0,       # frames per second
         pattern=Nmer3D(n=6, d=0.2),  # hexamer with 200nm diameter
         molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
         camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
     )
 
+    # --- entropy ---
+    x = [e.x for e in smld_noisy.emitters]
+    y = [e.y for e in smld_noisy.emitters]
+    σ_x = [e.σ_x for e in smld_noisy.emitters]
+    σ_y = [e.σ_y for e in smld_noisy.emitters]
+    N = length(smld_noisy.emitters)
+    # ub_entropy is an upper bound on the entropy based on NN
+    ub_ent = DC.ub_entropy(x, y, σ_x, σ_y)
+    # entropy_HD is the entropy summed over all/NN localizations
+    ent_HD = DC.entropy_HD(σ_x, σ_y)
+    println("N = $N, ub_entropy = $ub_ent, entropy_HD = $ent_HD")
+    @test ent_HD < ub_ent
+
     # --- findshift2D ---
     # findshift2D identity test
     println("findshift2D identity: N = $(length(smld_noisy.emitters))")
-    smld_shift = DC.findshift2D(smld_noisy, smld_noisy; histbinsize=0.25)
+    smld_shift = DC.findshift2D(smld_noisy, smld_noisy; histbinsize=0.10)
     @test isapprox(smld_shift, [0.0, 0.0])
 
     # findshift2D shift test
@@ -50,17 +63,17 @@ using Test
         smldn.emitters[nn].x = max.(0, min.(smldn.emitters[nn].x, 256))
         smldn.emitters[nn].y = max.(0, min.(smldn.emitters[nn].y, 256))
     end
-    smldn_shift = DC.findshift2D(smld_noisy, smldn; histbinsize=0.25)
+    smldn_shift = DC.findshift2D(smld_noisy, smldn; histbinsize=0.10)
     @test isapprox(smldn_shift, shift_imposed, atol = 0.10)
 
     # --- findshift3D ---
     # findshift3D identity test
     println("findshift3D identity: N3 = $(length(smld_noisy3.emitters))")
-    smld_shift3 = DC.findshift3D(smld_noisy3, smld_noisy3; histbinsize=0.25)
+    smld_shift3 = DC.findshift3D(smld_noisy3, smld_noisy3; histbinsize=0.10)
     @test isapprox(smld_shift3, [0.0, 0.0, 0.0])
 
     # findshift3D shift test
-    println("findshift3D ishift N3 = $(length(smld_noisy3.emitters))")
+    println("findshift3D shift N3 = $(length(smld_noisy3.emitters))")
     shift_imposed3 = [-4.3, 2.8, 0.2]
     smldn3 = deepcopy(smld_noisy3)
     for nn = 1:length(smldn3.emitters)
@@ -71,8 +84,8 @@ using Test
         smldn3.emitters[nn].y = max.(0, min.(smldn3.emitters[nn].y, 256))
         smldn3.emitters[nn].z = max.(0, min.(smldn3.emitters[nn].z, 256))
     end
-#   smldn_shift3 = DC.findshift3D(smld_noisy3, smldn3; histbinsize=0.25)
-#   @test isapprox(smldn3_shift, shift_imposed3, atol = 0.10)
+    smldn_shift3 = DC.findshift3D(smld_noisy3, smldn3; histbinsize=0.10)
+    @test isapprox(smldn_shift3, shift_imposed3, atol = 0.10)
     
     # --- Test correctdrift ---
     ## Set up drift model
@@ -86,6 +99,7 @@ using Test
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
+    print("rmsd [correctdrift] = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
     # --- Test driftcorrect (K-d tree) ---
@@ -100,40 +114,15 @@ using Test
 #   smld_DC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100, verbose=1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
-#   rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd (Entropy) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 1.0)
 
+    # --- Test driftcorrect (histbinsize > 0) ---
     smld_DC = DC.driftcorrect(smld_drift; histbinsize=0.1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd (PairCorr) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 1.0)
-
-    smld_true, smld_model, smld_noisy = SMLMSim.simulate(;
-        ρ = 1.0,
-        σ_psf = 0.13, #micron 
-        minphotons = 50,
-        ndatasets = 10,
-        nframes = 1000,
-        framerate = 50.0, # 1/s
-        pattern = SMLMSim.Nmer2D(),
-        molecule = SMLMSim.GenericFluor(; q = [0 50; 1e-2 0]), #1/s 
-        camera = SMLMSim.IdealCamera(1:256, 1:256, 0.1) #pixelsize is microns
-    )
-
-    println("N = $(size(smld_noisy_x, 1))")
-    drift = DC.findshift2D(smld_noisy, smld_noisy; histbinsize=0.1)
-    @test all(drift .≈ [0.0, 0.0])
-
-    smldn = deepcopy(smld_noisy)
-    for nn = 1:length(smldn.emitters)
-        smldn.emitters[nn].x += 4.3
-        smldn.emitters[nn].y += -2.8
-        smldn.emitters[nn].x = max.(0, min.(smldn.emitters[nn].x, 25.6))
-        smldn.emitters[nn].y = max.(0, min.(smldn.emitters[nn].y, 25.6))
-    end
-    drift = DC.findshift2D(smld_noisy, smldn; histbinsize=0.1)
-    @test all(drift .≈ [-4.25, 2.75])
 end
