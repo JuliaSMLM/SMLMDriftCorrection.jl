@@ -1,34 +1,33 @@
 """
 Main interface for drift correction (DC).  This algorithm consists of an
-    intra-dataset portion and an inter-dataset portion.
+    intra-dataset portion and an inter-dataset portion.  The drift corrected
+    coordinates are returned as output.  All distance units are in μm.
 
 # Fields
-- smld:       structure containing (X, Y) coordinates (pixel), and possibly
+- smld:       structure containing (X, Y) coordinates (μm), and possibly
               Z coordinates (μm)
-- pixelsize:  pixel size (μm) needed for z unit conversion = 0.1
 - intramodel: model for intra-dataset DC:
               {"Polynomial", "LegendrePoly"} = "Polynomial"
 - cost_fun:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
 - cost_fun_intra: intra cost function override: ""
 - cost_fun_inter: inter cost function override: ""
 - degree:     degree for polynomial intra-dataset DC = 2
-- d_cutoff:   distance cutoff (pixel) = 0.1
-- maxn:       maximum number of neighbors considered = 200
-
+- d_cutoff:   distance cutoff (μm) = 0.01 (Kdtree cost function)
+- maxn:       maximum number of neighbors considered = 200 (Entropy cost
+              function)
 - histbinsize: histogram bin size for inter-datset cross-correlation
-               correction (pixel) = -1.0 [< 0 means no correction]
+               correction (μm) = -1.0 [< 0 means no correction]
 - verbose:    flag for more output = 0
 # Output
-- smd_found:  structure containing drift corrected (X, Y) coordinates (pixel)
+- smd_found:  structure containing drift corrected (X, Y) coordinates (μm)
 """
 function driftcorrect(smld::BasicSMLD;
-    pixelsize::AbstractFloat = 0.1,
     intramodel::String = "Polynomial",
     cost_fun::String = "Kdtree",
     cost_fun_intra::String = "",
     cost_fun_inter::String = "",
     degree::Int = 2,
-    d_cutoff::AbstractFloat = 0.1,
+    d_cutoff::AbstractFloat = 0.01,
     maxn::Int = 200,
     histbinsize::AbstractFloat = -1.0,
     verbose::Int = 0)
@@ -41,16 +40,6 @@ function driftcorrect(smld::BasicSMLD;
         cost_fun_inter = cost_fun
     end
 
-#   ndims = 2
-#   if :z in fieldnames(typeof(smld))
-#       ndims = 3
-#       # Convert Z coordinates/σ to pixel units (and back to μm
-#       # at the end of this function), so that drift correction
-#       # is done entirely in the same units for all coordinates.
-#       smld.z = smld.z ./ pixelsize
-#       smld.σ_z = smld.σ_z ./ pixelsize
-#   end
-
     if intramodel == "Polynomial"
         driftmodel = Polynomial(smld; degree = degree)
     elseif intramodel == "LegendrePoly"
@@ -62,7 +51,8 @@ function driftcorrect(smld::BasicSMLD;
         @info("SMLMDriftCorrection: starting intra")
     end
     Threads.@threads for nn = 1:smld.n_datasets
-        findintra!(driftmodel.intra[nn], cost_fun_intra, smld, nn, d_cutoff, maxn)
+        findintra!(driftmodel.intra[nn], cost_fun_intra, smld, nn, d_cutoff,
+	           maxn)
     end
 
     # Inter-dataset: Correct them all to datatset 1
@@ -72,8 +62,8 @@ function driftcorrect(smld::BasicSMLD;
     #Threads.@threads
     for nn = 2:smld.n_datasets
         refdatasets = [1]
-        findinter!(driftmodel, cost_fun_inter, smld, nn, refdatasets, d_cutoff, maxn,
-                   histbinsize)
+        findinter!(driftmodel, cost_fun_inter, smld, nn, refdatasets,
+	           d_cutoff, maxn, histbinsize)
     end
 
     # if verbose>0
@@ -99,11 +89,6 @@ function driftcorrect(smld::BasicSMLD;
     end
     
     smd_found = correctdrift(smld, driftmodel)
-#   # Convert Z coordinates/σ if present back to μm.
-#   if ndims == 3
-#       smd_found.z = smd_found.z .* pixelsize
-#       smd_found.σ_z = smd_found.σ_z .* pixelsize
-#   end
 
     return smd_found
 end

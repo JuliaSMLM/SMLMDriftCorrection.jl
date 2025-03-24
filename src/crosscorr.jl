@@ -2,7 +2,7 @@ using FourierTools
 using SMLMData
 
 """
-Produce a histogram image from the localization coordinates x and y,
+Produce a histogram image from the localization coordinates x and y.
 x and y are in arbitrary units.
 ROI is [x_min, x_max, y_min, y_max] of the Region Of Interest in the
 same units as x and y.  If not provided, these values are estimated
@@ -228,18 +228,11 @@ function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
 end
 
 """
-Perform a cross-correlation between images representing
-localizations in two SMLD structures and compute the shift
-between the two original images.
+Perform a cross-correlation between images representing localizations in two
+SMLD structures and compute the shift between the two original images.
 histbinsize is the size of the bins in the histogram image in the
-same units as the localization coordinates.
-pixelsizeZunit is the conversion factor from (x, y) coordinates (typically,
-pixels) to the units of z coordinates (typically, um).  This is needed in
-3D to convert z into the same units as x and y so that the shifts in all
-directions are calculated in the same units.
 """
 function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
-    pixelsizeZunit::AbstractFloat=0.100
 ) where {T<:BasicSMLD{Float64, Emitter3DFit{Float64}}}
     # Compute the histogram images assume the same size for both images).
     if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
@@ -248,8 +241,6 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
        smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
         error("Images must have the same size.")
     end
-#   ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2],
-#       0, smld1.datasize[3] / pixelsizeZunit])
     smld1_z = [e.z for e in smld1.emitters]
     ROI = float([smld1.camera.pixel_edges_x[1],
                  smld1.camera.pixel_edges_x[end],
@@ -257,12 +248,6 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
                  smld1.camera.pixel_edges_y[end],
 		 round(minimum(smld1_z)),
 		 round(maximum(smld1_z))])
-#                smld1.camera.pixel_edges_z[1],
-#                smld1.camera.pixel_edges_z[end]])
-#   im1 = histimage3D(smld1.x, smld1.y, smld1.z ./ pixelsizeZunit;
-#       ROI=ROI, histbinsize=histbinsize)
-#   im2 = histimage3D(smld2.x, smld2.y, smld2.z ./ pixelsizeZunit;
-#       ROI=ROI, histbinsize=histbinsize)
     imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
     imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
     imsz_z = maximum(smld1_z) - minimum(smld1_z)
@@ -307,8 +292,6 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
     # Convert the shift to an (x, y, z) coordinate.
     shift = histbinsize .* shift
-#   # Convert the z-shift back to original units.
-#   shift[3] = shift[3] .* pixelsizeZunit
     # Return the shift.
     return shift
 end

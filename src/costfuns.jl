@@ -118,7 +118,7 @@ Cost function computes the cost of an intra-dataset drift correction proposal.
 - data_uncorrected: uncorrected coordinate data for each localization
 - se:               standard errors for each localization
 - framenum:         frame number for each localization
-- maxn:             maximum number of neighbors considered
+- maxn:             maxinum number of neighbors considered
 - intra:            intra-dataset data structure
 """
 function costfun(θ, data_uncorrected, se, framenum::Vector{Int}, maxn::Int, intra::AbstractIntraDrift)
