@@ -50,19 +50,33 @@ println("cost=Kd/Entr + findshift2D")
 smld_correctedKCC = DC.driftcorrect(smld_drift; cost_fun_intra="Kdtree",
     cost_fun_inter="Entropy", maxn=100, histbinsize=0.05, verbose=1)
 
+smld_noisy_x = [e.x for e in smld_noisy.emitters]
+smld_noisy_y = [e.y for e in smld_noisy.emitters]
+smld_drift_x = [e.x for e in smld_drift.emitters]
+smld_drift_y = [e.y for e in smld_drift.emitters]
+smld_correctedKd_x = [e.x for e in smld_correctedKd.emitters]
+smld_correctedKd_y = [e.y for e in smld_correctedKd.emitters]
+smld_correctedE_x = [e.x for e in smld_correctedE.emitters]
+smld_correctedE_y = [e.y for e in smld_correctedE.emitters]
+smld_correctedECC_x = [e.x for e in smld_correctedECC.emitters]
+smld_correctedECC_y = [e.y for e in smld_correctedECC.emitters]
+smld_correctedKCC_x = [e.x for e in smld_correctedKCC.emitters]
+smld_correctedKCC_y = [e.y for e in smld_correctedKCC.emitters]
+
+
 f = Figure()
 ax1 = Axis(f[1, 1], aspect=DataAspect(), title="original noisy data")
-scatter!(smld_noisy.x, smld_noisy.y; markersize=5)
+scatter!(smld_noisy_x, smld_noisy_y; markersize=5)
 ax2 = Axis(f[1, 2], aspect=DataAspect(), title="drifted data")
-scatter!(smld_drift.x, smld_drift.y; markersize=5)
+scatter!(smld_drift_x, smld_drift_y; markersize=5)
 ax3 = Axis(f[1, 3], aspect=DataAspect(), title="cost=Kdtree + findshift2D")
-scatter!(smld_correctedKCC.x, smld_correctedKCC.y; markersize=5)
+scatter!(smld_correctedKCC_x, smld_correctedKCC_y; markersize=5)
 ax4 = Axis(f[2, 1], aspect=DataAspect(), title="cost=Kdtree")
-scatter!(smld_correctedKd.x, smld_correctedKd.y; markersize=5)
+scatter!(smld_correctedKd_x, smld_correctedKd_y; markersize=5)
 ax5 = Axis(f[2, 2], aspect=DataAspect(), title="cost=Entropy")
-scatter!(smld_correctedE.x, smld_correctedE.y; markersize=5)
+scatter!(smld_correctedE_x, smld_correctedE_y; markersize=5)
 ax6 = Axis(f[2, 3], aspect=DataAspect(), title="cost=Kd/Entr + findshift2D")
-scatter!(smld_correctedECC.x, smld_correctedECC.y; markersize=5)
+scatter!(smld_correctedECC_x, smld_correctedECC_y; markersize=5)
 linkxaxes!(ax1, ax2)
 linkxaxes!(ax1, ax3)
 linkxaxes!(ax1, ax4)
