@@ -1,9 +1,30 @@
 using Revise
-using JLD2
 using FileIO
-using GLMakie
+using CairoMakie
+using JLD2
+using MicroscopePSFs
+PSF = MicroscopePSFs
 using SMLMData
 using SMLMDriftCorrection
+
+filename = raw"Y:\Projects\Super Critical Angle Localization Microscopy\Data\10-06-2023\Data4\uiPSF analysis\psf_kmed2_insitu_zernike_single.h5"
+p, PSFstack, z, h = PSF.importpsf(filename,"splinePSF")
+
+# Generate a PSF stack
+sz = 20
+roi=[(x,y,k) for x=0:sz-1,y=0:sz-1,k=0:0]
+xe = sz/2
+ye = sz/2
+pos = [(x,y,k) for x=xe:xe,y=ye:ye,k=-0.675:0.05:0.675]
+for j=eachindex(pos)
+    im = PSF.pdf(p, roi, pos[j])
+    fig, ax, plt = heatmap(im[:, :, 1])
+    zpos = pos[j][3]
+    ax.title = "PSF, z: $zpos"
+    display(fig)
+    sleep(0.1)
+    println(sum(im))
+end
 
 function convert2D(smld3::SMLMData.SMLD3D)
     smld2 = SMLMData.SMLD2D(smld3.ndatasets)
@@ -88,4 +109,4 @@ linkxaxes!(ax11, ax22)
 linkyaxes!(ax11, ax12)
 linkyaxes!(ax11, ax21)
 linkyaxes!(ax11, ax22)
-display(f)
+displayaf)
