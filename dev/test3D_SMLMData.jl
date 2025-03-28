@@ -8,7 +8,8 @@ using SMLMData
 using SMLMDriftCorrection
 
 filename = raw"Y:\Projects\Super Critical Angle Localization Microscopy\Data\10-06-2023\Data4\uiPSF analysis\psf_kmed2_insitu_zernike_single.h5"
-p, PSFstack, z, h = PSF.importpsf(filename,"splinePSF")
+#p, PSFstack, z, h = PSF.load_psf(filename,"SplinePSF")
+p= PSF.load_psf(filename)
 
 # Generate a PSF stack
 sz = 20

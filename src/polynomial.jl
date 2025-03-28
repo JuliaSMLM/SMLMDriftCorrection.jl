@@ -37,7 +37,7 @@ Initialize polynomials.
 - degree:     polymomial degree = 2
 - initialize: string indicating possible initializations
               ("zeros" [default], "random", "continuous")
-- rscale:     = scale factor for normalized random numbers = 0.1 px
+- rscale:     = scale factor for normalized random numbers = 0.01 μm
 """
 mutable struct Polynomial <: AbstractIntraInter
     ndatasets::Int
@@ -45,7 +45,7 @@ mutable struct Polynomial <: AbstractIntraInter
     inter::Vector{InterShift}
 end
 function Polynomial(ndims::Int, ndatasets::Int, nframes::Int; 
-            degree=2, initialize::String="zeros", rscale=0.1)
+            degree=2, initialize::String="zeros", rscale=0.01)
     intra=Vector{IntraPolynomial}(undef,ndatasets)
     inter=Vector{InterShift}(undef,ndatasets)
 

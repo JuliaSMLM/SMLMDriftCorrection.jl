@@ -25,7 +25,7 @@ function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
         y_max =  ceil(maximum(y))
     end
     #println("histimage2D: xy = $x_min, $x_max, $y_min, $y_max") 
-    # Compute the number of pixels in x and y.
+    # Compute the number of bins in x and y.
     imszX = round(Int, (x_max .- x_min) ./ histbinsize)
     imszY = round(Int, (y_max .- y_min) ./ histbinsize)
     #println("histimage2D: imsx = $imszX, imsy = $imszY")
@@ -81,7 +81,7 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
         z_max =  ceil(maximum(z))
     end
     #println("histimage3D: xyz = $x_min, $x_max, $y_min, $y_max, $z_min, $z_max")
-    # Compute the number of pixels in x, y and z.
+    # Compute the number of bins in x, y and z.
     imszX = round(Int, (x_max .- x_min) ./ histbinsize)
     imszY = round(Int, (y_max .- y_min) ./ histbinsize)
     imszZ = round(Int, (z_max .- z_min) ./ histbinsize)
