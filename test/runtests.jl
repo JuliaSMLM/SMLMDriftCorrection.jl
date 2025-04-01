@@ -23,7 +23,7 @@ using Test
 
     # make a 3D Nmer dataset
     smld_true3, smld_model3, smld_noisy3 = simulate(;
-        ρ=0.1,                # emitters per μm²
+        ρ=1.0,                # emitters per μm²
         σ_psf=0.13,           # PSF width in μm (130nm)
         minphotons=50,        # minimum photons for detection
         ndatasets=10,         # number of independent datasets
@@ -86,6 +86,8 @@ using Test
     end
     smldn_shift3 = DC.findshift3D(smld_noisy3, smldn3; histbinsize=0.10)
     @test isapprox(smldn_shift3, shift_imposed3, atol = 0.10)
+
+    # ========== 2D ==========
     
     # --- Test correctdrift ---
     ## Set up drift model
@@ -98,31 +100,89 @@ using Test
     smld_noisy_y = [e.y for e in smld_noisy.emitters]
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
-    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
-    print("rmsd [correctdrift] = $rmsd\n")
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
+                    (smld_DC_y .- smld_noisy_y).^2) ./ N)
+    print("rmsd 2D [correctdrift] = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
     # --- Test driftcorrect (K-d tree) ---
     smld_DC = DC.driftcorrect(smld_drift)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
-    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
-    print("rmsd (K-d tree) = $rmsd\n")
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
+                    (smld_DC_y .- smld_noisy_y).^2) ./ N)
+    print("rmsd 2D (K-d tree) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 1.0)
 
     # --- Test driftcorrect (Entropy) ---
     smld_DC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100, verbose=1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
-    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
-    print("rmsd (Entropy) = $rmsd\n")
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
+                    (smld_DC_y .- smld_noisy_y).^2) ./ N)
+    print("rmsd 2D (Entropy) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 1.0)
 
     # --- Test driftcorrect (histbinsize > 0) ---
     smld_DC = DC.driftcorrect(smld_drift; histbinsize=0.1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
-    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+ (smld_DC_y .- smld_noisy_y).^2) ./ N)
-    print("rmsd (PairCorr) = $rmsd\n")
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
+                    (smld_DC_y .- smld_noisy_y).^2) ./ N)
+    print("rmsd 2D (PairCorr) = $rmsd\n")
+    @test isapprox(rmsd, 0.0; atol = 1.0)
+
+    # ========== 3D ==========
+    
+    # --- Test correctdrift ---
+    ## Set up drift model
+    N = length(smld_noisy3.emitters)
+    driftmodel3 = DC.Polynomial(smld_noisy3; degree=2, initialize="random")
+    smld_drift3 = DC.applydrift(smld_noisy3, driftmodel3)
+    smld_DC = DC.correctdrift(smld_drift3, driftmodel3)
+
+    smld_noisy3_x = [e.x for e in smld_noisy3.emitters]
+    smld_noisy3_y = [e.y for e in smld_noisy3.emitters]
+    smld_noisy3_z = [e.z for e in smld_noisy3.emitters]
+    smld_DC_x = [e.x for e in smld_DC.emitters]
+    smld_DC_y = [e.y for e in smld_DC.emitters]
+    smld_DC_z = [e.z for e in smld_DC.emitters]
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy3_x).^2 .+
+                    (smld_DC_y .- smld_noisy3_y).^2 .+
+                    (smld_DC_z .- smld_noisy3_z).^2) ./ N)
+    print("rmsd 3D [correctdrift] = $rmsd\n")
+    @test isapprox(rmsd, 0.0; atol=1e-10)
+
+    # --- Test driftcorrect (K-d tree) ---
+    smld_DC = DC.driftcorrect(smld_drift3)
+    smld_DC_x = [e.x for e in smld_DC.emitters]
+    smld_DC_y = [e.y for e in smld_DC.emitters]
+    smld_DC_z = [e.z for e in smld_DC.emitters]
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy3_x).^2 .+
+                    (smld_DC_y .- smld_noisy3_y).^2 .+
+                    (smld_DC_z .- smld_noisy3_z).^2) ./ N)
+    print("rmsd 3D (K-d tree) = $rmsd\n")
+    @test isapprox(rmsd, 0.0; atol = 1.0)
+
+    # --- Test driftcorrect (Entropy) ---
+    smld_DC = DC.driftcorrect(smld_drift3; cost_fun="Entropy", maxn=100, verbose=1)
+    smld_DC_x = [e.x for e in smld_DC.emitters]
+    smld_DC_y = [e.y for e in smld_DC.emitters]
+    smld_DC_z = [e.z for e in smld_DC.emitters]
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy3_x).^2 .+
+                    (smld_DC_y .- smld_noisy3_y).^2 .+
+                    (smld_DC_z .- smld_noisy3_z).^2) ./ N)
+    print("rmsd 3D (Entropy) = $rmsd\n")
+    @test isapprox(rmsd, 0.0; atol = 1.0)
+
+    # --- Test driftcorrect (histbinsize > 0) ---
+    smld_DC = DC.driftcorrect(smld_drift3; histbinsize=0.1)
+    smld_DC_x = [e.x for e in smld_DC.emitters]
+    smld_DC_y = [e.y for e in smld_DC.emitters]
+    smld_DC_z = [e.z for e in smld_DC.emitters]
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy3_x).^2 .+
+                    (smld_DC_y .- smld_noisy3_y).^2 .+
+                    (smld_DC_z .- smld_noisy3_z).^2) ./ N)
+    print("rmsd 3D (PairCorr) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 1.0)
 end

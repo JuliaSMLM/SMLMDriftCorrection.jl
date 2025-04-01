@@ -238,7 +238,8 @@ Find and correct inter-detaset drift.
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
-    smld_uncorrected::BasicSMLD{Float64, Emitter2DFit{Float64}},
+    smld_uncorrected::BasicSMLD{Float64, <:Union{Emitter2DFit{Float64},
+                                                 Emitter3DFit{Float64}}},
     dataset1::Int,
     dataset2::Vector{Int},
     d_cutoff::AbstractFloat,
@@ -246,15 +247,26 @@ function findinter!(dm::AbstractIntraInter,
     histbinsize::AbstractFloat
     )
 
+    n_dims = occursin("2D", string(typeof(smld_uncorrected))) ? 2 : 3
+
     # get uncorrected coords for dataset 1 
 #   idx1 = smld_uncorrected.datasetnum .== dataset1
     idx1 = [e.dataset for e in smld_uncorrected.emitters] .== dataset1
     idx1 = findall(idx1)
-    coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
-                            [e.y for e in smld_uncorrected.emitters[idx1]])
+    if n_dims == 2
+        coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
+                                [e.y for e in smld_uncorrected.emitters[idx1]])
+        stderr1 = cat(dims = 2, [e.σ_x for e in smld_uncorrected.emitters[idx1]],
+                                [e.σ_y for e in smld_uncorrected.emitters[idx1]])
+    elseif n_dims == 3
+        coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
+                                [e.y for e in smld_uncorrected.emitters[idx1]],
+                                [e.y for e in smld_uncorrected.emitters[idx1]])
+        stderr1 = cat(dims = 2, [e.σ_x for e in smld_uncorrected.emitters[idx1]],
+                                [e.σ_y for e in smld_uncorrected.emitters[idx1]],
+                                [e.σ_z for e in smld_uncorrected.emitters[idx1]])
+    end
     data = transpose(coords1)
-    stderr1 = cat(dims = 2, [e.σ_x for e in smld_uncorrected.emitters[idx1]],
-                            [e.σ_y for e in smld_uncorrected.emitters[idx1]])
     se = transpose(stderr1)
 
     # correct everything
@@ -267,8 +279,14 @@ function findinter!(dm::AbstractIntraInter,
 #       idx2 = idx2 .| (smld.emitters.dataset .== dataset2[nn])
         idx2 = idx2 .| ([e.dataset for e in smld.emitters] .== dataset2[nn])
     end   
-    coords2 = cat(dims = 2, [e.x for e in smld.emitters[idx2]],
-                            [e.y for e in smld.emitters[idx2]])
+    if n_dims == 2
+        coords2 = cat(dims = 2, [e.x for e in smld.emitters[idx2]],
+                                [e.y for e in smld.emitters[idx2]])
+    elseif n_dims == 3
+        coords2 = cat(dims = 2, [e.x for e in smld.emitters[idx2]],
+                                [e.y for e in smld.emitters[idx2]],
+                                [e.z for e in smld.emitters[idx2]])
+    end
     data_ref = transpose(coords2)
 
     if histbinsize > 0.0
@@ -278,7 +296,11 @@ function findinter!(dm::AbstractIntraInter,
 #       smld2 = SMLMData.isolatesmld(smld, idx2)
         smld1 = filter_emitters(smld, idx1)
         smld2 = filter_emitters(smld, idx2)
-        shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
+	if n_dims == 2
+            shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
+	elseif n_dims == 3
+            shift = findshift3D(smld1, smld2; histbinsize=histbinsize)
+	end
         #shift = .-shift # correct sign of shift
         #println("shift = $shift")
         correctdrift!(smld1, shift)
@@ -287,6 +309,9 @@ function findinter!(dm::AbstractIntraInter,
         for nn = 1:length(idx1)
 	    smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
 	    smld.emitters[idx1[nn]].y = smld1.emitters[nn].y
+	    if n_dims == 3
+	        smld.emitters[idx1[nn]].z = smld1.emitters[nn].z
+	    end
 	end
         if cost_fun == "None"
             theta2inter!(dm.inter[dataset1], shift)
