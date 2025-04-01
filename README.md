@@ -95,7 +95,13 @@ where smd_noisy is gnerated by SMLMSim.
 - ***smd_found***:   structure containing drift corrected coordinates (μm)
 
 ## Other entry points into SMLMDriftCorrect
-- Polynomial
-- applydrift
-- ub_entropy is an upper bound on the entropy based on nearest neighbors
-- entropy_HD is the entropy summed over all/nearest neighbor localizations
+- ***Polynomial*** define data type for intra-dataset drifts, which will be a
+                   collection of univariate polynomials indexed by each
+		   coordinate dimension and frame number
+- ***applydrift*** apply drift to simulated data
+- ***crosscorr***  computes the cross-correlation between 2 histogram images
+- ***findshift***  computes histogram image shift between 2 SMLDs representing
+                   locaiizations via cross-correlation
+- ***histImage***  produces a histogram image from the localization coordinates
+- ***entropy_HD*** is the entropy summed over all/nearest neighbor localizations
+- ***ub_entropy*** is an upper bound on the entropy based on nearest neighbors

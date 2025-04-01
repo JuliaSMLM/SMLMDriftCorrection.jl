@@ -7,10 +7,11 @@ x and y are in arbitrary units.
 ROI is [x_min, x_max, y_min, y_max] of the Region Of Interest in the
 same units as x and y.  If not provided, these values are estimated
 from the coordinate data.
-histbinsize is the size of the bins in the same units.
+histbinsize is the size of the bins of each coordinate in the same units.
 """
 function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
-    ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
+    ROI::AbstractVector{T}=[-1.0],
+    histbinsize::Union{AbstractVector{T}, T}=1.0
 ) where {T<:Real}
     if size(ROI, 1) == 4 && ROI[1] >= 0.0
         x_min = ROI[1]
@@ -24,16 +25,22 @@ function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
         y_min = floor(minimum(y))
         y_max =  ceil(maximum(y))
     end
+    lhbs = length(histbinsize)
+    if lhbs == 1
+         histbinsize = [histbinsize[1], histbinsize[1]]
+    elseif lhbs != 2
+       error("histimage2D: histbinsize length invalid: $lhbs")
+    end
     #println("histimage2D: xy = $x_min, $x_max, $y_min, $y_max") 
     # Compute the number of bins in x and y.
-    imszX = round(Int, (x_max .- x_min) ./ histbinsize)
-    imszY = round(Int, (y_max .- y_min) ./ histbinsize)
+    imszX = round(Int, (x_max .- x_min) ./ histbinsize[1])
+    imszY = round(Int, (y_max .- y_min) ./ histbinsize[2])
     #println("histimage2D: imsx = $imszX, imsy = $imszY")
     # Create a blank image.
     im = zeros(Int, imszX, imszY)
     # Convert (x, y) coordinates into bin size units.
-    xx = round.(Int, (x .- x_min) ./ histbinsize)
-    yy = round.(Int, (y .- y_min) ./ histbinsize)
+    xx = round.(Int, (x .- x_min) ./ histbinsize[1])
+    yy = round.(Int, (y .- y_min) ./ histbinsize[2])
     # Exclude points that are outside the image dimensions.
     mask = (xx .> 0) .& (xx .<= imszX) .& (yy .> 0) .& (yy .<= imszY)
     xx = xx[mask]
@@ -47,7 +54,8 @@ function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
 end
 
 function histimage2D(x::AbstractMatrix{T}, y::AbstractMatrix{T};
-    ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
+    ROI::AbstractVector{T}=[-1.0],
+    histbinsize::Union{AbstractVector{T}, T}=1.0
 ) where {T<:Real}
     histimage(x[:], y[:]; ROI=ROI, histbinsize=histbinsize)
 end
@@ -58,11 +66,12 @@ x, y, z are in arbitrary units.
 ROI is [x_min, x_max, y_min, y_max, z_min, z_max] of the Region Of
 Interest in the same units as x, y, z.  If not provided, these values
 are estimated from the coordinate data.
-histbinsize is the size of the bins in the same units.
+histbinsize is the size of the bins of each coordinate in the same units.
 """
 function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
     z::AbstractVector{T};
-    ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
+    ROI::AbstractVector{T}=[-1.0],
+    histbinsize::Union{AbstractVector{T}, T}=1.0
 ) where {T<:Real}
     if size(ROI, 1) == 6 && ROI[1] >= 0.0
         x_min = ROI[1]
@@ -80,18 +89,24 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
         z_min = floor(minimum(z))
         z_max =  ceil(maximum(z))
     end
+    lhbs = length(histbinsize)
+    if lhbs == 1
+         histbinsize = [histbinsize[1], histbinsize[1], histbinsize[1]]
+    elseif lhbs != 3
+       error("histimage3D: histbinsize length invalid: $lhbs")
+    end
     #println("histimage3D: xyz = $x_min, $x_max, $y_min, $y_max, $z_min, $z_max")
     # Compute the number of bins in x, y and z.
-    imszX = round(Int, (x_max .- x_min) ./ histbinsize)
-    imszY = round(Int, (y_max .- y_min) ./ histbinsize)
-    imszZ = round(Int, (z_max .- z_min) ./ histbinsize)
+    imszX = round(Int, (x_max .- x_min) ./ histbinsize[1])
+    imszY = round(Int, (y_max .- y_min) ./ histbinsize[2])
+    imszZ = round(Int, (z_max .- z_min) ./ histbinsize[3])
     #println("histimage3D: imsx = $imszX, imsy = $imszY, imsz = $imszZ")
     # Create a blank image.
     im = zeros(Int, imszX, imszY, imszZ)
     # Convert (x, y, z) coordinates into bin size units.
-    xx = round.(Int, (x .- x_min) ./ histbinsize)
-    yy = round.(Int, (y .- y_min) ./ histbinsize)
-    zz = round.(Int, (z .- z_min) ./ histbinsize)
+    xx = round.(Int, (x .- x_min) ./ histbinsize[1])
+    yy = round.(Int, (y .- y_min) ./ histbinsize[2])
+    zz = round.(Int, (z .- z_min) ./ histbinsize[3])
     # Exclude points that are outside the image dimensions.
     mask = (xx .> 0) .& (xx .<= imszX) .&
            (yy .> 0) .& (yy .<= imszY) .&
@@ -109,7 +124,8 @@ end
 
 function histimage3D(x::AbstractMatrix{T}, y::AbstractMatrix{T},
     z::AbstractMatrix{T};
-    ROI::AbstractVector{T}=[-1.0], histbinsize::T=1.0,
+    ROI::AbstractVector{T}=[-1.0],
+    histbinsize::Union{AbstractVector{T}, T}=1.0
 ) where {T<:Real}
     histimage3D(x[:], y[:], z[:]; ROI=ROI, histbinsize=histbinsize)
 end
@@ -166,9 +182,10 @@ between the two original images.
 histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates.
 """
-function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
-) where {T<:BasicSMLD{Float64, Emitter2DFit{Float64}}}
-    # Compute the histogram images assume the same size for both images).
+function findshift2D(smld1::T, smld2::T;
+    histbinsize::Union{AbstractVector{U}, U}=1.0
+) where {T<:BasicSMLD{Float64, Emitter2DFit{Float64}}, U<:Real}
+    # Compute the histogram images (assume the same size for both images).
     if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
        smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
        smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
@@ -187,10 +204,6 @@ function findshift2D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0
 #   end
     imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
     imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
-    if imsz_x % histbinsize != 0.0 || imsz_y % histbinsize != 0.0
-        println("findshift2D: histbinsize does not divide evenly
-	     into the image size: ($imsz_x, $imsz_y) % $histbinsize")
-    end
     smld1_x = [e.x for e in smld1.emitters]
     smld1_y = [e.y for e in smld1.emitters]
     smld2_x = [e.x for e in smld2.emitters]
@@ -232,9 +245,10 @@ Perform a cross-correlation between images representing localizations in two
 SMLD structures and compute the shift between the two original images.
 histbinsize is the size of the bins in the histogram image in the
 """
-function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
-) where {T<:BasicSMLD{Float64, Emitter3DFit{Float64}}}
-    # Compute the histogram images assume the same size for both images).
+function findshift3D(smld1::T, smld2::T;
+    histbinsize::Union{AbstractVector{U}, U}=1.0
+) where {T<:BasicSMLD{Float64, Emitter3DFit{Float64}}, U<:Real}
+    # Compute the histogram images (assume the same size for both images).
     if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
        smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
        smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
@@ -251,10 +265,6 @@ function findshift3D(smld1::T, smld2::T; histbinsize::AbstractFloat=1.0,
     imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
     imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
     imsz_z = maximum(smld1_z) - minimum(smld1_z)
-    if imsz_x % histbinsize != 0.0 || imsz_y % histbinsize != 0.0 
-        println("findshift3D: histbinsize does not divide evenly
-	     into the image size: ($imsz_x, $imsz_y, $imsz_z) % $histbinsize")
-    end
     smld1_x = [e.x for e in smld1.emitters]
     smld1_y = [e.y for e in smld1.emitters]
     smld1_z = [e.z for e in smld1.emitters]
