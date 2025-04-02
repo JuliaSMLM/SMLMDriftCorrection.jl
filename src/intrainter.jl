@@ -238,8 +238,9 @@ Find and correct inter-detaset drift.
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
-    smld_uncorrected::BasicSMLD{Float64, <:Union{Emitter2DFit{Float64},
-                                                 Emitter3DFit{Float64}}},
+    smld_uncorrected::BasicSMLD,
+#   smld_uncorrected::BasicSMLD{Float64, <:Union{Emitter2DFit{Float64},
+#                                                Emitter3DFit{Float64}}},
     dataset1::Int,
     dataset2::Vector{Int},
     d_cutoff::AbstractFloat,
@@ -247,7 +248,7 @@ function findinter!(dm::AbstractIntraInter,
     histbinsize::AbstractFloat
     )
 
-    n_dims = occursin("2D", string(typeof(smld_uncorrected))) ? 2 : 3
+    n_dims = nDims(smld_uncorrected)
 
     # get uncorrected coords for dataset 1 
 #   idx1 = smld_uncorrected.datasetnum .== dataset1
@@ -296,11 +297,7 @@ function findinter!(dm::AbstractIntraInter,
 #       smld2 = SMLMData.isolatesmld(smld, idx2)
         smld1 = filter_emitters(smld, idx1)
         smld2 = filter_emitters(smld, idx2)
-	if n_dims == 2
-            shift = findshift2D(smld1, smld2; histbinsize=histbinsize)
-	elseif n_dims == 3
-            shift = findshift3D(smld1, smld2; histbinsize=histbinsize)
-	end
+        shift = findshift(smld1, smld2; histbinsize=histbinsize)
         #shift = .-shift # correct sign of shift
         #println("shift = $shift")
         correctdrift!(smld1, shift)

@@ -47,14 +47,14 @@ using Test
     println("N = $N, ub_entropy = $ub_ent, entropy_HD = $ent_HD")
     @test ent_HD < ub_ent
 
-    # --- findshift2D ---
-    # findshift2D identity test
-    println("findshift2D identity: N = $(length(smld_noisy.emitters))")
-    smld_shift = DC.findshift2D(smld_noisy, smld_noisy; histbinsize=0.10)
+    # --- findshift 2D ---
+    # findshift 2D identity test
+    println("findshift 2D identity: N = $(length(smld_noisy.emitters))")
+    smld_shift = DC.findshift(smld_noisy, smld_noisy; histbinsize=0.10)
     @test isapprox(smld_shift, [0.0, 0.0])
 
-    # findshift2D shift test
-    println("findshift2D shift: N = $(length(smld_noisy.emitters))")
+    # findshift 2D shift test
+    println("findshift 2D shift: N = $(length(smld_noisy.emitters))")
     shift_imposed = [-4.3, 2.8]
     smldn = deepcopy(smld_noisy)
     for nn = 1:length(smldn.emitters)
@@ -63,17 +63,17 @@ using Test
         smldn.emitters[nn].x = max.(0, min.(smldn.emitters[nn].x, 256))
         smldn.emitters[nn].y = max.(0, min.(smldn.emitters[nn].y, 256))
     end
-    smldn_shift = DC.findshift2D(smld_noisy, smldn; histbinsize=0.10)
+    smldn_shift = DC.findshift(smld_noisy, smldn; histbinsize=0.10)
     @test isapprox(smldn_shift, shift_imposed, atol = 0.10)
 
-    # --- findshift3D ---
-    # findshift3D identity test
-    println("findshift3D identity: N3 = $(length(smld_noisy3.emitters))")
-    smld_shift3 = DC.findshift3D(smld_noisy3, smld_noisy3; histbinsize=0.10)
+    # --- findshift 3D ---
+    # findshift 3D identity test
+    println("findshift 3D identity: N3 = $(length(smld_noisy3.emitters))")
+    smld_shift3 = DC.findshift(smld_noisy3, smld_noisy3; histbinsize=0.10)
     @test isapprox(smld_shift3, [0.0, 0.0, 0.0])
 
-    # findshift3D shift test
-    println("findshift3D shift N3 = $(length(smld_noisy3.emitters))")
+    # findshift 3D shift test
+    println("findshift 3D shift N3 = $(length(smld_noisy3.emitters))")
     shift_imposed3 = [-4.3, 2.8, 0.2]
     smldn3 = deepcopy(smld_noisy3)
     for nn = 1:length(smldn3.emitters)
@@ -84,7 +84,7 @@ using Test
         smldn3.emitters[nn].y = max.(0, min.(smldn3.emitters[nn].y, 256))
         smldn3.emitters[nn].z = max.(0, min.(smldn3.emitters[nn].z, 256))
     end
-    smldn_shift3 = DC.findshift3D(smld_noisy3, smldn3; histbinsize=0.10)
+    smldn_shift3 = DC.findshift(smld_noisy3, smldn3; histbinsize=0.10)
     @test isapprox(smldn_shift3, shift_imposed3, atol = 0.10)
 
     # ========== 2D ==========

@@ -17,3 +17,10 @@ end
 function filter_emitters(smld::SMLD, keep::Integer)
     return(filter_emitters(smld, [keep]))
 end
+
+"""
+Determines from the type of the input smld if the data is 2D or 3D.
+"""
+function nDims(smld::SMLD)
+   return occursin("2D", string(typeof(smld))) ? 2 : 3
+end

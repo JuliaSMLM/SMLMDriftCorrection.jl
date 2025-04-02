@@ -29,7 +29,7 @@ function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
     if lhbs == 1
          histbinsize = [histbinsize[1], histbinsize[1]]
     elseif lhbs != 2
-       error("histimage2D: histbinsize length invalid: $lhbs")
+       error("histbinsize length invalid: $lhbs")
     end
     #println("histimage2D: xy = $x_min, $x_max, $y_min, $y_max") 
     # Compute the number of bins in x and y.
@@ -93,7 +93,7 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
     if lhbs == 1
          histbinsize = [histbinsize[1], histbinsize[1], histbinsize[1]]
     elseif lhbs != 3
-       error("histimage3D: histbinsize length invalid: $lhbs")
+       error("histbinsize length invalid: $lhbs")
     end
     #println("histimage3D: xyz = $x_min, $x_max, $y_min, $y_max, $z_min, $z_max")
     # Compute the number of bins in x, y and z.
@@ -157,6 +157,7 @@ Compute the cross-correlation between two 2D images, weighted by intensity.
 """
 function crosscorr2Dweighted(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
 ) where {T<:Real}
+
     # Create a mask of the images (assumed the same size).
     mask = ones(size(im1))
     # Compute the area of the images (assumed the same).
@@ -176,78 +177,17 @@ function crosscorr2Dweighted(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
 end
 
 """
-Perform a cross-correlation between images representing
-localizations in two SMLD structures and compute the shift
-between the two original images.
-histbinsize is the size of the bins in the histogram image in the
-same units as the localization coordinates.
-"""
-function findshift2D(smld1::T, smld2::T;
-    histbinsize::Union{AbstractVector{U}, U}=1.0
-) where {T<:BasicSMLD{Float64, Emitter2DFit{Float64}}, U<:Real}
-    # Compute the histogram images (assume the same size for both images).
-    if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
-       smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
-       smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
-       smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
-        error("Images must have the same size.")
-    end
-#   if smld1.datasize[1] == 0.0 || smld1.datasize[2] == 0.0
-#       println("findshift2D: smld.datasize(s) are zero.")
-#       ROI = [-1.0]
-#   else
-#       ROI = float([0, smld1.datasize[1], 0, smld1.datasize[2]])
-        ROI = float([smld1.camera.pixel_edges_x[1],
-	             smld1.camera.pixel_edges_x[end],
-	             smld1.camera.pixel_edges_y[1],
-	             smld1.camera.pixel_edges_y[end]])
-#   end
-    imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
-    imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
-    smld1_x = [e.x for e in smld1.emitters]
-    smld1_y = [e.y for e in smld1.emitters]
-    smld2_x = [e.x for e in smld2.emitters]
-    smld2_y = [e.y for e in smld2.emitters]
-    im1 = histimage2D(smld1_x, smld1_y; ROI=ROI, histbinsize=histbinsize)
-    im2 = histimage2D(smld2_x, smld2_y; ROI=ROI, histbinsize=histbinsize)
-    # Calculate the FFT center zero frequency location index (midpoint)
-    # of the histogram images, which are assumed to have the same size.
-    if mod(size(im1, 1), 2) == 0
-        mid1 = size(im1, 1) / 2 + 1
-    else
-        mid1 = (size(im1, 1) + 1) / 2
-    end
-    if mod(size(im1, 2), 2) == 0
-        mid2 = size(im1, 2) / 2 + 1
-    else
-        mid2 = (size(im1, 2) + 1) / 2
-    end
-    #println("findshift2D: mid1 = $mid1, mid2 = $mid2")
-    # Compute the cross-correlation.
-    cc = crosscorr2D(im1, im2)
-    #ccw = crosscorr2Dweighted(im1, im2)
-    #println("findshift2D: shift  = $(argmax(cc))")
-    #println("findshift2D: shiftw = $(argmax(ccw))")
-    # Find the maximum location in the cross-correlation, which will
-    # correspond to the shift between the two images.
-    shift = argmax(cc)
-    # Since the FFT has been centered, the shift is relative to the
-    # center of the transformed histogram images.
-    shift = float([shift[1] - mid1, shift[2] - mid2])
-    # Convert the shift to an (x, y) coordinate.
-    shift = histbinsize .* shift
-    # Return the shift.
-    return shift
-end
-
-"""
 Perform a cross-correlation between images representing localizations in two
 SMLD structures and compute the shift between the two original images.
 histbinsize is the size of the bins in the histogram image in the
+same units as the localization coordinates.
 """
-function findshift3D(smld1::T, smld2::T;
+function findshift(smld1::T, smld2::T;
     histbinsize::Union{AbstractVector{U}, U}=1.0
-) where {T<:BasicSMLD{Float64, Emitter3DFit{Float64}}, U<:Real}
+) where {T<:BasicSMLD, U<:Real}
+
+    n_dims = nDims(smld1)
+
     # Compute the histogram images (assume the same size for both images).
     if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
        smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
@@ -255,26 +195,40 @@ function findshift3D(smld1::T, smld2::T;
        smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
         error("Images must have the same size.")
     end
-    smld1_z = [e.z for e in smld1.emitters]
-    ROI = float([smld1.camera.pixel_edges_x[1],
-                 smld1.camera.pixel_edges_x[end],
-                 smld1.camera.pixel_edges_y[1],
-                 smld1.camera.pixel_edges_y[end],
-		 round(minimum(smld1_z)),
-		 round(maximum(smld1_z))])
+    if n_dims == 2
+        ROI = float([smld1.camera.pixel_edges_x[1],
+                     smld1.camera.pixel_edges_x[end],
+                     smld1.camera.pixel_edges_y[1],
+                     smld1.camera.pixel_edges_y[end]])
+    elseif n_dims == 3
+        smld1_z = [e.z for e in smld1.emitters]
+        ROI = float([smld1.camera.pixel_edges_x[1],
+                     smld1.camera.pixel_edges_x[end],
+                     smld1.camera.pixel_edges_y[1],
+                     smld1.camera.pixel_edges_y[end],
+                     round(minimum(smld1_z)),
+                     round(maximum(smld1_z))])
+    end
     imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
     imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
-    imsz_z = maximum(smld1_z) - minimum(smld1_z)
+    if n_dims == 3
+        imsz_z = maximum(smld1_z) - minimum(smld1_z)
+    end
     smld1_x = [e.x for e in smld1.emitters]
     smld1_y = [e.y for e in smld1.emitters]
-    smld1_z = [e.z for e in smld1.emitters]
     smld2_x = [e.x for e in smld2.emitters]
     smld2_y = [e.y for e in smld2.emitters]
-    smld2_z = [e.z for e in smld2.emitters]
-    im1 = histimage3D(smld1_x, smld1_y, smld1_z;
-                      ROI=ROI, histbinsize=histbinsize)
-    im2 = histimage3D(smld2_x, smld2_y, smld2_z;
-                      ROI=ROI, histbinsize=histbinsize)
+    if n_dims == 2
+        im1 = histimage2D(smld1_x, smld1_y; ROI=ROI, histbinsize=histbinsize)
+        im2 = histimage2D(smld2_x, smld2_y; ROI=ROI, histbinsize=histbinsize)
+    elseif n_dims == 3
+        smld1_z = [e.z for e in smld1.emitters]
+        smld2_z = [e.z for e in smld2.emitters]
+        im1 = histimage3D(smld1_x, smld1_y, smld1_z;
+                          ROI=ROI, histbinsize=histbinsize)
+        im2 = histimage3D(smld2_x, smld2_y, smld2_z;
+                          ROI=ROI, histbinsize=histbinsize)
+    end
     # Calculate the FFT center zero frequency location index (midpoint)
     # of the histogram images, which are assumed to have the same size.
     if mod(size(im1, 1), 2) == 0
@@ -287,20 +241,30 @@ function findshift3D(smld1::T, smld2::T;
     else
         mid2 = (size(im1, 2) + 1) / 2
     end
-    if mod(size(im1, 3), 2) == 0
-        mid3 = size(im1, 3) / 2 + 1
-    else
-        mid3 = (size(im1, 3) + 1) / 2
+    if n_dims == 3
+        if mod(size(im1, 3), 2) == 0
+            mid3 = size(im1, 3) / 2 + 1
+        else
+            mid3 = (size(im1, 3) + 1) / 2
+        end
     end
     # Compute the cross-correlation.
-    cc = crosscorr3D(im1, im2)
+    if n_dims == 2
+        cc = crosscorr2D(im1, im2)
+    elseif n_dims == 3
+        cc = crosscorr3D(im1, im2)
+    end
     # Find the maximum location in the cross-correlation, which will
     # correspond to the shift between the two images.
     shift = argmax(cc)
     # Since the FFT has been centered, the shift is relative to the
     # center of the transformed histogram images.
-    shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
-    # Convert the shift to an (x, y, z) coordinate.
+    if n_dims == 2
+        shift = float([shift[1] - mid1, shift[2] - mid2])
+    elseif n_dims == 3
+        shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
+    end
+    # Convert the shift to an (x, y {, z}) coordinate.
     shift = histbinsize .* shift
     # Return the shift.
     return shift

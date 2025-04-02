@@ -14,11 +14,11 @@ include("typedefs.jl")
 include("cost_entropy.jl")
 include("costfuns.jl")
 #include("costs.jl")
-include("filter.jl")
 include("crosscorr.jl")
 include("interface.jl")
 include("intrainter.jl")
 include("polynomial.jl")
+include("utilities.jl")
 
 #export driftcorrect
 
