@@ -75,12 +75,12 @@ function Polynomial(ndims::Int, ndatasets::Int, nframes::Int;
     return Polynomial(ndatasets,intra,inter)
 end
 
-#function Polynomial(smld::BasicSMLD{T, E}; degree::Int=2, initialize::String="zeros",rscale=0.1)
+#function Polynomial(smld::SMLD{T, E}; degree::Int=2, initialize::String="zeros",rscale=0.1)
 #    where {T<:AbstractFloat, E<:Emitter2DFit{T}}
 #    return Polynomial(2,smld.n_datasets,smld.n_frames;degree=degree, initialize=initialize,rscale=rscale)
 #end
 
-function Polynomial(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}; degree::Int=2, initialize::String="zeros",rscale=0.1)
+function Polynomial(smld::SMLD; degree::Int=2, initialize::String="zeros",rscale=0.1)
     return Polynomial(2,smld.n_datasets,smld.n_frames;degree=degree, initialize=initialize,rscale=rscale)
 end
 

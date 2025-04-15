@@ -29,18 +29,9 @@ end
 """
 Apply x- and y-drift to the data in the smld structure.
 """
-function applydrift!(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, dm::AbstractIntraInter)
-    for nn = 1:length(smld.emitters)
-        smld.emitters[nn].x = applydrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
-        smld.emitters[nn].x = applydrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
+function applydrift!(smld::SMLD, dm::AbstractIntraInter)
+    n_dims = nDims(smld)
 
-        smld.emitters[nn].y = applydrift(smld.emitters[nn].y, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[2])
-        smld.emitters[nn].y = applydrift(smld.emitters[nn].y, dm.inter[smld.emitters[nn].dataset], 2)
-    end
-end
-
-
-function applydrift!(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, dm::AbstractIntraInter)
     for nn = 1:length(smld.emitters)
         smld.emitters[nn].x = applydrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
         smld.emitters[nn].x = applydrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
@@ -48,11 +39,12 @@ function applydrift!(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, dm::Abstra
         smld.emitters[nn].y = applydrift(smld.emitters[nn].y, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[2])
         smld.emitters[nn].y = applydrift(smld.emitters[nn].y, dm.inter[smld.emitters[nn].dataset], 2)
 
-        smld.emitters[nn].z = applydrift(smld.emitters[nn].z, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[3])
-        smld.emitters[nn].z = applydrift(smld.emitters[nn].z, dm.inter[smld.emitters[nn].dataset], 3)
+        if n_dims == 3
+            smld.emitters[nn].z = applydrift(smld.emitters[nn].z, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[3])
+            smld.emitters[nn].z = applydrift(smld.emitters[nn].z, dm.inter[smld.emitters[nn].dataset], 3)
+        end
     end
 end
-
 
 """ 
   applydrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter) -> SMLMData.Emitter2DFit
@@ -67,76 +59,49 @@ Applies a drift model to the Single-Molecule Localization Microscopy (SMLM) data
 - `SMLMData.Emitter2DFit`: A new SMLM data structure with the drift corrections applied.
 
 """
-function applydrift(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, driftmodel::AbstractIntraInter)
+function applydrift(smld::SMLD, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
-    applydrift!(smld_shifted::BasicSMLD{Float64, Emitter2DFit{Float64}}, driftmodel::AbstractIntraInter)
+    applydrift!(smld_shifted::SMLD, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
-function applydrift(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, driftmodel::AbstractIntraInter)
-    smld_shifted = deepcopy(smld)
-    applydrift!(smld_shifted::BasicSMLD{Float64, Emitter3DFit{Float64}}, driftmodel::AbstractIntraInter)
-    return smld_shifted
-end
+function correctdrift!(smld::SMLD, dm::AbstractIntraInter)
+    n_dims = nDims(smld)
 
-function correctdrift!(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, dm::AbstractIntraInter)
     for nn = 1:length(smld.emitters)
         smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
         smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
 
         smld.emitters[nn].y = correctdrift(smld.emitters[nn].y, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[2])
         smld.emitters[nn].y = correctdrift(smld.emitters[nn].y, dm.inter[smld.emitters[nn].dataset], 2)
+        if n_dims == 3
+            smld.emitters[nn].z = correctdrift(smld.emitters[nn].z, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[3])
+            smld.emitters[nn].z = correctdrift(smld.emitters[nn].z, dm.inter[smld.emitters[nn].dataset], 3)
+        end
     end
 end
 
-function correctdrift!(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, dm::AbstractIntraInter)
-    for nn = 1:length(smld.emitters)
-        smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
-        smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
-
-        smld.emitters[nn].y = correctdrift(smld.emitters[nn].y, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[2])
-        smld.emitters[nn].y = correctdrift(smld.emitters[nn].y, dm.inter[smld.emitters[nn].dataset], 2)
-
-        smld.emitters[nn].z = correctdrift(smld.emitters[nn].z, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[3])
-        smld.emitters[nn].z = correctdrift(smld.emitters[nn].z, dm.inter[smld.emitters[nn].dataset], 3)
-    end
-end
-
-function correctdrift(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, driftmodel::AbstractIntraInter)
-    smld_shifted = deepcopy(smld)
-    correctdrift!(smld_shifted, driftmodel)
-    return smld_shifted
-end
-
-function correctdrift(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, driftmodel::AbstractIntraInter)
+function correctdrift(smld::SMLD, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
     correctdrift!(smld_shifted, driftmodel)
     return smld_shifted
 end
 
 #function correctdrift!(smld::SMLMData.Emitter2DFit, shift::Vector{AbstractFloat})
-function correctdrift!(smld::BasicSMLD{Float64, Emitter2DFit{Float64}}, shift::Vector{Float64})
-    #smld_shifted = deepcopy(smld)
-    #println("correctdrift!: shift = $shift")
-    #smld.x .-= shift[1]
-    #smld.y .-= shift[2]
-    for nn = 1 : length(smld.emitters)
-        smld.emitters[nn].x -= shift[1]
-        smld.emitters[nn].y -= shift[2]
-    end
-end
-
 #function correctdrift!(smld::SMLMData.Emitter3DFit, shift::Vector{AbstractFloat})
-function correctdrift!(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}, shift::Vector{Float64})
+function correctdrift!(smld::SMLD, shift::Vector{Float64})
+    n_dims = nDims(smld)
+
     #smld_shifted = deepcopy(smld)
     #println("correctdrift!: shift = $shift")
     #smld.x .-= shift[1]
     #smld.y .-= shift[2]
-    #smld.z .-= shift[3]
     for nn = 1 : length(smld.emitters)
         smld.emitters[nn].x -= shift[1]
         smld.emitters[nn].y -= shift[2]
-        smld.emitters[nn].z -= shift[3]
+        if n_dims == 3
+            smld.emitters[nn].z -= shift[3]
+        end
     end
 end
 
@@ -153,7 +118,7 @@ Find and correct intra-detaset drift.
 """
 function findintra!(intra::AbstractIntraDrift,
     cost_fun::String,
-    smld::BasicSMLD,
+    smld::SMLD,
     dataset::Int,
     d_cutoff::AbstractFloat,
     maxn::Int)
@@ -238,9 +203,9 @@ Find and correct inter-detaset drift.
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
-    smld_uncorrected::BasicSMLD,
-#   smld_uncorrected::BasicSMLD{Float64, <:Union{Emitter2DFit{Float64},
-#                                                Emitter3DFit{Float64}}},
+    smld_uncorrected::SMLD,
+#   smld_uncorrected::SMLD{Float64, <:Union{Emitter2DFit{Float64},
+#                                           Emitter3DFit{Float64}}},
     dataset1::Int,
     dataset2::Vector{Int},
     d_cutoff::AbstractFloat,
@@ -304,12 +269,12 @@ function findinter!(dm::AbstractIntraInter,
 #       smld.x[idx1] = smld1.x
 #       smld.y[idx1] = smld1.y
         for nn = 1:length(idx1)
-	    smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
-	    smld.emitters[idx1[nn]].y = smld1.emitters[nn].y
-	    if n_dims == 3
-	        smld.emitters[idx1[nn]].z = smld1.emitters[nn].z
-	    end
-	end
+            smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
+            smld.emitters[idx1[nn]].y = smld1.emitters[nn].y
+            if n_dims == 3
+                smld.emitters[idx1[nn]].z = smld1.emitters[nn].z
+            end
+        end
         if cost_fun == "None"
             theta2inter!(dm.inter[dataset1], shift)
             return 0.0
@@ -354,7 +319,7 @@ Find and correct inter-detaset drift.
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
-    smld_uncorrected::BasicSMLD,
+    smld_uncorrected::SMLD,
     dataset1::Int,
     d_cutoff::AbstractFloat,
     maxn::Int,
@@ -368,7 +333,7 @@ end
 """
 Experimental.
 """
-function globalcost(smld::BasicSMLD; k::Int=4, d_cutoff=1.0)
+function globalcost(smld::SMLD; k::Int=4, d_cutoff=1.0)
     
     coords1 = cat(dims = 2, [e.x for e in smld.emitters[idx]],
                             [e.y for e in smld.emitters[idx]])

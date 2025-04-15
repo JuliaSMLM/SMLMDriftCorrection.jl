@@ -184,7 +184,7 @@ same units as the localization coordinates.
 """
 function findshift(smld1::T, smld2::T;
     histbinsize::Union{AbstractVector{U}, U}=1.0
-) where {T<:BasicSMLD, U<:Real}
+) where {T<:SMLD, U<:Real}
 
     n_dims = nDims(smld1)
 

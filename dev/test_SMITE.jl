@@ -37,8 +37,8 @@ end
 println("N_smld2 = $(length(smld2.emitters))")
 smld2_x = [e.x for e in smld2.emitters]
 smld2_y = [e.y for e in smld2.emitters]
-subind = (smld2_x .> 0.0) .& (smld2_x .< 25.0) .&
-         (smld2_y .> 0.0) .& (smld2_y .< 25.0)
+subind = (smld2_x .> 64.0) .& (smld2_x .< 128.0) .&
+         (smld2_y .> 64.0) .& (smld2_y .< 128.0)
 smld2roi = DC.filter_emitters(smld2, subind)
 println("N_smld2 = $(length(smld2roi.emitters))")
 
@@ -63,14 +63,18 @@ smld2_DC = DC.driftcorrect(smld2roi; verbose = 1, cost_fun = "Kdtree")
 # ----------
 
 f = Figure()
+smld2roi_x = [e.x for e in smld2roi.emitters]
+smld2roi_y = [e.y for e in smld2roi.emitters]
+smld2_DC_x = [e.x for e in smld2_DC.emitters]
+smld2_DC_y = [e.y for e in smld2_DC.emitters]
 ax11 = Axis(f[1, 1], aspect=DataAspect(), title="smld2 roi")
-scatter!(smld2roi.x, smld2roi.y, markersize = 5)
+scatter!(smld2roi_x, smld2roi_y, markersize = 5)
 ax12 = Axis(f[1, 2], aspect=DataAspect(), title="DC2")
-scatter!(smld2_DC.x, smld3_DC.y, markersize = 5)
+scatter!(smld2_DC_x, smld2_DC_y, markersize = 5)
 #ax21 = Axis(f[2, 1], aspect=DataAspect(), title="smld3 roi")
-#scatter!(smld3roi.x, smld3roi.y, markersize = 5)
+#scatter!(smld3roi_x, smld3roi_y, markersize = 5)
 #ax22 = Axis(f[2, 2], aspect=DataAspect(), title="DC3")
-#scatter!(smld3_DC.x, smld3_DC.y, markersize = 5)
+#scatter!(smld3_DC_x, smld3_DC_y, markersize = 5)
 linkxaxes!(ax11, ax12)
 #linkxaxes!(ax11, ax21)
 #linkxaxes!(ax11, ax22)
