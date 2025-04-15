@@ -2,11 +2,12 @@ using Revise
 using CairoMakie
 using SMLMData
 using SMLMDriftCorrection
+DC = SMLMDriftCorrection
 
 path = raw"Y:\Personal Folders\MJW\tmp"
 file = raw"Cell_01_Label_01_Data_2023-10-12-12-51-39_Results.mat"
 smd = SmiteSMD(path, file)
-smld2 = load_smite_2d(smd)
+#smld2 = load_smite_2d(smd)
 
 # Load the file if not done previously
 if !isdefined(Main, :smld2)
@@ -33,28 +34,31 @@ end
 
 # --- 2D ---
 
-println("N_smld2 = $(length(smld2.x))")
-subind = (smld2.x .> 10.0) .& (smld2.x .< 15.0) .&
-         (smld2.y .> 10.0) .& (smld2.y .< 15.0)
-smld2roi = SMLMData.isolatesmld(smld2, subind)
-println("N_smld2 = $(length(smld2roi.x))")
+println("N_smld2 = $(length(smld2.emitters))")
+smld2_x = [e.x for e in smld2.emitters]
+smld2_y = [e.y for e in smld2.emitters]
+subind = (smld2_x .> 0.0) .& (smld2_x .< 25.0) .&
+         (smld2_y .> 0.0) .& (smld2_y .< 25.0)
+smld2roi = DC.filter_emitters(smld2, subind)
+println("N_smld2 = $(length(smld2roi.emitters))")
 
-smld2_DC = SMLMDriftCorrection.driftcorrect(smld2roi; verbose = 1,
-                                            cost_fun = "Kdtree")
+smld2_DC = DC.driftcorrect(smld2roi; verbose = 1, cost_fun = "Kdtree")
 
 # --- 3D ---
 
-#println("N_smld3 = $(length(smld3.x))")
-#zmin = minimum(smld3.z)
-#zmax = maximum(smld3.z)
-#subind = (smld3.x .> 10.0) .& (smld3.x .< 15.0) .&
-#         (smld3.y .> 10.0) .& (smld3.y .< 15.0) .&
-#         (smld3.z .> zmin) .& (smld3.z .< zmax)
-#smld3roi = SMLMData.isolatesmld(smld3, subind)
+#println("N_smld3 = $(length(smld3.emitters))")
+#smld2_x = [e.x for e in smld3.emitters]
+#smld2_y = [e.y for e in smld3.emitters]
+#smld2_z = [e.z for e in smld3.emitters]
+#zmin = minimum(smld3_z)
+#zmax = maximum(smld3_z)
+#subind = (smld3_x .> 10.0) .& (smld3_x .< 15.0) .&
+#         (smld3_y .> 10.0) .& (smld3_y .< 15.0) .&
+#         (smld3_z .> zmin) .& (smld3_z .< zmax)
+#smld3roi = DC.filter_emitters(smld3, subind)
 #println("N_smld3 = $(length(smld3roi.x))")
 
-smld3_DC = SMLMDriftCorrection.driftcorrect(smld3roi; verbose = 1,
-                                            cost_fun = "Kdtree")
+#smld3_DC = DC.driftcorrect(smld3roi; verbose = 1, cost_fun = "Kdtree")
 
 # ----------
 

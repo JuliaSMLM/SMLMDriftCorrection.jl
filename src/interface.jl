@@ -21,7 +21,7 @@ Main interface for drift correction (DC).  This algorithm consists of an
 # Output
 - smd_found:   structure containing drift corrected coordinates (μm)
 """
-function driftcorrect(smld::BasicSMLD;
+function driftcorrect(smld::SMLD;
     intramodel::String = "Polynomial",
     cost_fun::String = "Kdtree",
     cost_fun_intra::String = "",
