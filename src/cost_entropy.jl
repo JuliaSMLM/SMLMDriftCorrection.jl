@@ -103,6 +103,15 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
     return entropy_HD(σ_x, σ_y) - out / N
 end
 
+"""
+Entropy computation using maxn nearest neighbors for each localization.
+    [Cnossen: equation 3]
+
+# Fields
+- idxs:      matrix of indices (maxn x K)
+- r:         coordinate matrices of localization positions (maxn x K)
+- σ:         coordinate matrices of localization uncertainties (maxn x K)
+"""
 function entropy1(idxs::Vector{Vector{Int}}, r::Matrix{T},
     σ::Matrix{T}) where {T<:Real}
 
@@ -178,56 +187,56 @@ end
 Entropy upper bound based on maxn nearest neighbors of each localization.
 
 # Fields
-- x, y       vector of localization positions
-- σ_x, σ_y   vector of localization uncertainties
+- r:      coordinate matrix of localization positions
+- σ:      coordinate matrix of localization uncertainties
+- maxn:   maximum number of neighbors considered
+"""
+function ub_entropy(r::Matrix{T}, σ::Matrix{T}; maxn::Int = 200
+) where {T<:Real}
+
+    #println("Calculating KDTree...")
+    data = transpose(r)
+
+    #print("KDTree: ") @time 
+    kdtree = KDTree(data; leafsize=10)
+    # true below so that results are sorted into increasing order of distance
+    #print("knn: ") @time
+    idxs, dists = knn(kdtree, data, maxn + 1, true)
+    #idxs = inrange(kdtree, data, maxn + 1)
+    #println("Calculating Entropy...")
+    #@time 
+    entropy1(idxs, r, σ)
+
+end
+
+"""
+Entropy upper bound based on maxn nearest neighbors of each localization.
+
+# Fields
+- x, y:      vector of localization positions
+- σ_x, σ_y:  vector of localization uncertainties
 - maxn:      maximum number of neighbors considered
 """
 function ub_entropy(x::Vector{T}, y::Vector{T},
     σ_x::Vector{T}, σ_y::Vector{T}; maxn::Int = 200
 ) where {T<:Real}
 
-    #println("Calculating KDTree...")
-    coords = cat(dims=2, x, y)
-
-    data = transpose(coords)
-
-    #print("KDTree: ") @time 
-    kdtree = KDTree(data; leafsize=10)
-    # true below so that results are sorted into increasing order of distance
-    #print("knn: ") @time
-    idxs, dists = knn(kdtree, data, maxn + 1, true)
-    #idxs = inrange(kdtree, data, maxn + 1)
-    #println("Calculating Entropy...")
-    #@time 
-    #entropy1(idxs, x, y, σ_x, σ_y)
-    entropy1(idxs, coords, cat(dims = 2, σ_x, σ_y))
+    ub_entropy(cat(dims = 2, x, y), cat(dims = 2, σ_x, σ_y); maxn)
 
 end
+
 """
 Entropy upper bound based on maxn nearest neighbors of each localization.
 
 # Fields
-- x, y, z         vector of localization positions
-- σ_x,  σ_y, σ_z  vector of localization uncertainties
+- x, y, z:        vector of localization positions
+- σ_x, σ_y, σ_z:  vector of localization uncertainties
 - maxn:           maximum number of neighbors considered
 """
 function ub_entropy(x::Vector{T}, y::Vector{T}, z::Vector{T},
     σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T}; maxn::Int = 200
 ) where {T<:Real}
 
-    #println("Calculating KDTree...")
-    coords = cat(dims=2, x, y, z)
-
-    data = transpose(coords)
-
-    #print("KDTree: ") @time 
-    kdtree = KDTree(data; leafsize=10)
-    # true below so that results are sorted into increasing order of distance
-    #print("knn: ") @time
-    idxs, dists = knn(kdtree, data, maxn + 1, true)
-    #idxs = inrange(kdtree, data, maxn + 1)
-    #println("Calculating Entropy...")
-    #@time 
-    entropy1(idxs, cat(coords, cat(dims = 2, σ_x, σ_y, σ_z))
+    ub_entropy(cat(dims = 2, x, y, z), cat(dims = 2, σ_x, σ_y, σ_z); maxn)
 
 end
