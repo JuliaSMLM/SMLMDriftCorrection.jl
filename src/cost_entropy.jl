@@ -14,10 +14,17 @@ The quantity below is Gaussian Mixture Model single components
 summed over all localizations provided (may not be the total set of
 localizations if limited through nearest neighbors).
 
-σ_x and σ_y are localization uncertainties.
+σ_x and σ_y are localization uncertainties.  The code below assumes that
+Σ_i = σ_x * σ_y or σ_x * σ_y * σ_z from the Cnossen definition [after
+Equation 3 and before Equation 4] of
+H_i(D) = 1/2 ln det(2 π e Σ_i).
 """
 function entropy_HD(σ_x::Vector{T}, σ_y::Vector{T}) where {T<:Real}
     return sum(1 / 2 * log.(2 * pi * exp(1) * σ_y .* σ_x))
+end
+
+function entropy_HD(σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T}) where {T<:Real}
+    return sum(1 / 2 * log.(2 * pi * exp(1) * σ_z .* σ_y .* σ_x))
 end
 
 """
@@ -35,6 +42,7 @@ function divKL(x1::Vector{T}, s1::Vector{T},
     si2 = s1 .^ 2
     sj2 = s2 .^ 2
 
+    # D_KL(p_i(r) || p_j(r)) = ... [Cnossen: equation 4]
     # out = 1 / 2 * sum(log.(s2 .^ 2 ./ s1 .^ 2) + s1 .^ 2 ./ s2 .^ 2 + (x1 - x2) .^ 2 ./ s2 .^ 2) - K / 2
     out = T(0)
     for i in 1:K
@@ -47,8 +55,8 @@ function divKL(x1::Vector{T}, s1::Vector{T},
 end
 
 """
-Entropy computation using maxn nearest neighbors for each
-    localization.
+Entropy computation using maxn nearest neighbors for each localization.
+    [Cnossen: equation 3]
 
 # Fields
 - idxs       matrix of indices (maxn x K)
@@ -95,6 +103,77 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
     return entropy_HD(σ_x, σ_y) - out / N
 end
 
+function entropy1(idxs::Vector{Vector{Int}}, r::Matrix{T},
+    σ::Matrix{T}) where {T<:Real}
+
+    out = 0.0
+    # maxn is the maxinum number of neighbors allowed.
+    maxn = length(idxs[1]) - 1
+
+    kldiv = zeros(T, maxn)
+    #Threads.@threads 
+    # length(x) number of localizations
+    # maxn      number of neighbors per localizations
+    # NOTE: kldiv is reused for each i
+    # println("length(x) = ", length(x), ", maxn = ", maxn)
+    # print("In entropy1: ")
+    # @time begin
+    K = size(r)[2]
+    x   = r[:, 1]
+    y   = r[:, 2]
+    σ_x = σ[:, 1]
+    σ_y = σ[:, 2]
+    if K == 3
+        z   = r[:, 3]
+        σ_z = σ[:, 3]
+    end
+
+    r1 = Vector{T}(undef, K)
+    σ1 = Vector{T}(undef, K)
+    r2 = Vector{T}(undef, K)
+    σ2 = Vector{T}(undef, K)
+
+    if K == 2
+        for i = 1:length(x)
+            idx = idxs[i]
+            r1 .= [x[i], y[i]]
+            σ1 .= [σ_x[i], σ_y[i]]
+
+            for j = 2:maxn+1
+                r2 .= [x[idx[j]], y[idx[j]]]
+                σ2 .= [σ_x[idx[j]], σ_y[idx[j]]]
+                kldiv[j-1] = divKL(r1, σ1, r2, σ2)
+            end
+
+            out += logsumexp(-kldiv) - log(T(length(kldiv)))
+        end
+    else # K == 3
+        for i = 1:length(x)
+            idx = idxs[i]
+            r1 .= [x[i], y[i], z[i]]
+            σ1 .= [σ_x[i], σ_y[i], σ_z[i]]
+
+            for j = 2:maxn+1
+                r2 .= [x[idx[j]], y[idx[j]], z[idx[j]]]
+                σ2 .= [σ_x[idx[j]], σ_y[idx[j]], σ_z[idx[j]]]
+                kldiv[j-1] = divKL(r1, σ1, r2, σ2)
+            end
+
+            out += logsumexp(-kldiv) - log(T(length(kldiv)))
+        end
+    end
+
+    # end # @time
+
+    N = length(x)   # total number of localizations
+    if K == 2
+        return entropy_HD(σ_x, σ_y) - out / N
+    else # K == 3
+        return entropy_HD(σ_x, σ_y, σ_z) - out / N
+    end
+    return entropy_HD(σ_x, σ_y) - out / N
+end
+
 """
 Entropy upper bound based on maxn nearest neighbors of each localization.
 
@@ -120,6 +199,35 @@ function ub_entropy(x::Vector{T}, y::Vector{T},
     #idxs = inrange(kdtree, data, maxn + 1)
     #println("Calculating Entropy...")
     #@time 
-    entropy1(idxs, x, y, σ_x, σ_y)
+    #entropy1(idxs, x, y, σ_x, σ_y)
+    entropy1(idxs, coords, cat(dims = 2, σ_x, σ_y))
+
+end
+"""
+Entropy upper bound based on maxn nearest neighbors of each localization.
+
+# Fields
+- x, y, z         vector of localization positions
+- σ_x,  σ_y, σ_z  vector of localization uncertainties
+- maxn:           maximum number of neighbors considered
+"""
+function ub_entropy(x::Vector{T}, y::Vector{T}, z::Vector{T},
+    σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T}; maxn::Int = 200
+) where {T<:Real}
+
+    #println("Calculating KDTree...")
+    coords = cat(dims=2, x, y, z)
+
+    data = transpose(coords)
+
+    #print("KDTree: ") @time 
+    kdtree = KDTree(data; leafsize=10)
+    # true below so that results are sorted into increasing order of distance
+    #print("knn: ") @time
+    idxs, dists = knn(kdtree, data, maxn + 1, true)
+    #idxs = inrange(kdtree, data, maxn + 1)
+    #println("Calculating Entropy...")
+    #@time 
+    entropy1(idxs, cat(coords, cat(dims = 2, σ_x, σ_y, σ_z))
 
 end

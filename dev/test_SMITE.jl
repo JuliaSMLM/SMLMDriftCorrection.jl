@@ -1,5 +1,5 @@
 using Revise
-using CairoMakie
+using GLMakie
 using SMLMData
 using SMLMDriftCorrection
 DC = SMLMDriftCorrection
@@ -7,8 +7,6 @@ DC = SMLMDriftCorrection
 path = raw"Y:\Personal Folders\MJW\tmp"
 file = raw"Cell_01_Label_01_Data_2023-10-12-12-51-39_Results.mat"
 smd = SmiteSMD(path, file)
-#smld2 = load_smite_2d(smd)
-
 # Load the file if not done previously
 if !isdefined(Main, :smld2)
     println("Loading file: $file")

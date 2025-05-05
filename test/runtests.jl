@@ -34,18 +34,33 @@ using Test
         camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
     )
 
-    # --- entropy ---
+    # --- entropy 2D ---
     x = [e.x for e in smld_noisy.emitters]
     y = [e.y for e in smld_noisy.emitters]
     σ_x = [e.σ_x for e in smld_noisy.emitters]
     σ_y = [e.σ_y for e in smld_noisy.emitters]
     N = length(smld_noisy.emitters)
-    # ub_entropy is an upper bound on the entropy based on NN
-    ub_ent = DC.ub_entropy(x, y, σ_x, σ_y)
     # entropy_HD is the entropy summed over all/NN localizations
     ent_HD = DC.entropy_HD(σ_x, σ_y)
-    println("N = $N, ub_entropy = $ub_ent, entropy_HD = $ent_HD")
+    # ub_entropy is an upper bound on the entropy based on NN
+    ub_ent = DC.ub_entropy(x, y, σ_x, σ_y)
+    println("2D: N = $N, entropy_HD = $ent_HD, ub_entropy = $ub_ent")
     @test ent_HD < ub_ent
+
+    # --- entropy 3D ---
+    x3 = [e.x for e in smld_noisy3.emitters]
+    y3 = [e.y for e in smld_noisy3.emitters]
+    z3 = [e.z for e in smld_noisy3.emitters]
+    σ_x3 = [e.σ_x for e in smld_noisy3.emitters]
+    σ_y3 = [e.σ_y for e in smld_noisy3.emitters]
+    σ_z3 = [e.σ_z for e in smld_noisy3.emitters]
+    N3 = length(smld_noisy.emitters)
+    # entropy_HD is the entropy summed over all/NN localizations
+    ent_HD3 = DC.entropy_HD(σ_x3, σ_y3, σ_z3)
+    # ub_entropy is an upper bound on the entropy based on NN
+    ub_ent3 = DC.ub_entropy(x3, y3, z3, σ_x3, σ_y3, σ_z3)
+    println("3D: N = $N3, entropy_HD = $ent_HD3, ub_entropy = $ub_ent3")
+    @test ent_HD3 < ub_ent3
 
     # --- findshift 2D ---
     # findshift 2D identity test
