@@ -221,7 +221,7 @@ function ub_entropy(x::Vector{T}, y::Vector{T},
     σ_x::Vector{T}, σ_y::Vector{T}; maxn::Int = 200
 ) where {T<:Real}
 
-    ub_entropy(cat(dims = 2, x, y), cat(dims = 2, σ_x, σ_y); maxn)
+    ub_entropy(cat(dims = 2, x, y), cat(dims = 2, σ_x, σ_y); maxn = maxn)
 
 end
 
@@ -237,6 +237,6 @@ function ub_entropy(x::Vector{T}, y::Vector{T}, z::Vector{T},
     σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T}; maxn::Int = 200
 ) where {T<:Real}
 
-    ub_entropy(cat(dims = 2, x, y, z), cat(dims = 2, σ_x, σ_y, σ_z); maxn)
+    ub_entropy(cat(dims=2, x, y, z), cat(dims=2, σ_x, σ_y, σ_z); maxn = maxn)
 
 end

@@ -132,11 +132,7 @@ function costfun(θ, data_uncorrected, se, framenum::Vector{Int}, maxn::Int, int
         data[nn, ii] = correctdrift(data_uncorrected[nn, ii], framenum[ii], intra.dm[nn])
     end
 
-    x = data[1, :]
-    y = data[2, :]
-    sx = se[1, :]
-    sy = se[2, :]
-    cost = ub_entropy(x, y, sx, sy; maxn = maxn)
+    cost = ub_entropy(transpose(data), transpose(se); maxn = maxn)
     
     return cost
 end
@@ -165,11 +161,7 @@ function costfun(θ, data_uncorrected, se, maxn::Int, inter::InterShift)
         data[nn, ii] = correctdrift(data_uncorrected[nn, ii], inter, nn)
     end
 
-    x = data[1, :]
-    y = data[2, :]
-    sx = se[1, :]
-    sy = se[2, :]
-    cost = ub_entropy(x, y, sx, sy; maxn = maxn)
+    cost = ub_entropy(transpose(data), transpose(se); maxn = maxn)
 
     return cost
 end
