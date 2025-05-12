@@ -4,22 +4,22 @@ Main interface for drift correction (DC).  This algorithm consists of an
     coordinates are returned as output.  All distance units are in μm.
 
 # Fields
-- smld:        structure containing (X, Y) or (X, Y, Z) localization
-               coordinates (μm)
-- intramodel:  model for intra-dataset DC:
-               {"Polynomial", "LegendrePoly"} = "Polynomial"
-- cost_fun:   intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
+- smld:           structure containing (X, Y) or (X, Y, Z) localization
+                  coordinates (μm)
+- intramodel:     model for intra-dataset DC:
+                  {"Polynomial", "LegendrePoly"} = "Polynomial"
+- cost_fun:       intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
 - cost_fun_intra: intra cost function override: ""
 - cost_fun_inter: inter cost function override: ""
-- degree:      degree for polynomial intra-dataset DC = 2
-- d_cutoff:    distance cutoff (μm) = 0.01 [Kdtree cost function]
-- maxn:        maximum number of neighbors considered = 200
-               [Entropy cost function]
-- histbinsize: histogram bin size for inter-datset cross-correlation
-               correction (μm) = -1.0 [< 0 means no correction]
-- verbose:     flag for more output = 0
+- degree:         degree for polynomial intra-dataset DC = 2
+- d_cutoff:       distance cutoff (μm) = 0.01 [Kdtree cost function]
+- maxn:           maximum number of neighbors considered = 200
+                  [Entropy cost function]
+- histbinsize:    histogram bin size for inter-datset cross-correlation
+                  correction (μm) = -1.0 [< 0 means no correction]
+- verbose:        flag for more output = 0
 # Output
-- smd_found:   structure containing drift corrected coordinates (μm)
+- smld_found:     structure containing drift corrected coordinates (μm)
 """
 function driftcorrect(smld::SMLD;
     intramodel::String = "Polynomial",
@@ -88,7 +88,7 @@ function driftcorrect(smld::SMLD;
                    d_cutoff, maxn, histbinsize)
     end
     
-    smd_found = correctdrift(smld, driftmodel)
+    smld_found = correctdrift(smld, driftmodel)
 
-    return smd_found
+    return smld_found
 end

@@ -20,6 +20,7 @@ include("intrainter.jl")
 include("polynomial.jl")
 include("utilities.jl")
 
-#export driftcorrect
+export driftcorrect
+export filter_emitters
 
 end
