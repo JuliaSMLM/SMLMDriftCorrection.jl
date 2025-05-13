@@ -39,7 +39,7 @@ smld_true, smld_model, smld_noisy = simulate(;
     camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
 )
 
-## Set up the drift model
+## Set up a degree 2 polynomial drift model with normalized random coefficients
 drift_true = DC.Polynomial(smld_noisy; degree=2, initialize="random", rscale=0.1)
 
 # Produce drifted data ...

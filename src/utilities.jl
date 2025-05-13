@@ -22,5 +22,5 @@ end
 Determines from the type of the input smld if the data is 2D or 3D.
 """
 function nDims(smld::SMLD)
-   return occursin("2D", string(typeof(smld))) ? 2 : 3
+    return occursin("2D", string(typeof(smld))) ? 2 : 3
 end
