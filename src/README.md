@@ -11,7 +11,13 @@ Drift correction.  The main algorithm (*driftcorrect*) consists of an
 intra-dataset portion and an inter-dataset portion.  The drift corrected
 coordinates are returned as output.  All distance units are in μm.
 
-## Quick Start
+## Installation
+```julia
+using Pkg
+Pkg.add("SMLMDriftCorrection")
+```
+
+## Basic Example
 
 ```julia
 using SMLMSim
@@ -108,30 +114,36 @@ function driftcorrect(smld::SMLD;
     histbinsize::AbstractFloat = -1.0,
     verbose::Int = 0)
 
-# Fields
+### Input
 - smld:           structure containing (X, Y) or (X, Y, Z) localization
                   coordinates (μm) - see SMLMData
+### Optional Keyword Input Fields
 - intramodel:     model for intra-dataset DC:
                   {"Polynomial", "LegendrePoly"} = "Polynomial"
 - cost_fun:       intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
 - cost_fun_intra: intra cost function override: ""
 - cost_fun_inter: inter cost function override: ""
-- degree:         degree for polynomial intra-dataset DC = 2
+- degree:         degree for polynomial intra-dataset drift correction = 2
 - d_cutoff:       distance cutoff (μm) = 0.01 [Kdtree cost function]
 - maxn:           maximum number of neighbors considered = 200
                   [Entropy cost function]
 - histbinsize:    histogram bin size for inter-datset cross-correlation
                   correction (μm) = -1.0 [< 0 means no correction]
 - verbose:        flag for more output = 0
-# Output
+### Output
 - smld_found:     structure containing drift corrected coordinates (μm)
-"""
 
-## Installation
-```julia
-using Pkg
-Pkg.add(:SMLMDriftCorrection)
-```
+## Other Entry Points into SMLMDriftCorrect
+- ***Polynomial*** define data type for intra-dataset drifts, which will be a
+                   collection of univariate polynomials of a given degree
+	           indexed by each coordinate dimension and frame number
+- ***applydrift*** apply drift to simulated data
+- ***crosscorr***  computes the cross-correlation between 2 histogram images
+- ***findshift***  computes histogram image shift between 2 SMLDs representing
+                   locaiizations via cross-correlation
+- ***histImage***  produces a histogram image from the localization coordinates
+- ***entropy_HD*** is the entropy summed over all/nearest neighbor localizations
+- ***ub_entropy*** is an upper bound on the entropy based on nearest neighbors
 
 ## Algorithms
 
@@ -146,17 +158,20 @@ datasets are drift corrected in sequence against the first dataset.  Here,
 "dataset" means a segment or collection of movie frames.  Several datasets make
 up a full movie.
 
-- Kdtree: cost function is simply the thresholded sum of the nearest neighbor
-  distances for all the predicted emitter positions in a dataset, either with
-  respect to itself for intra-dataset drift correction (noting that different
-  sets of localizations over time are coming from the blinking fluorophores),
-  or the first dataset for inter-dataset drift correction.  The fast nearest
-  neighbor search is done using a k-dimensional tree data structure to
-  partition the image.  See [Wester2021].
-- Entropy; cost function (Drift at Minimum Entropy as described in
-  [Cnossen2021].
-- histbinsize > 0: performs cross correlation between two histogram images
-  formed from dataset sum images with the specified histogram bin size.
+- **Kdtree**: cost function is simply the thresholded sum of the nearest
+  neighbor distances for all the predicted emitter positions in a dataset,
+  either with respect to itself for intra-dataset drift correction (noting that
+  different sets of localizations over time are coming from the blinking
+  fluorophores), or the first dataset for inter-dataset drift correction.  The
+  fast nearest neighbor search is done using a k-dimensional tree data
+  structure to partition the image.  See [Wester2021].
+- **Entropy**; cost function (Drift at Minimum Entropy as described in
+  [Cnossen2021].  The cost is the upper bound on the statistical entropy of a
+  Gaussian Mixture Model characterizing the sum of the localization probability
+  distributions.
+- **histbinsize > 0**: performs cross correlation between two histogram images
+  formed from dataset sum images with the specified histogram bin size.  This
+  is performed for inter-dataset drift correction only.
 
 ## References
 

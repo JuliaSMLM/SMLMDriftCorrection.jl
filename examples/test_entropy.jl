@@ -52,13 +52,13 @@ s1 = Float32.(range(-1,1, step = .01))
 sigma_scan1 = zeros(length(s1))
 hd1 = zeros(length(s1))
 
-@time for i in 1:length(s1)
+@time for i in eachindex(s1)
     sx = σ_x .+ 100f0*s[i]
     sy = sx
     sigma_scan1[i] = DC.ub_entropy(x, y, sx, sy)
 end
 
-@time for i in 1:length(s1)
+@time for i in eachindex(s1)
     sx = σ_x .+ 100f0*s[i]
     sy = sx
     hd1[i] = DC.entropy_HD(sx, sy)

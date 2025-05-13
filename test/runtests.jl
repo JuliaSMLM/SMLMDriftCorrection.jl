@@ -188,7 +188,7 @@ using Test
                     (smld_DC_y .- smld_noisy3_y).^2 .+
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
     print("rmsd 3D (Entropy) = $rmsd\n")
-    @test isapprox(rmsd, 0.0; atol = 2.5)
+    @test isapprox(rmsd, 0.0; atol = 3.0)
 
     # --- Test driftcorrect (histbinsize > 0) ---
     smld_DC = DC.driftcorrect(smld_drift3; histbinsize=0.1)

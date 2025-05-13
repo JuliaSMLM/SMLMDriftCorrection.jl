@@ -32,7 +32,7 @@ Apply x- and y-drift to the data in the smld structure.
 function applydrift!(smld::SMLD, dm::AbstractIntraInter)
     n_dims = nDims(smld)
 
-    for nn = 1:length(smld.emitters)
+    for nn in eachindex(smld.emitters)
         smld.emitters[nn].x = applydrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
         smld.emitters[nn].x = applydrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
 
@@ -68,7 +68,7 @@ end
 function correctdrift!(smld::SMLD, dm::AbstractIntraInter)
     n_dims = nDims(smld)
 
-    for nn = 1:length(smld.emitters)
+    for nn in eachindex(smld.emitters)
         smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, smld.emitters[nn].frame, dm.intra[smld.emitters[nn].dataset].dm[1])
         smld.emitters[nn].x = correctdrift(smld.emitters[nn].x, dm.inter[smld.emitters[nn].dataset], 1)
 
@@ -96,7 +96,7 @@ function correctdrift!(smld::SMLD, shift::Vector{Float64})
     #println("correctdrift!: shift = $shift")
     #smld.x .-= shift[1]
     #smld.y .-= shift[2]
-    for nn = 1 : length(smld.emitters)
+    for nn in eachindex(smld.emitters)
         smld.emitters[nn].x -= shift[1]
         smld.emitters[nn].y -= shift[2]
         if n_dims == 3
@@ -241,7 +241,7 @@ function findinter!(dm::AbstractIntraInter,
     # get corrected coords for reference datasets
     # (in other words, make a sum image)
     idx2 = zeros(Bool, length(smld.emitters))
-    for nn=1:length(dataset2)
+    for nn in eachindex(dataset2)
 #       idx2 = idx2 .| (smld.emitters.dataset .== dataset2[nn])
         idx2 = idx2 .| ([e.dataset for e in smld.emitters] .== dataset2[nn])
     end   
@@ -268,7 +268,7 @@ function findinter!(dm::AbstractIntraInter,
         correctdrift!(smld1, shift)
 #       smld.x[idx1] = smld1.x
 #       smld.y[idx1] = smld1.y
-        for nn = 1:length(idx1)
+        for nn in eachindex(idx1)
             smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
             smld.emitters[idx1[nn]].y = smld1.emitters[nn].y
             if n_dims == 3

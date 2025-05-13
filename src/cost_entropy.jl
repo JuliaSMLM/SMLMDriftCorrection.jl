@@ -83,7 +83,7 @@ function entropy1(idxs::Vector{Vector{Int}}, x::Vector{T}, y::Vector{T},
     r2 = Vector{T}(undef, 2)
     σ2 = Vector{T}(undef, 2)
 
-    for i = 1:length(x)
+    for i in eachindex(x)
         idx = idxs[i]
         r1 .= [x[i], y[i]]
         σ1 .= [σ_x[i], σ_y[i]]
@@ -143,7 +143,7 @@ function entropy1(idxs::Vector{Vector{Int}}, r::Matrix{T},
     σ2 = Vector{T}(undef, K)
 
     if K == 2
-        for i = 1:length(x)
+        for i in eachindex(x)
             idx = idxs[i]
             r1 .= [x[i], y[i]]
             σ1 .= [σ_x[i], σ_y[i]]
@@ -157,7 +157,7 @@ function entropy1(idxs::Vector{Vector{Int}}, r::Matrix{T},
             out += logsumexp(-kldiv) - log(T(length(kldiv)))
         end
     else # K == 3
-        for i = 1:length(x)
+        for i in eachindex(x)
             idx = idxs[i]
             r1 .= [x[i], y[i], z[i]]
             σ1 .= [σ_x[i], σ_y[i], σ_z[i]]
