@@ -8,8 +8,9 @@
 ## Overview
 
 Drift correction.  The main algorithm (*driftcorrect*) consists of an
-intra-dataset portion and an inter-dataset portion.  The drift corrected
-coordinates are returned as output.  All distance units are in μm.
+intra-dataset portion and an inter-dataset portion (dataset refers to a
+collection or segment of movie frames).  The drift corrected coordinates are
+returned as output.  All distance units are in μm.
 
 ## Installation
 ```julia

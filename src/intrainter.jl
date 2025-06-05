@@ -27,7 +27,7 @@ function correctdrift(x::AbstractFloat, s::InterShift, dim::Int)
 end
 
 """
-Apply x- and y-drift to the data in the smld structure.
+Apply x-, y- and z-drift to the data in the smld structure.
 """
 function applydrift!(smld::SMLD, dm::AbstractIntraInter)
     n_dims = nDims(smld)
@@ -47,17 +47,22 @@ function applydrift!(smld::SMLD, dm::AbstractIntraInter)
 end
 
 """ 
-  applydrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter) -> SMLMData.Emitter2DFit
+applydrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter) ->
+  SMLMData.Emitter2DFit
 
-Applies a drift model to the Single-Molecule Localization Microscopy (SMLM) data and returns the drift-corrected data.
+Applies a drift model to the Single-Molecule Localization Microscopy (SMLM)
+data and returns the drift-corrected data.
 
 # Arguments
-- `smld::SMLMData.Emitter2DFit`: The SMLM data structure containing the original localization data.
-- `driftmodel::AbstractIntraInter`: The drift model to be applied to the SMLM data. This model should account for both intra- and inter-frame drift corrections.
+- `smld::SMLMData.Emitter2DFit`: The SMLM data structure containing the
+  original localization data.
+- `driftmodel::AbstractIntraInter`: The drift model to be applied to the SMLM
+  data.  This model should account for both intra- and inter-frame drift
+  corrections.
 
 # Returns
-- `SMLMData.Emitter2DFit`: A new SMLM data structure with the drift corrections applied.
-
+- `SMLMData.Emitter2DFit`: A new SMLM data structure with the drift corrections
+  applied.
 """
 function applydrift(smld::SMLD, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
