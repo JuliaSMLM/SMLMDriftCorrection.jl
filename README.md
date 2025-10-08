@@ -72,7 +72,7 @@ smld = ...
 smld_DC = driftcorrect(smld)
 ```
 
-### SMITE Results,mat File
+### SMITE Results.mat File
 ```julia
 using SMLMData
 using SMLMDriftCorrection
