@@ -5,76 +5,78 @@ using SMLMDriftCorrection
 DC = SMLMDriftCorrection
 using SMLMData
 using SMLMSim
-using GLMakie
-#using PlotlyJS
-using Statistics
+using CairoMakie
+#using GLMakie
+#using Statistics
 
 # make an Nmer dataset
-γ = 1e5 # Fluorophore emission rate
-q = [0 50
-   5e-2 0] # Fluorophore blinking rates
-n = 6 # Nmer rank
-d = 0.05 # Nmer diameter
-#ρ = 0.5 # density of Nmers 
-ρ = 0.05 # density of Nmers # make smaller for entropy cost function
-xsize = 25.6 # image size
-ysize = 25.6
-nframes = 2000 # number of frames
-framerate = 50.0 # framerate
-σ_psf = .13 # psf sigma used for uncertainty calcs
-minphotons = 500 # minimum number of photons per frame accepted
-
-# Simulation sequence
-f = SMLMSim.GenericFluor(γ, q)
-pattern = SMLMSim.Nmer2D(; n, d)
-smd_true = SMLMSim.uniform2D(ρ, pattern, xsize, ysize)
-smd_model = SMLMSim.kineticmodel(smd_true, f, nframes, framerate; ndatasets = 10, minphotons = minphotons)
-smd_noisy = SMLMSim.noise(smd_model, σ_psf)
+# Simulation parameters use physical units
+# smld structures are in units of pixels and frames
+println("original noisy data ...")
+smld_true, smld_model, smld_noisy = simulate(;
+    ρ=1.0,                # emitters per μm²
+    σ_psf=0.13,           # PSF width in μm (130nm)
+    minphotons=50,        # minimum photons for detection
+    ndatasets=10,         # number of independent datasets
+    nframes=1000,         # frames per dataset
+    framerate=50.0,       # frames per second
+    pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
+    molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
+    camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
+)
 
 ## Setup drift model 
-drift_true = DC.Polynomial(smd_noisy; degree = 2, 
-               initialize = "random", rscale=0.1)
-smd_drift = DC.applydrift(smd_noisy, drift_true)
+drift_true = DC.Polynomial(smld_noisy; degree=2, initialize="random",
+                                       rscale=0.1)
+println("drifted data ...")
+smld_drift = DC.applydrift(smld_noisy, drift_true)
 
 ## Correct Drift (Kdtree cost function)
-smld_correctedKd = DC.driftcorrect(smd_drift; verbose = 1)
-
-#plt1=PlotlyJS.plot(scattergl(x=smd_noisy.x, y=smd_noisy.y, mode="markers"), Layout(title="original"))
-#display(plt1)
-
-#plt2=PlotlyJS.plot(scattergl(x=smd_drift.x, y=smd_drift.y, mode="markers"), Layout(title="drifted"))
-#display(plt2)
-
-#plt3=PlotlyJS.plot(scattergl(x=smld_correctedKd.x, y=smld_correctedKd.y, mode="markers"), Layout(title="cost=Kdtree"))
-#display(plt3)
+println("cost=Kdtree")
+smld_correctedKd = DC.driftcorrect(smld_drift; verbose=1)
 
 ## Correct drift (Entropy cost function --- slow compared to Kdtree)
-smld_correctedE = DC.driftcorrect(smd_drift; cost_fun="Entropy", maxn=100, verbose=1)
+println("cost=Entropy")
+smld_correctedE = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100,
+                                              verbose=1)
 
-#plt4=PlotlyJS.plot(scattergl(x=smld_correctedE.x, y=smld_correctedE.y, mode="markers"), Layout(title="cost=Entropy"))
-#display(plt4)
+## Correct drift (Entropy cost function --- slow compared to
+## Kdtree + findshift2D (inter-datset pair correlation)
+println("cost=Kdtree + findshift2D")
+smld_correctedECC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100,
+                                    histbinsize=0.05, verbose=1)
 
-## Correct drift (Entropy cost function --- slow compared to Kdtree + findshift2D (inter-datset pair correlation)
-smld_correctedECC = DC.driftcorrect(smd_drift; cost_fun="Entropy", maxn=100, histbinsize=0.05, verbose=1)
+println("cost=Kd/Entr + findshift2D")
+smld_correctedKCC = DC.driftcorrect(smld_drift; cost_fun_intra="Kdtree",
+    cost_fun_inter="Entropy", maxn=100, histbinsize=0.05, verbose=1)
 
-#plt5=PlotlyJS.plot(scattergl(x=smld_correctedECC.x, y=smld_correctedECC.y, mode="markers"), Layout(title="cost=Entropy + findshift2D"))
-#display(plt5)
+smld_noisy_x = [e.x for e in smld_noisy.emitters]
+smld_noisy_y = [e.y for e in smld_noisy.emitters]
+smld_drift_x = [e.x for e in smld_drift.emitters]
+smld_drift_y = [e.y for e in smld_drift.emitters]
+smld_correctedKd_x = [e.x for e in smld_correctedKd.emitters]
+smld_correctedKd_y = [e.y for e in smld_correctedKd.emitters]
+smld_correctedE_x = [e.x for e in smld_correctedE.emitters]
+smld_correctedE_y = [e.y for e in smld_correctedE.emitters]
+smld_correctedECC_x = [e.x for e in smld_correctedECC.emitters]
+smld_correctedECC_y = [e.y for e in smld_correctedECC.emitters]
+smld_correctedKCC_x = [e.x for e in smld_correctedKCC.emitters]
+smld_correctedKCC_y = [e.y for e in smld_correctedKCC.emitters]
 
-smld_correctedKCC = DC.driftcorrect(smd_drift; cost_fun_intra="Kdtree", cost_fun_inter="Entropy", maxn=100, histbinsize=0.05, verbose=1)
 
 f = Figure()
-ax1 = Axis(f[1, 1], aspect=DataAspect(), title="original")
-scatter!(smd_noisy.x, smd_noisy.y; markersize=5)
-ax2 = Axis(f[1, 2], aspect=DataAspect(), title="drifted")
-scatter!(smd_drift.x, smd_drift.y; markersize=5)
+ax1 = Axis(f[1, 1], aspect=DataAspect(), title="original noisy data")
+scatter!(smld_noisy_x, smld_noisy_y; markersize=5)
+ax2 = Axis(f[1, 2], aspect=DataAspect(), title="drifted data")
+scatter!(smld_drift_x, smld_drift_y; markersize=5)
 ax3 = Axis(f[1, 3], aspect=DataAspect(), title="cost=Kdtree + findshift2D")
-scatter!(smld_correctedKCC.x, smld_correctedKCC.y; markersize=5)
+scatter!(smld_correctedKCC_x, smld_correctedKCC_y; markersize=5)
 ax4 = Axis(f[2, 1], aspect=DataAspect(), title="cost=Kdtree")
-scatter!(smld_correctedKd.x, smld_correctedKd.y; markersize=5)
+scatter!(smld_correctedKd_x, smld_correctedKd_y; markersize=5)
 ax5 = Axis(f[2, 2], aspect=DataAspect(), title="cost=Entropy")
-scatter!(smld_correctedE.x, smld_correctedE.y; markersize=5)
-ax6 = Axis(f[2, 3], aspect=DataAspect(), title="cost=Entropy + findshift2D")
-scatter!(smld_correctedECC.x, smld_correctedECC.y; markersize=5)
+scatter!(smld_correctedE_x, smld_correctedE_y; markersize=5)
+ax6 = Axis(f[2, 3], aspect=DataAspect(), title="cost=Kd/Entr + findshift2D")
+scatter!(smld_correctedECC_x, smld_correctedECC_y; markersize=5)
 linkxaxes!(ax1, ax2)
 linkxaxes!(ax1, ax3)
 linkxaxes!(ax1, ax4)

@@ -1,20 +1,26 @@
 module SMLMDriftCorrection
 
-using SMLMData
-using Optim
+#using Revise
+#using Debugger
+using FourierTools
 using NearestNeighbors
-using Zygote
+using Optim
+using SMLMData
 using Statistics
 using StatsFuns
-using FourierTools
+#using Zygote
 
 include("typedefs.jl")
+include("cost_entropy.jl")
+include("costfuns.jl")
+#include("costs.jl")
+include("crosscorr.jl")
+include("interface.jl")
 include("intrainter.jl")
 include("polynomial.jl")
-include("interface.jl")
-#include("costs.jl")
-include("costfuns.jl")
-include("cost_entropy.jl")
-include("crosscorr.jl")
+include("utilities.jl")
+
+export driftcorrect
+export filter_emitters
 
 end

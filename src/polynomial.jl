@@ -37,7 +37,7 @@ Initialize polynomials.
 - degree:     polymomial degree = 2
 - initialize: string indicating possible initializations
               ("zeros" [default], "random", "continuous")
-- rscale:     = scale factor for normalized random numbers = 0.1 px
+- rscale:     = scale factor for normalized random numbers = 0.01 μm
 """
 mutable struct Polynomial <: AbstractIntraInter
     ndatasets::Int
@@ -45,7 +45,7 @@ mutable struct Polynomial <: AbstractIntraInter
     inter::Vector{InterShift}
 end
 function Polynomial(ndims::Int, ndatasets::Int, nframes::Int; 
-            degree=2, initialize::String="zeros", rscale=0.1)
+            degree=2, initialize::String="zeros", rscale=0.01)
     intra=Vector{IntraPolynomial}(undef,ndatasets)
     inter=Vector{InterShift}(undef,ndatasets)
 
@@ -75,12 +75,17 @@ function Polynomial(ndims::Int, ndatasets::Int, nframes::Int;
     return Polynomial(ndatasets,intra,inter)
 end
 
-function Polynomial(smld::SMLMData.SMLD2D; degree::Int=2, initialize::String="zeros",rscale=0.1)
-    return Polynomial(2,smld.ndatasets,smld.nframes;degree=degree, initialize=initialize,rscale=rscale)
+#function Polynomial(smld::SMLD{T, E}; degree::Int=2, initialize::String="zeros",rscale=0.1)
+#    where {T<:AbstractFloat, E<:Emitter2DFit{T}}
+#    return Polynomial(2,smld.n_datasets,smld.n_frames;degree=degree, initialize=initialize,rscale=rscale)
+#end
+
+function Polynomial(smld::SMLD; degree::Int=2, initialize::String="zeros",rscale=0.1)
+    return Polynomial(2,smld.n_datasets,smld.n_frames;degree=degree, initialize=initialize,rscale=rscale)
 end
 
-function Polynomial(smld::SMLMData.SMLD3D; degree::Int=2, initialize::String="zeros",rscale=0.1)
-    return Polynomial(3,smld.ndatasets,smld.nframes;degree=degree, initialize=initialize,rscale=rscale)
+function Polynomial(smld::BasicSMLD{Float64, Emitter3DFit{Float64}}; degree::Int=2, initialize::String="zeros",rscale=0.1)
+    return Polynomial(3,smld.n_datasets,smld.n_frames;degree=degree, initialize=initialize,rscale=rscale)
 end
 
 function applydrift(x::AbstractFloat,framenum::Int,p::Polynomial1D)
