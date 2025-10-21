@@ -1,6 +1,6 @@
 module SMLMDriftCorrection
 
-using Revise
+#using Revise
 #using Debugger
 using FourierTools
 using NearestNeighbors
