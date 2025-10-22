@@ -8,15 +8,20 @@ using SMLMSim
 # make an Nmer dataset
 # Simulation parameters use physical units
 # smld structures are in units of pixels and frames
-smld_true, smld_model, smld_noisy = simulate(;
-    ρ=0.1,                # emitters per μm²
-    σ_psf=0.13,           # PSF width in μm (130nm)
-    minphotons=50,        # minimum photons for detection
-    ndatasets=10,         # number of independent datasets
-    nframes=1000,         # frames per dataset
-    framerate=50.0,       # frames per second
+params_2d = StaticSMLMParams(
+    2.0,      # density (ρ): emitters per μm²
+    0.13,     # σ_psf: PSF width in μm (130nm)
+    50,       # minphotons: minimum photons for detection
+    10,       # ndatasets: number of independent datasets
+    1000,     # nframes: frames per dataset
+    50.0,     # framerate: frames per second
+    2,        # ndims: 2D
+    [0.0, 1.0]  # zrange: z-range (not used for 2D)
+)
+smld_true, smld_model, smld_noisy = simulate(
+    params_2d;
     pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
-    molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
+    molecule=GenericFluor(; photons=5000.0, k_on=0.001, k_off=50.0), # 1/s
     camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
 )
 # Generated blinking data: 2D positions and uncertainties.
