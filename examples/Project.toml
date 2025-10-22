@@ -1,5 +1,6 @@
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 PlotlyJS = "f0f68f2c-4968-5e81-91da-67840de0976a"

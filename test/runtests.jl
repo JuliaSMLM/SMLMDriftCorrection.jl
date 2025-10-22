@@ -10,7 +10,7 @@ using Test
     # Simulation parameters use physical units
     # smld structures are in units of pixels and frames
     params_2d = StaticSMLMParams(
-        2.0,      # density (ρ): emitters per μm² (increased for more localizations)
+        2.0,      # density (ρ): emitters per μm²
         0.13,     # σ_psf: PSF width in μm (130nm)
         50,       # minphotons: minimum photons for detection
         10,       # ndatasets: number of independent datasets
@@ -22,13 +22,13 @@ using Test
     smld_true, smld_model, smld_noisy = simulate(
         params_2d;
         pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
-        molecule=GenericFluor(; photons=5000.0, k_on=0.001, k_off=50.0),  # rates in 1/s
+        molecule=GenericFluor(; photons=5000.0, k_on=0.001, k_off=50.0), # 1/s
         camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
     )
 
     # make a 3D Nmer dataset
     params_3d = StaticSMLMParams(
-        2.0,      # density (ρ): emitters per μm² (increased for more localizations)
+        2.0,      # density (ρ): emitters per μm²
         0.13,     # σ_psf: PSF width in μm (130nm)
         50,       # minphotons: minimum photons for detection
         10,       # ndatasets: number of independent datasets
@@ -40,7 +40,7 @@ using Test
     smld_true3, smld_model3, smld_noisy3 = simulate(
         params_3d;
         pattern=Nmer3D(n=6, d=0.2),  # hexamer with 200nm diameter
-        molecule=GenericFluor(; photons=5000.0, k_on=0.001, k_off=50.0),  # rates in 1/s
+        molecule=GenericFluor(; photons=5000.0, k_on=0.001, k_off=50.0), # 1/s
         camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
     )
 
