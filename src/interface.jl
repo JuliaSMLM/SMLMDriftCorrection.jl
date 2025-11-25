@@ -8,7 +8,7 @@ Main interface for drift correction (DC).  This algorithm consists of an
                   coordinates (μm)
 - intramodel:     model for intra-dataset DC:
                   {"Polynomial", "LegendrePoly"} = "Polynomial"
-- cost_fun:       intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
+- cost_fun:       intra/inter cost function: {"Kdtree", "Entropy"} = "Entropy"
 - cost_fun_intra: intra cost function override: ""
 - cost_fun_inter: inter cost function override: ""
 - degree:         degree for polynomial intra-dataset DC = 2
@@ -23,7 +23,7 @@ Main interface for drift correction (DC).  This algorithm consists of an
 """
 function driftcorrect(smld::SMLD;
     intramodel::String = "Polynomial",
-    cost_fun::String = "Kdtree",
+    cost_fun::String = "Entropy",
     cost_fun_intra::String = "",
     cost_fun_inter::String = "",
     degree::Int = 2,
