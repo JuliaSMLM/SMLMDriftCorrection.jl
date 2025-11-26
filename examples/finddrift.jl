@@ -46,9 +46,9 @@ smld_correctedE = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100,
     verbose=1)
 
 ## Correct drift (Entropy cost function --- slow compared to
-## Kdtree + findshift2D (inter-datset pair correlation)
-println("cost=Kdtree + findshift2D")
-smld_correctedECC = DC.driftcorrect(smld_drift; cost_fun="Kdtree", maxn=100,
+## Kdtree) + findshift2D (inter-datset pair correlation)
+println("cost=Entropy + findshift2D")
+smld_correctedECC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100,
     histbinsize=0.05, verbose=1)
 
 println("cost=Kd/Entr + findshift2D")
