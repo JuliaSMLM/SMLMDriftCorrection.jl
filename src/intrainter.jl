@@ -172,10 +172,7 @@ function findintra!(intra::AbstractIntraDrift,
 
     rscale = 0.01
     nframes = smld.n_frames
-    for jj = 1:intra.ndims
-        degree = intra.dm[jj].degree
-        intra.dm[jj].coefficients = rscale * randn() ./ (nframes .^ (1:degree))
-    end
+    initialize_random!(intra, rscale, nframes)
 
     #convert all intra drift parameters to a single vector for optimization
     θ0 = Float64.(intra2theta(intra))

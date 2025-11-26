@@ -125,3 +125,14 @@ function theta2intra!(p::IntraPolynomial,θ::Vector{<:Real})
         p.dm[ii].coefficients[jj]=θ[jj+(ii-1)*degree]
     end
 end
+
+"""
+Initialize polynomial coefficients with random values.
+Called by findintra! before optimization.
+"""
+function initialize_random!(p::IntraPolynomial, rscale::Real, nframes::Int)
+    for jj = 1:p.ndims
+        degree = p.dm[jj].degree
+        p.dm[jj].coefficients = rscale * randn() ./ (nframes .^ (1:degree))
+    end
+end

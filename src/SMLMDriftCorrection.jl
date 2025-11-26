@@ -18,6 +18,7 @@ include("crosscorr.jl")
 include("interface.jl")
 include("intrainter.jl")
 include("polynomial.jl")
+include("legendre.jl")
 include("utilities.jl")
 
 export driftcorrect
