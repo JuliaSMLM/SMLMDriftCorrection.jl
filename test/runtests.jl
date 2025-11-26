@@ -130,13 +130,13 @@ using Test
     print("rmsd 2D [correctdrift] = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
-    # --- Test driftcorrect (K-d tree) ---
+    # --- Test driftcorrect (default: Entropy) ---
     smld_DC = DC.driftcorrect(smld_drift)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
-    print("rmsd 2D (K-d tree) = $rmsd\n")
+    print("rmsd 2D (default Entropy) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 5.0)  # Relaxed tolerance for new SMLMSim API
 
     # --- Test driftcorrect (Entropy) ---
@@ -178,7 +178,7 @@ using Test
     print("rmsd 3D [correctdrift] = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
-    # --- Test driftcorrect (K-d tree) ---
+    # --- Test driftcorrect (default: Entropy) ---
     smld_DC = DC.driftcorrect(smld_drift3)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
@@ -186,7 +186,7 @@ using Test
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy3_x).^2 .+
                     (smld_DC_y .- smld_noisy3_y).^2 .+
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
-    print("rmsd 3D (K-d tree) = $rmsd\n")
+    print("rmsd 3D (default Entropy) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 10.0)  # Relaxed tolerance for new SMLMSim API
 
     # --- Test driftcorrect (Entropy) ---

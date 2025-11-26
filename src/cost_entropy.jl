@@ -197,7 +197,11 @@ function ub_entropy(r::Matrix{T}, σ::Matrix{T}; maxn::Int = 200
     #println("Calculating KDTree...")
     data = transpose(r)
 
-    #print("KDTree: ") @time 
+    # Cap maxn at number of points - 1 to avoid knn error
+    nloc = size(r, 1)
+    maxn = min(maxn, nloc - 1)
+
+    #print("KDTree: ") @time
     kdtree = KDTree(data; leafsize=10)
     # true below so that results are sorted into increasing order of distance
     #print("knn: ") @time
