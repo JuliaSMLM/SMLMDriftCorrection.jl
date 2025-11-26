@@ -13,38 +13,43 @@ using CairoMakie
 # Simulation parameters use physical units
 # smld structures are in units of pixels and frames
 println("original noisy data ...")
-smld_true, smld_model, smld_noisy = simulate(;
-    ρ=1.0,                # emitters per μm²
-    σ_psf=0.13,           # PSF width in μm (130nm)
-    minphotons=50,        # minimum photons for detection
-    ndatasets=10,         # number of independent datasets
-    nframes=1000,         # frames per dataset
-    framerate=50.0,       # frames per second
+params_2d = StaticSMLMParams(
+    3.0,      # density (ρ): emitters per μm² (increased for more localizations)
+    0.13,     # σ_psf: PSF width in μm (130nm)
+    50,       # minphotons: minimum photons for detection
+    10,       # ndatasets: number of independent datasets
+    1000,     # nframes: frames per dataset
+    50.0,     # framerate: frames per second
+    2,        # ndims: 2D
+    [0.0, 1.0]  # zrange: z-range (not used for 2D)
+)
+smld_true, smld_model, smld_noisy = simulate(
+    params_2d;
     pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
-    molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
+    molecule=GenericFluor(; photons=5000.0, k_on=0.001, k_off=50.0),  # rates in 1/s
     camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
 )
 
 ## Setup drift model 
 drift_true = DC.Polynomial(smld_noisy; degree=2, initialize="random",
-                                       rscale=0.1)
+    rscale=0.1)
 println("drifted data ...")
 smld_drift = DC.applydrift(smld_noisy, drift_true)
 
 ## Correct Drift (Kdtree cost function)
 println("cost=Kdtree")
-smld_correctedKd = DC.driftcorrect(smld_drift; verbose=1)
+smld_correctedKd = DC.driftcorrect(smld_drift; cost_fun="Kdtree", verbose=1)
 
 ## Correct drift (Entropy cost function --- slow compared to Kdtree)
 println("cost=Entropy")
 smld_correctedE = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100,
-                                              verbose=1)
+    verbose=1)
 
 ## Correct drift (Entropy cost function --- slow compared to
 ## Kdtree + findshift2D (inter-datset pair correlation)
 println("cost=Kdtree + findshift2D")
-smld_correctedECC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100,
-                                    histbinsize=0.05, verbose=1)
+smld_correctedECC = DC.driftcorrect(smld_drift; cost_fun="Kdtree", maxn=100,
+    histbinsize=0.05, verbose=1)
 
 println("cost=Kd/Entr + findshift2D")
 smld_correctedKCC = DC.driftcorrect(smld_drift; cost_fun_intra="Kdtree",
