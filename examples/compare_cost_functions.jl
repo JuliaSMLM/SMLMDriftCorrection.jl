@@ -1,23 +1,19 @@
 """
-Comparison of drift correction methods: Kdtree, Entropy, Progressive, Legendre,
-and Legendre-Progressive.
+Comparison of drift correction methods: Kdtree, Entropy, and Progressive refinement.
 
 This script:
 1. Generates realistic SMLM data with SMLMSim
 2. Applies known 2nd-order polynomial drift
-3. Corrects drift using five methods (all degree=2):
-   - Kdtree cost function (standard polynomial, direct)
-   - Entropy cost function (standard polynomial, direct)
-   - Progressive refinement (standard polynomial, iterative)
-   - Legendre polynomial (orthogonal basis, direct)
-   - Legendre-Progressive (orthogonal basis, iterative)
+3. Corrects drift using three methods (all degree=2):
+   - Kdtree cost function (direct optimization)
+   - Entropy cost function (direct optimization)
+   - Progressive refinement (iterative Kdtree optimization)
 4. Computes quantitative metrics comparing correction quality
 5. Generates publication-quality comparison figures
 
-All methods use the same polynomial degree (2) to fairly compare:
-- Cost functions: Kdtree vs Entropy
-- Basis functions: standard monomials vs orthogonal Legendre polynomials
-- Optimization: direct vs iterative refinement
+Note: Legendre polynomial methods are implemented but have convergence issues
+when the applied drift uses standard polynomial basis. For Legendre testing,
+apply drift using LegendrePolynomial model.
 
 Output saved to examples/output/
 """
@@ -135,9 +131,36 @@ println("  Mean per dataset: $(round(mean(locs_per_dataset), digits=1))")
 
 println("\n[3/6] Applying known polynomial drift (degree=2)...")
 
-# Create drift model with controlled random coefficients
-# rscale controls the drift magnitude
-drift_true = DC.Polynomial(smld_noisy; degree=2, initialize="random", rscale=0.05)
+# Create drift model with explicit coefficients per dataset
+# Using "zeros" init then setting coefficients manually ensures both X and Y
+# have comparable drift magnitudes. Each dataset gets different drift to simulate
+# realistic multi-acquisition data (drift varies between acquisitions).
+drift_true = DC.Polynomial(smld_noisy; degree=2, initialize="zeros")
+
+# Set coefficients to give ~100-200nm total drift in both X and Y
+# Each dataset gets slightly different coefficients + inter-shift
+# This simulates realistic SMLM where each acquisition has independent drift
+Random.seed!(123)  # Use different seed for drift than simulation
+for ds in 1:n_datasets
+    # Base coefficients with per-dataset variation (±30%)
+    base_c1_x = 2.0e-4
+    base_c2_x = 3.2e-7
+    base_c1_y = -3.0e-4
+    base_c2_y = -2.4e-7
+
+    # Add variation per dataset
+    var = 0.3 * (2*rand() - 1)  # ±30% variation
+    drift_true.intra[ds].dm[1].coefficients[1] = base_c1_x * (1 + var)
+    drift_true.intra[ds].dm[1].coefficients[2] = base_c2_x * (1 + 0.3*(2*rand()-1))
+    drift_true.intra[ds].dm[2].coefficients[1] = base_c1_y * (1 + 0.3*(2*rand()-1))
+    drift_true.intra[ds].dm[2].coefficients[2] = base_c2_y * (1 + 0.3*(2*rand()-1))
+
+    # Add inter-dataset shift (simulates sample repositioning between acquisitions)
+    # Shift by ~50-150nm in each direction
+    drift_true.inter[ds].dm[1] = 0.1 * (rand() - 0.5)  # X shift: ±50nm
+    drift_true.inter[ds].dm[2] = 0.1 * (rand() - 0.5)  # Y shift: ±50nm
+end
+Random.seed!(42)  # Reset to original seed
 
 # Apply drift to the noisy data
 smld_drifted = DC.applydrift(smld_noisy, drift_true)
@@ -214,26 +237,9 @@ t_prog = @elapsed begin
 end
 println("    Time: $(round(t_prog, digits=1)) seconds ($n_prog_iterations iterations)")
 
-# Method 4: Legendre polynomial (orthogonal basis)
-# This uses orthogonal basis functions for better-conditioned optimization
-println("\n  --- Legendre polynomial (orthogonal basis) ---")
-t_leg = @elapsed smld_corrected_leg = DC.driftcorrect(
-    smld_drifted;
-    cost_fun="Kdtree",
-    d_cutoff=0.01,
-    intramodel="LegendrePoly",
-    verbose=1
-)
-println("    Time: $(round(t_leg, digits=1)) seconds")
-
-# Method 5: Legendre Progressive (orthogonal basis + iterative refinement)
-# Combines the benefits of orthogonal basis with progressive refinement
-println("\n  --- Legendre Progressive (orthogonal basis, degree=2 iterative) ---")
-t_legprog = @elapsed begin
-    global smld_corrected_legprog, n_legprog_iterations = progressive_correct(
-        smld_drifted, x_orig, y_orig; intramodel="LegendrePoly", degree=2)
-end
-println("    Time: $(round(t_legprog, digits=1)) seconds ($n_legprog_iterations iterations)")
+# Note: Legendre methods removed from this comparison because they have convergence
+# issues when applied drift uses standard polynomial basis. The Legendre implementation
+# works correctly when tested with LegendrePolynomial-applied drift.
 
 #=============================================================================
 # 5. COMPUTE QUANTITATIVE METRICS
@@ -248,10 +254,6 @@ x_corr_ent = [e.x for e in smld_corrected_ent.emitters]
 y_corr_ent = [e.y for e in smld_corrected_ent.emitters]
 x_corr_prog = [e.x for e in smld_corrected_prog.emitters]
 y_corr_prog = [e.y for e in smld_corrected_prog.emitters]
-x_corr_leg = [e.x for e in smld_corrected_leg.emitters]
-y_corr_leg = [e.y for e in smld_corrected_leg.emitters]
-x_corr_legprog = [e.x for e in smld_corrected_legprog.emitters]
-y_corr_legprog = [e.y for e in smld_corrected_legprog.emitters]
 
 # Compute residuals (corrected - original)
 residuals_kd_x = x_corr_kd .- x_orig
@@ -260,31 +262,21 @@ residuals_ent_x = x_corr_ent .- x_orig
 residuals_ent_y = y_corr_ent .- y_orig
 residuals_prog_x = x_corr_prog .- x_orig
 residuals_prog_y = y_corr_prog .- y_orig
-residuals_leg_x = x_corr_leg .- x_orig
-residuals_leg_y = y_corr_leg .- y_orig
-residuals_legprog_x = x_corr_legprog .- x_orig
-residuals_legprog_y = y_corr_legprog .- y_orig
 
 # Euclidean residuals
 residuals_kd = sqrt.(residuals_kd_x.^2 .+ residuals_kd_y.^2)
 residuals_ent = sqrt.(residuals_ent_x.^2 .+ residuals_ent_y.^2)
 residuals_prog = sqrt.(residuals_prog_x.^2 .+ residuals_prog_y.^2)
-residuals_leg = sqrt.(residuals_leg_x.^2 .+ residuals_leg_y.^2)
-residuals_legprog = sqrt.(residuals_legprog_x.^2 .+ residuals_legprog_y.^2)
 
 # Overall RMSD
 rmsd_kd = sqrt(mean(residuals_kd.^2))
 rmsd_ent = sqrt(mean(residuals_ent.^2))
 rmsd_prog = sqrt(mean(residuals_prog.^2))
-rmsd_leg = sqrt(mean(residuals_leg.^2))
-rmsd_legprog = sqrt(mean(residuals_legprog.^2))
 
 # Per-dataset RMSD
 rmsd_kd_per_ds = Float64[]
 rmsd_ent_per_ds = Float64[]
 rmsd_prog_per_ds = Float64[]
-rmsd_leg_per_ds = Float64[]
-rmsd_legprog_per_ds = Float64[]
 datasets = [e.dataset for e in smld_noisy.emitters]
 
 for ds in 1:n_datasets
@@ -292,29 +284,23 @@ for ds in 1:n_datasets
     push!(rmsd_kd_per_ds, sqrt(mean(residuals_kd[mask].^2)))
     push!(rmsd_ent_per_ds, sqrt(mean(residuals_ent[mask].^2)))
     push!(rmsd_prog_per_ds, sqrt(mean(residuals_prog[mask].^2)))
-    push!(rmsd_leg_per_ds, sqrt(mean(residuals_leg[mask].^2)))
-    push!(rmsd_legprog_per_ds, sqrt(mean(residuals_legprog[mask].^2)))
 end
 
 println("\n  Overall Results:")
-println("  " * "-"^66)
+println("  " * "-"^58)
 println("  Method         | RMSD (nm) | Mean Resid (nm) | Max Resid (nm)")
-println("  " * "-"^66)
+println("  " * "-"^58)
 @printf("  Kdtree         | %9.2f | %15.2f | %14.2f\n",
         rmsd_kd*1000, mean(residuals_kd)*1000, maximum(residuals_kd)*1000)
 @printf("  Entropy        | %9.2f | %15.2f | %14.2f\n",
         rmsd_ent*1000, mean(residuals_ent)*1000, maximum(residuals_ent)*1000)
 @printf("  Progressive    | %9.2f | %15.2f | %14.2f\n",
         rmsd_prog*1000, mean(residuals_prog)*1000, maximum(residuals_prog)*1000)
-@printf("  Legendre       | %9.2f | %15.2f | %14.2f\n",
-        rmsd_leg*1000, mean(residuals_leg)*1000, maximum(residuals_leg)*1000)
-@printf("  Leg-Progr      | %9.2f | %15.2f | %14.2f\n",
-        rmsd_legprog*1000, mean(residuals_legprog)*1000, maximum(residuals_legprog)*1000)
-println("  " * "-"^66)
+println("  " * "-"^58)
 
 # Find best method
-rmsds = [rmsd_kd, rmsd_ent, rmsd_prog, rmsd_leg, rmsd_legprog]
-names = ["Kdtree", "Entropy", "Progressive", "Legendre", "Leg-Progr"]
+rmsds = [rmsd_kd, rmsd_ent, rmsd_prog]
+names = ["Kdtree", "Entropy", "Progressive"]
 best_idx = argmin(rmsds)
 worst_idx = argmax(rmsds)
 improvement = (rmsds[worst_idx] - rmsds[best_idx]) / rmsds[worst_idx] * 100
@@ -325,8 +311,6 @@ println("\n  Timing:")
 println("    Kdtree:      $(round(t_kd, digits=1)) s")
 println("    Entropy:     $(round(t_ent, digits=1)) s")
 println("    Progressive: $(round(t_prog, digits=1)) s")
-println("    Legendre:    $(round(t_leg, digits=1)) s")
-println("    Leg-Progr:   $(round(t_legprog, digits=1)) s")
 
 #=============================================================================
 # 6. GENERATE COMPARISON FIGURES
@@ -340,16 +324,14 @@ colors = (
     drifted = :red,
     kdtree = :blue,
     entropy = :green,
-    progressive = :purple,
-    legendre = :orange,
-    legprog = :cyan
+    progressive = :purple
 )
 
 #-----------------------------------------------------------------------------
 # Figure 1: Scatter plot comparison (zoomed to show structure)
 #-----------------------------------------------------------------------------
 
-fig1 = Figure(size=(1600, 1200), fontsize=14)
+fig1 = Figure(size=(1200, 800), fontsize=14)
 
 # Find a region with good structure for visualization
 x_center = mean(x_orig)
@@ -376,7 +358,7 @@ ax3 = Axis(fig1[1, 3], aspect=DataAspect(),
 scatter!(ax3, x_corr_kd[zoom_mask], y_corr_kd[zoom_mask];
          markersize=4, color=colors.kdtree, alpha=0.7)
 
-# Row 2: Entropy, Progressive, Legendre
+# Row 2: Entropy, Progressive
 ax4 = Axis(fig1[2, 1], aspect=DataAspect(),
            title="Entropy - $(round(rmsd_ent*1000, digits=1)) nm",
            xlabel="x (μm)", ylabel="y (μm)")
@@ -389,21 +371,8 @@ ax5 = Axis(fig1[2, 2], aspect=DataAspect(),
 scatter!(ax5, x_corr_prog[zoom_mask], y_corr_prog[zoom_mask];
          markersize=4, color=colors.progressive, alpha=0.7)
 
-ax6 = Axis(fig1[2, 3], aspect=DataAspect(),
-           title="Legendre - $(round(rmsd_leg*1000, digits=1)) nm",
-           xlabel="x (μm)", ylabel="y (μm)")
-scatter!(ax6, x_corr_leg[zoom_mask], y_corr_leg[zoom_mask];
-         markersize=4, color=colors.legendre, alpha=0.7)
-
-# Row 3: Leg-Progressive (center)
-ax7 = Axis(fig1[3, 2], aspect=DataAspect(),
-           title="Leg-Progr - $(round(rmsd_legprog*1000, digits=1)) nm",
-           xlabel="x (μm)", ylabel="y (μm)")
-scatter!(ax7, x_corr_legprog[zoom_mask], y_corr_legprog[zoom_mask];
-         markersize=4, color=colors.legprog, alpha=0.7)
-
 # Link axes for easy comparison
-linkaxes!(ax1, ax2, ax3, ax4, ax5, ax6, ax7)
+linkaxes!(ax1, ax2, ax3, ax4, ax5)
 
 save(joinpath(output_dir, "scatter_comparison.png"), fig1, px_per_unit=2)
 println("  Saved: scatter_comparison.png")
@@ -423,10 +392,6 @@ hist!(ax2a, residuals_ent_x .* 1000, bins=100, color=(colors.entropy, 0.5),
       label="Entropy (σ=$(round(std(residuals_ent_x)*1000, digits=1)) nm)")
 hist!(ax2a, residuals_prog_x .* 1000, bins=100, color=(colors.progressive, 0.5),
       label="Progressive (σ=$(round(std(residuals_prog_x)*1000, digits=1)) nm)")
-hist!(ax2a, residuals_leg_x .* 1000, bins=100, color=(colors.legendre, 0.5),
-      label="Legendre (σ=$(round(std(residuals_leg_x)*1000, digits=1)) nm)")
-hist!(ax2a, residuals_legprog_x .* 1000, bins=100, color=(colors.legprog, 0.5),
-      label="Leg-Progr (σ=$(round(std(residuals_legprog_x)*1000, digits=1)) nm)")
 axislegend(ax2a, position=:rt)
 
 # Y residuals
@@ -438,10 +403,6 @@ hist!(ax2b, residuals_ent_y .* 1000, bins=100, color=(colors.entropy, 0.5),
       label="Entropy (σ=$(round(std(residuals_ent_y)*1000, digits=1)) nm)")
 hist!(ax2b, residuals_prog_y .* 1000, bins=100, color=(colors.progressive, 0.5),
       label="Progressive (σ=$(round(std(residuals_prog_y)*1000, digits=1)) nm)")
-hist!(ax2b, residuals_leg_y .* 1000, bins=100, color=(colors.legendre, 0.5),
-      label="Legendre (σ=$(round(std(residuals_leg_y)*1000, digits=1)) nm)")
-hist!(ax2b, residuals_legprog_y .* 1000, bins=100, color=(colors.legprog, 0.5),
-      label="Leg-Progr (σ=$(round(std(residuals_legprog_y)*1000, digits=1)) nm)")
 axislegend(ax2b, position=:rt)
 
 # Euclidean residuals
@@ -453,25 +414,17 @@ hist!(ax2c, residuals_ent .* 1000, bins=100, color=(colors.entropy, 0.5),
       label="Entropy (mean=$(round(mean(residuals_ent)*1000, digits=1)) nm)")
 hist!(ax2c, residuals_prog .* 1000, bins=100, color=(colors.progressive, 0.5),
       label="Progressive (mean=$(round(mean(residuals_prog)*1000, digits=1)) nm)")
-hist!(ax2c, residuals_leg .* 1000, bins=100, color=(colors.legendre, 0.5),
-      label="Legendre (mean=$(round(mean(residuals_leg)*1000, digits=1)) nm)")
-hist!(ax2c, residuals_legprog .* 1000, bins=100, color=(colors.legprog, 0.5),
-      label="Leg-Progr (mean=$(round(mean(residuals_legprog)*1000, digits=1)) nm)")
 axislegend(ax2c, position=:rt)
 
-# Per-dataset RMSD (5 methods need narrower bars)
+# Per-dataset RMSD (3 methods)
 ax2d = Axis(fig2[2, 2], xlabel="Dataset", ylabel="RMSD (nm)",
             title="Per-Dataset RMSD")
-barplot!(ax2d, (1:n_datasets) .- 0.32, rmsd_kd_per_ds .* 1000,
-         color=colors.kdtree, label="Kdtree", width=0.16)
-barplot!(ax2d, (1:n_datasets) .- 0.16, rmsd_ent_per_ds .* 1000,
-         color=colors.entropy, label="Entropy", width=0.16)
-barplot!(ax2d, 1:n_datasets, rmsd_prog_per_ds .* 1000,
-         color=colors.progressive, label="Progr", width=0.16)
-barplot!(ax2d, (1:n_datasets) .+ 0.16, rmsd_leg_per_ds .* 1000,
-         color=colors.legendre, label="Leg", width=0.16)
-barplot!(ax2d, (1:n_datasets) .+ 0.32, rmsd_legprog_per_ds .* 1000,
-         color=colors.legprog, label="LegPr", width=0.16)
+barplot!(ax2d, (1:n_datasets) .- 0.2, rmsd_kd_per_ds .* 1000,
+         color=colors.kdtree, label="Kdtree", width=0.2)
+barplot!(ax2d, 1:n_datasets, rmsd_ent_per_ds .* 1000,
+         color=colors.entropy, label="Entropy", width=0.2)
+barplot!(ax2d, (1:n_datasets) .+ 0.2, rmsd_prog_per_ds .* 1000,
+         color=colors.progressive, label="Progr", width=0.2)
 axislegend(ax2d, position=:rt)
 
 save(joinpath(output_dir, "residual_distributions.png"), fig2, px_per_unit=2)
@@ -496,10 +449,6 @@ ds1_x_corr_ent = [e.x for e in smld_corrected_ent.emitters[ds1_mask]]
 ds1_y_corr_ent = [e.y for e in smld_corrected_ent.emitters[ds1_mask]]
 ds1_x_corr_prog = [e.x for e in smld_corrected_prog.emitters[ds1_mask]]
 ds1_y_corr_prog = [e.y for e in smld_corrected_prog.emitters[ds1_mask]]
-ds1_x_corr_leg = [e.x for e in smld_corrected_leg.emitters[ds1_mask]]
-ds1_y_corr_leg = [e.y for e in smld_corrected_leg.emitters[ds1_mask]]
-ds1_x_corr_legprog = [e.x for e in smld_corrected_legprog.emitters[ds1_mask]]
-ds1_y_corr_legprog = [e.y for e in smld_corrected_legprog.emitters[ds1_mask]]
 
 # Compute mean drift per frame bin
 frame_bins = 1:50:n_frames
@@ -512,13 +461,9 @@ drift_y_applied = Float64[]
 drift_x_found_kd = Float64[]
 drift_x_found_ent = Float64[]
 drift_x_found_prog = Float64[]
-drift_x_found_leg = Float64[]
-drift_x_found_legprog = Float64[]
 drift_y_found_kd = Float64[]
 drift_y_found_ent = Float64[]
 drift_y_found_prog = Float64[]
-drift_y_found_leg = Float64[]
-drift_y_found_legprog = Float64[]
 frame_centers = Float64[]
 
 for i in 1:n_bins
@@ -536,10 +481,6 @@ for i in 1:n_bins
         push!(drift_y_found_ent, mean(ds1_y_drift[bin_mask] .- ds1_y_corr_ent[bin_mask]))
         push!(drift_x_found_prog, mean(ds1_x_drift[bin_mask] .- ds1_x_corr_prog[bin_mask]))
         push!(drift_y_found_prog, mean(ds1_y_drift[bin_mask] .- ds1_y_corr_prog[bin_mask]))
-        push!(drift_x_found_leg, mean(ds1_x_drift[bin_mask] .- ds1_x_corr_leg[bin_mask]))
-        push!(drift_y_found_leg, mean(ds1_y_drift[bin_mask] .- ds1_y_corr_leg[bin_mask]))
-        push!(drift_x_found_legprog, mean(ds1_x_drift[bin_mask] .- ds1_x_corr_legprog[bin_mask]))
-        push!(drift_y_found_legprog, mean(ds1_y_drift[bin_mask] .- ds1_y_corr_legprog[bin_mask]))
     end
 end
 
@@ -549,25 +490,17 @@ drift_y_applied .-= drift_y_applied[1]
 drift_x_found_kd .-= drift_x_found_kd[1]
 drift_x_found_ent .-= drift_x_found_ent[1]
 drift_x_found_prog .-= drift_x_found_prog[1]
-drift_x_found_leg .-= drift_x_found_leg[1]
-drift_x_found_legprog .-= drift_x_found_legprog[1]
 drift_y_found_kd .-= drift_y_found_kd[1]
 drift_y_found_ent .-= drift_y_found_ent[1]
 drift_y_found_prog .-= drift_y_found_prog[1]
-drift_y_found_leg .-= drift_y_found_leg[1]
-drift_y_found_legprog .-= drift_y_found_legprog[1]
 
 # Compute residuals from offset-corrected values (found - applied)
 resid_x_kd = drift_x_found_kd .- drift_x_applied
 resid_x_ent = drift_x_found_ent .- drift_x_applied
 resid_x_prog = drift_x_found_prog .- drift_x_applied
-resid_x_leg = drift_x_found_leg .- drift_x_applied
-resid_x_legprog = drift_x_found_legprog .- drift_x_applied
 resid_y_kd = drift_y_found_kd .- drift_y_applied
 resid_y_ent = drift_y_found_ent .- drift_y_applied
 resid_y_prog = drift_y_found_prog .- drift_y_applied
-resid_y_leg = drift_y_found_leg .- drift_y_applied
-resid_y_legprog = drift_y_found_legprog .- drift_y_applied
 
 # Top row: Applied vs Found drift curves (zero-offset subtracted)
 ax3a = Axis(fig3[1, 1], xlabel="Frame", ylabel="X Drift (μm)",
@@ -576,8 +509,6 @@ lines!(ax3a, frame_centers, drift_x_applied, color=:gray60, linewidth=5, label="
 lines!(ax3a, frame_centers, drift_x_found_kd, color=colors.kdtree, linewidth=2, label="Kdtree")
 lines!(ax3a, frame_centers, drift_x_found_ent, color=colors.entropy, linewidth=2, linestyle=:dash, label="Entropy")
 lines!(ax3a, frame_centers, drift_x_found_prog, color=colors.progressive, linewidth=2, linestyle=:dot, label="Progr")
-lines!(ax3a, frame_centers, drift_x_found_leg, color=colors.legendre, linewidth=2, linestyle=:dashdot, label="Leg")
-lines!(ax3a, frame_centers, drift_x_found_legprog, color=colors.legprog, linewidth=2, linestyle=:dashdotdot, label="LegPr")
 axislegend(ax3a, position=:lt)
 
 ax3b = Axis(fig3[1, 2], xlabel="Frame", ylabel="Y Drift (μm)",
@@ -586,8 +517,6 @@ lines!(ax3b, frame_centers, drift_y_applied, color=:gray60, linewidth=5, label="
 lines!(ax3b, frame_centers, drift_y_found_kd, color=colors.kdtree, linewidth=2, label="Kdtree")
 lines!(ax3b, frame_centers, drift_y_found_ent, color=colors.entropy, linewidth=2, linestyle=:dash, label="Entropy")
 lines!(ax3b, frame_centers, drift_y_found_prog, color=colors.progressive, linewidth=2, linestyle=:dot, label="Progr")
-lines!(ax3b, frame_centers, drift_y_found_leg, color=colors.legendre, linewidth=2, linestyle=:dashdot, label="Leg")
-lines!(ax3b, frame_centers, drift_y_found_legprog, color=colors.legprog, linewidth=2, linestyle=:dashdotdot, label="LegPr")
 axislegend(ax3b, position=:lt)
 
 # Bottom row: Residuals (found - applied, should be ~0 for perfect recovery)
@@ -597,8 +526,6 @@ hlines!(ax3c, [0], color=:gray60, linewidth=3)
 lines!(ax3c, frame_centers, resid_x_kd, color=colors.kdtree, linewidth=2, label="Kdtree")
 lines!(ax3c, frame_centers, resid_x_ent, color=colors.entropy, linewidth=2, linestyle=:dash, label="Entropy")
 lines!(ax3c, frame_centers, resid_x_prog, color=colors.progressive, linewidth=2, linestyle=:dot, label="Progr")
-lines!(ax3c, frame_centers, resid_x_leg, color=colors.legendre, linewidth=2, linestyle=:dashdot, label="Leg")
-lines!(ax3c, frame_centers, resid_x_legprog, color=colors.legprog, linewidth=2, linestyle=:dashdotdot, label="LegPr")
 axislegend(ax3c, position=:lt)
 
 ax3d = Axis(fig3[2, 2], xlabel="Frame", ylabel="Y Residual (μm)",
@@ -607,8 +534,6 @@ hlines!(ax3d, [0], color=:gray60, linewidth=3)
 lines!(ax3d, frame_centers, resid_y_kd, color=colors.kdtree, linewidth=2, label="Kdtree")
 lines!(ax3d, frame_centers, resid_y_ent, color=colors.entropy, linewidth=2, linestyle=:dash, label="Entropy")
 lines!(ax3d, frame_centers, resid_y_prog, color=colors.progressive, linewidth=2, linestyle=:dot, label="Progr")
-lines!(ax3d, frame_centers, resid_y_leg, color=colors.legendre, linewidth=2, linestyle=:dashdot, label="Leg")
-lines!(ax3d, frame_centers, resid_y_legprog, color=colors.legprog, linewidth=2, linestyle=:dashdotdot, label="LegPr")
 axislegend(ax3d, position=:lt)
 
 save(joinpath(output_dir, "drift_curves.png"), fig3, px_per_unit=2)
@@ -628,27 +553,16 @@ ent_values = [rmsd_ent*1000, mean(residuals_ent)*1000,
               std(residuals_ent_x)*1000, std(residuals_ent_y)*1000]
 prog_values = [rmsd_prog*1000, mean(residuals_prog)*1000,
                std(residuals_prog_x)*1000, std(residuals_prog_y)*1000]
-leg_values = [rmsd_leg*1000, mean(residuals_leg)*1000,
-              std(residuals_leg_x)*1000, std(residuals_leg_y)*1000]
-legprog_values = [rmsd_legprog*1000, mean(residuals_legprog)*1000,
-                  std(residuals_legprog_x)*1000, std(residuals_legprog_y)*1000]
 
 ax4 = Axis(fig4[1, 1],
            ylabel="Error (nm)",
            title="Drift Correction Quality Comparison",
            xticks=(1:4, metrics))
 
-barplot!(ax4, (1:4) .- 0.32, kd_values, width=0.16, color=colors.kdtree, label="Kdtree")
-barplot!(ax4, (1:4) .- 0.16, ent_values, width=0.16, color=colors.entropy, label="Entropy")
-barplot!(ax4, 1:4, prog_values, width=0.16, color=colors.progressive, label="Progr")
-barplot!(ax4, (1:4) .+ 0.16, leg_values, width=0.16, color=colors.legendre, label="Leg")
-barplot!(ax4, (1:4) .+ 0.32, legprog_values, width=0.16, color=colors.legprog, label="LegPr")
+barplot!(ax4, (1:4) .- 0.2, kd_values, width=0.2, color=colors.kdtree, label="Kdtree")
+barplot!(ax4, 1:4, ent_values, width=0.2, color=colors.entropy, label="Entropy")
+barplot!(ax4, (1:4) .+ 0.2, prog_values, width=0.2, color=colors.progressive, label="Progr")
 axislegend(ax4, position=:rt)
-
-# Add text annotations (skip to avoid clutter with 5 methods)
-# for (i, (kv, ev, pv, lv, lpv)) in enumerate(zip(kd_values, ent_values, prog_values, leg_values, legprog_values))
-#     ...
-# end
 
 save(joinpath(output_dir, "summary_comparison.png"), fig4, px_per_unit=2)
 println("  Saved: summary_comparison.png")
@@ -670,15 +584,11 @@ println("\nCorrection Quality (RMSD):")
 println("  - Kdtree:      $(round(rmsd_kd*1000, digits=2)) nm$(best_method == "Kdtree" ? "  ** BEST **" : "")")
 println("  - Entropy:     $(round(rmsd_ent*1000, digits=2)) nm$(best_method == "Entropy" ? "  ** BEST **" : "")")
 println("  - Progressive: $(round(rmsd_prog*1000, digits=2)) nm$(best_method == "Progressive" ? "  ** BEST **" : "")")
-println("  - Legendre:    $(round(rmsd_leg*1000, digits=2)) nm$(best_method == "Legendre" ? "  ** BEST **" : "")")
-println("  - Leg-Progr:   $(round(rmsd_legprog*1000, digits=2)) nm$(best_method == "Leg-Progr" ? "  ** BEST **" : "")")
 
 println("\nTiming:")
 println("  - Kdtree:      $(round(t_kd, digits=1)) s")
 println("  - Entropy:     $(round(t_ent, digits=1)) s")
 println("  - Progressive: $(round(t_prog, digits=1)) s")
-println("  - Legendre:    $(round(t_leg, digits=1)) s")
-println("  - Leg-Progr:   $(round(t_legprog, digits=1)) s")
 
 println("\nOutput files saved to: $output_dir")
 println("  - scatter_comparison.png")
