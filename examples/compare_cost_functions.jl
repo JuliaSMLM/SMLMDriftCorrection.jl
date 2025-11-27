@@ -5,19 +5,19 @@ and Legendre-Progressive.
 This script:
 1. Generates realistic SMLM data with SMLMSim
 2. Applies known 2nd-order polynomial drift
-3. Corrects drift using five methods:
-   - Kdtree cost function (standard polynomial, direct degree=2)
-   - Entropy cost function (standard polynomial, direct degree=2)
-   - Progressive refinement (standard polynomial, iterative degree=1)
-   - Legendre polynomial (orthogonal basis, direct degree=2)
-   - Legendre-Progressive (orthogonal basis, iterative degree=1)
+3. Corrects drift using five methods (all degree=2):
+   - Kdtree cost function (standard polynomial, direct)
+   - Entropy cost function (standard polynomial, direct)
+   - Progressive refinement (standard polynomial, iterative)
+   - Legendre polynomial (orthogonal basis, direct)
+   - Legendre-Progressive (orthogonal basis, iterative)
 4. Computes quantitative metrics comparing correction quality
 5. Generates publication-quality comparison figures
 
-The Legendre polynomial methods use orthogonal basis functions instead of
-standard monomials (1, t, t²), which provides better optimization conditioning.
-The Legendre-Progressive combines orthogonal basis with iterative refinement
-for potentially more robust convergence.
+All methods use the same polynomial degree (2) to fairly compare:
+- Cost functions: Kdtree vs Entropy
+- Basis functions: standard monomials vs orthogonal Legendre polynomials
+- Optimization: direct vs iterative refinement
 
 Output saved to examples/output/
 """
@@ -180,17 +180,17 @@ t_ent = @elapsed smld_corrected_ent = DC.driftcorrect(
 )
 println("    Time: $(round(t_ent, digits=1)) seconds")
 
-# Method 3: Progressive refinement (iterative degree=1, standard polynomial)
-# This avoids local minima by using simpler optimization landscape
-println("\n  --- Progressive refinement (standard poly, degree=1 iterative) ---")
+# Method 3: Progressive refinement (iterative degree=2, standard polynomial)
+# Iteratively refines the correction until convergence
+println("\n  --- Progressive refinement (standard poly, degree=2 iterative) ---")
 
-function progressive_correct(smld_in, x_orig, y_orig; max_iter=5, intramodel="Polynomial")
+function progressive_correct(smld_in, x_orig, y_orig; max_iter=5, intramodel="Polynomial", degree=2)
     smld_current = smld_in
     n_iter = 0
     rmsd_prev = Inf
 
     for iter in 1:max_iter
-        smld_new = DC.driftcorrect(smld_current; degree=1, cost_fun="Kdtree",
+        smld_new = DC.driftcorrect(smld_current; degree=degree, cost_fun="Kdtree",
                                     intramodel=intramodel, verbose=0)
 
         x_p = [e.x for e in smld_new.emitters]
@@ -228,10 +228,10 @@ println("    Time: $(round(t_leg, digits=1)) seconds")
 
 # Method 5: Legendre Progressive (orthogonal basis + iterative refinement)
 # Combines the benefits of orthogonal basis with progressive refinement
-println("\n  --- Legendre Progressive (orthogonal basis, degree=1 iterative) ---")
+println("\n  --- Legendre Progressive (orthogonal basis, degree=2 iterative) ---")
 t_legprog = @elapsed begin
     global smld_corrected_legprog, n_legprog_iterations = progressive_correct(
-        smld_drifted, x_orig, y_orig; intramodel="LegendrePoly")
+        smld_drifted, x_orig, y_orig; intramodel="LegendrePoly", degree=2)
 end
 println("    Time: $(round(t_legprog, digits=1)) seconds ($n_legprog_iterations iterations)")
 
@@ -519,17 +519,6 @@ drift_y_found_ent = Float64[]
 drift_y_found_prog = Float64[]
 drift_y_found_leg = Float64[]
 drift_y_found_legprog = Float64[]
-# Arrays for residuals (corrected - original)
-resid_x_kd = Float64[]
-resid_x_ent = Float64[]
-resid_x_prog = Float64[]
-resid_x_leg = Float64[]
-resid_x_legprog = Float64[]
-resid_y_kd = Float64[]
-resid_y_ent = Float64[]
-resid_y_prog = Float64[]
-resid_y_leg = Float64[]
-resid_y_legprog = Float64[]
 frame_centers = Float64[]
 
 for i in 1:n_bins
@@ -551,60 +540,75 @@ for i in 1:n_bins
         push!(drift_y_found_leg, mean(ds1_y_drift[bin_mask] .- ds1_y_corr_leg[bin_mask]))
         push!(drift_x_found_legprog, mean(ds1_x_drift[bin_mask] .- ds1_x_corr_legprog[bin_mask]))
         push!(drift_y_found_legprog, mean(ds1_y_drift[bin_mask] .- ds1_y_corr_legprog[bin_mask]))
-        # Residuals = corrected - original
-        push!(resid_x_kd, mean(ds1_x_corr_kd[bin_mask] .- ds1_x_orig[bin_mask]))
-        push!(resid_y_kd, mean(ds1_y_corr_kd[bin_mask] .- ds1_y_orig[bin_mask]))
-        push!(resid_x_ent, mean(ds1_x_corr_ent[bin_mask] .- ds1_x_orig[bin_mask]))
-        push!(resid_y_ent, mean(ds1_y_corr_ent[bin_mask] .- ds1_y_orig[bin_mask]))
-        push!(resid_x_prog, mean(ds1_x_corr_prog[bin_mask] .- ds1_x_orig[bin_mask]))
-        push!(resid_y_prog, mean(ds1_y_corr_prog[bin_mask] .- ds1_y_orig[bin_mask]))
-        push!(resid_x_leg, mean(ds1_x_corr_leg[bin_mask] .- ds1_x_orig[bin_mask]))
-        push!(resid_y_leg, mean(ds1_y_corr_leg[bin_mask] .- ds1_y_orig[bin_mask]))
-        push!(resid_x_legprog, mean(ds1_x_corr_legprog[bin_mask] .- ds1_x_orig[bin_mask]))
-        push!(resid_y_legprog, mean(ds1_y_corr_legprog[bin_mask] .- ds1_y_orig[bin_mask]))
     end
 end
 
-# Top row: Applied vs Found drift curves
+# Subtract zero-frame offset (arbitrary starting point)
+drift_x_applied .-= drift_x_applied[1]
+drift_y_applied .-= drift_y_applied[1]
+drift_x_found_kd .-= drift_x_found_kd[1]
+drift_x_found_ent .-= drift_x_found_ent[1]
+drift_x_found_prog .-= drift_x_found_prog[1]
+drift_x_found_leg .-= drift_x_found_leg[1]
+drift_x_found_legprog .-= drift_x_found_legprog[1]
+drift_y_found_kd .-= drift_y_found_kd[1]
+drift_y_found_ent .-= drift_y_found_ent[1]
+drift_y_found_prog .-= drift_y_found_prog[1]
+drift_y_found_leg .-= drift_y_found_leg[1]
+drift_y_found_legprog .-= drift_y_found_legprog[1]
+
+# Compute residuals from offset-corrected values (found - applied)
+resid_x_kd = drift_x_found_kd .- drift_x_applied
+resid_x_ent = drift_x_found_ent .- drift_x_applied
+resid_x_prog = drift_x_found_prog .- drift_x_applied
+resid_x_leg = drift_x_found_leg .- drift_x_applied
+resid_x_legprog = drift_x_found_legprog .- drift_x_applied
+resid_y_kd = drift_y_found_kd .- drift_y_applied
+resid_y_ent = drift_y_found_ent .- drift_y_applied
+resid_y_prog = drift_y_found_prog .- drift_y_applied
+resid_y_leg = drift_y_found_leg .- drift_y_applied
+resid_y_legprog = drift_y_found_legprog .- drift_y_applied
+
+# Top row: Applied vs Found drift curves (zero-offset subtracted)
 ax3a = Axis(fig3[1, 1], xlabel="Frame", ylabel="X Drift (μm)",
             title="X Drift: Applied vs Found (Dataset 1)")
-lines!(ax3a, frame_centers, drift_x_applied, color=:black, linewidth=3, label="Applied")
+lines!(ax3a, frame_centers, drift_x_applied, color=:gray60, linewidth=5, label="Applied")
 lines!(ax3a, frame_centers, drift_x_found_kd, color=colors.kdtree, linewidth=2, label="Kdtree")
-lines!(ax3a, frame_centers, drift_x_found_ent, color=colors.entropy, linewidth=2, label="Entropy")
-lines!(ax3a, frame_centers, drift_x_found_prog, color=colors.progressive, linewidth=2, label="Progr")
-lines!(ax3a, frame_centers, drift_x_found_leg, color=colors.legendre, linewidth=2, label="Leg")
-lines!(ax3a, frame_centers, drift_x_found_legprog, color=colors.legprog, linewidth=2, label="LegPr")
+lines!(ax3a, frame_centers, drift_x_found_ent, color=colors.entropy, linewidth=2, linestyle=:dash, label="Entropy")
+lines!(ax3a, frame_centers, drift_x_found_prog, color=colors.progressive, linewidth=2, linestyle=:dot, label="Progr")
+lines!(ax3a, frame_centers, drift_x_found_leg, color=colors.legendre, linewidth=2, linestyle=:dashdot, label="Leg")
+lines!(ax3a, frame_centers, drift_x_found_legprog, color=colors.legprog, linewidth=2, linestyle=:dashdotdot, label="LegPr")
 axislegend(ax3a, position=:lt)
 
 ax3b = Axis(fig3[1, 2], xlabel="Frame", ylabel="Y Drift (μm)",
             title="Y Drift: Applied vs Found (Dataset 1)")
-lines!(ax3b, frame_centers, drift_y_applied, color=:black, linewidth=3, label="Applied")
+lines!(ax3b, frame_centers, drift_y_applied, color=:gray60, linewidth=5, label="Applied")
 lines!(ax3b, frame_centers, drift_y_found_kd, color=colors.kdtree, linewidth=2, label="Kdtree")
-lines!(ax3b, frame_centers, drift_y_found_ent, color=colors.entropy, linewidth=2, label="Entropy")
-lines!(ax3b, frame_centers, drift_y_found_prog, color=colors.progressive, linewidth=2, label="Progr")
-lines!(ax3b, frame_centers, drift_y_found_leg, color=colors.legendre, linewidth=2, label="Leg")
-lines!(ax3b, frame_centers, drift_y_found_legprog, color=colors.legprog, linewidth=2, label="LegPr")
+lines!(ax3b, frame_centers, drift_y_found_ent, color=colors.entropy, linewidth=2, linestyle=:dash, label="Entropy")
+lines!(ax3b, frame_centers, drift_y_found_prog, color=colors.progressive, linewidth=2, linestyle=:dot, label="Progr")
+lines!(ax3b, frame_centers, drift_y_found_leg, color=colors.legendre, linewidth=2, linestyle=:dashdot, label="Leg")
+lines!(ax3b, frame_centers, drift_y_found_legprog, color=colors.legprog, linewidth=2, linestyle=:dashdotdot, label="LegPr")
 axislegend(ax3b, position=:lt)
 
-# Bottom row: Residuals (should be ~0 for perfect correction)
+# Bottom row: Residuals (found - applied, should be ~0 for perfect recovery)
 ax3c = Axis(fig3[2, 1], xlabel="Frame", ylabel="X Residual (μm)",
-            title="X Residual (corrected - original)")
+            title="X Residual (found - applied)")
+hlines!(ax3c, [0], color=:gray60, linewidth=3)
 lines!(ax3c, frame_centers, resid_x_kd, color=colors.kdtree, linewidth=2, label="Kdtree")
-lines!(ax3c, frame_centers, resid_x_ent, color=colors.entropy, linewidth=2, label="Entropy")
-lines!(ax3c, frame_centers, resid_x_prog, color=colors.progressive, linewidth=2, label="Progr")
-lines!(ax3c, frame_centers, resid_x_leg, color=colors.legendre, linewidth=2, label="Leg")
-lines!(ax3c, frame_centers, resid_x_legprog, color=colors.legprog, linewidth=2, label="LegPr")
-hlines!(ax3c, [0], color=:black, linestyle=:dash, linewidth=1)
+lines!(ax3c, frame_centers, resid_x_ent, color=colors.entropy, linewidth=2, linestyle=:dash, label="Entropy")
+lines!(ax3c, frame_centers, resid_x_prog, color=colors.progressive, linewidth=2, linestyle=:dot, label="Progr")
+lines!(ax3c, frame_centers, resid_x_leg, color=colors.legendre, linewidth=2, linestyle=:dashdot, label="Leg")
+lines!(ax3c, frame_centers, resid_x_legprog, color=colors.legprog, linewidth=2, linestyle=:dashdotdot, label="LegPr")
 axislegend(ax3c, position=:lt)
 
 ax3d = Axis(fig3[2, 2], xlabel="Frame", ylabel="Y Residual (μm)",
-            title="Y Residual (corrected - original)")
+            title="Y Residual (found - applied)")
+hlines!(ax3d, [0], color=:gray60, linewidth=3)
 lines!(ax3d, frame_centers, resid_y_kd, color=colors.kdtree, linewidth=2, label="Kdtree")
-lines!(ax3d, frame_centers, resid_y_ent, color=colors.entropy, linewidth=2, label="Entropy")
-lines!(ax3d, frame_centers, resid_y_prog, color=colors.progressive, linewidth=2, label="Progr")
-lines!(ax3d, frame_centers, resid_y_leg, color=colors.legendre, linewidth=2, label="Leg")
-lines!(ax3d, frame_centers, resid_y_legprog, color=colors.legprog, linewidth=2, label="LegPr")
-hlines!(ax3d, [0], color=:black, linestyle=:dash, linewidth=1)
+lines!(ax3d, frame_centers, resid_y_ent, color=colors.entropy, linewidth=2, linestyle=:dash, label="Entropy")
+lines!(ax3d, frame_centers, resid_y_prog, color=colors.progressive, linewidth=2, linestyle=:dot, label="Progr")
+lines!(ax3d, frame_centers, resid_y_leg, color=colors.legendre, linewidth=2, linestyle=:dashdot, label="Leg")
+lines!(ax3d, frame_centers, resid_y_legprog, color=colors.legprog, linewidth=2, linestyle=:dashdotdot, label="LegPr")
 axislegend(ax3d, position=:lt)
 
 save(joinpath(output_dir, "drift_curves.png"), fig3, px_per_unit=2)
