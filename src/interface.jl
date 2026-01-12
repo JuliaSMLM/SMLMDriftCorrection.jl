@@ -1,25 +1,38 @@
 """
-Main interface for drift correction (DC).  This algorithm consists of an
-    intra-dataset portion and an inter-dataset portion.  The drift corrected
-    coordinates are returned as output.  All distance units are in μm.
+    driftcorrect(smld; kwargs...) -> (smld, model)
 
-# Fields
-- smld:           structure containing (X, Y) or (X, Y, Z) localization
-                  coordinates (μm)
-- intramodel:     model for intra-dataset DC:
-                  {"Polynomial", "LegendrePoly"} = "Polynomial"
-- cost_fun:       intra/inter cost function: {"Kdtree", "Entropy"} = "Entropy"
-- cost_fun_intra: intra cost function override: ""
-- cost_fun_inter: inter cost function override: ""
-- degree:         degree for polynomial intra-dataset DC = 2
-- d_cutoff:       distance cutoff (μm) = 0.01 [Kdtree cost function]
-- maxn:           maximum number of neighbors considered = 200
-                  [Entropy cost function]
-- histbinsize:    histogram bin size for inter-datset cross-correlation
-                  correction (μm) = -1.0 [< 0 means no correction]
-- verbose:        flag for more output = 0
-# Output
-- smld_found:     structure containing drift corrected coordinates (μm)
+Main interface for drift correction (DC). This algorithm consists of an
+intra-dataset portion and an inter-dataset portion. All distance units are in μm.
+
+# Arguments
+- `smld`: SMLD structure containing (X, Y) or (X, Y, Z) localization coordinates (μm)
+
+# Keyword Arguments
+- `intramodel="Polynomial"`: model for intra-dataset DC: {"Polynomial", "LegendrePoly"}
+- `cost_fun="Entropy"`: cost function: {"Kdtree", "Entropy", "SymEntropy"}
+- `cost_fun_intra=""`: intra cost function override (defaults to cost_fun)
+- `cost_fun_inter=""`: inter cost function override (defaults to cost_fun)
+- `degree=2`: degree for polynomial intra-dataset DC
+- `d_cutoff=0.01`: distance cutoff in μm (Kdtree cost function)
+- `maxn=200`: maximum number of neighbors (Entropy/SymEntropy cost functions)
+- `histbinsize=-1.0`: histogram bin size for inter-dataset cross-correlation (< 0 disables)
+- `verbose=0`: verbosity level
+
+# Returns
+NamedTuple with fields:
+- `smld`: drift-corrected SMLD
+- `model`: fitted drift model (Polynomial or LegendrePolynomial)
+
+# Example
+```julia
+result = driftcorrect(smld; cost_fun="Kdtree", degree=2)
+corrected_smld = result.smld
+drift_model = result.model
+
+# Or destructure directly:
+(; smld, model) = driftcorrect(smld; cost_fun="Kdtree")
+smld_corr, drift_model = driftcorrect(smld)  # tuple-style also works
+```
 """
 function driftcorrect(smld::SMLD;
     intramodel::String = "Polynomial",
@@ -88,7 +101,7 @@ function driftcorrect(smld::SMLD;
                    d_cutoff, maxn, histbinsize)
     end
     
-    smld_found = correctdrift(smld, driftmodel)
+    smld_corrected = correctdrift(smld, driftmodel)
 
-    return smld_found
+    return (smld=smld_corrected, model=driftmodel)
 end

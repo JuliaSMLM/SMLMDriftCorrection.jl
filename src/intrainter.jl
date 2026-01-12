@@ -1,4 +1,4 @@
-# Intra+Inter 
+# Intra+Inter drift correction functions
 
 function InterShift(ndims::Int)
     return InterShift(ndims, zeros(ndims))
@@ -46,23 +46,12 @@ function applydrift!(smld::SMLD, dm::AbstractIntraInter)
     end
 end
 
-""" 
+"""
 applydrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter) ->
   SMLMData.Emitter2DFit
 
 Applies a drift model to the Single-Molecule Localization Microscopy (SMLM)
 data and returns the drift-corrected data.
-
-# Arguments
-- `smld::SMLMData.Emitter2DFit`: The SMLM data structure containing the
-  original localization data.
-- `driftmodel::AbstractIntraInter`: The drift model to be applied to the SMLM
-  data.  This model should account for both intra- and inter-frame drift
-  corrections.
-
-# Returns
-- `SMLMData.Emitter2DFit`: A new SMLM data structure with the drift corrections
-  applied.
 """
 function applydrift(smld::SMLD, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
@@ -92,15 +81,9 @@ function correctdrift(smld::SMLD, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
-#function correctdrift!(smld::SMLMData.Emitter2DFit, shift::Vector{AbstractFloat})
-#function correctdrift!(smld::SMLMData.Emitter3DFit, shift::Vector{AbstractFloat})
 function correctdrift!(smld::SMLD, shift::Vector{Float64})
     n_dims = nDims(smld)
 
-    #smld_shifted = deepcopy(smld)
-    #println("correctdrift!: shift = $shift")
-    #smld.x .-= shift[1]
-    #smld.y .-= shift[2]
     for nn in eachindex(smld.emitters)
         smld.emitters[nn].x -= shift[1]
         smld.emitters[nn].y -= shift[2]
@@ -111,15 +94,16 @@ function correctdrift!(smld::SMLD, shift::Vector{Float64})
 end
 
 """
-Find and correct intra-detaset drift.
+Find and correct intra-dataset drift.
+Optimized version with pre-allocated work arrays.
 
 # Fields:
 - intra:            intra-dataset structure
-- cost_fun:         cost function: {"Kdtree", "Entropy"}
+- cost_fun:         cost function: {"Kdtree", "Entropy", "SymEntropy", "Bhattacharyya", "Mahalanobis"}
 - smld:             data structure containing coordinate data
-- dataset           dataset number to operate on
-- d_cutoff:         cutoff distance
-- maxn:             maximum number of neighbors considered
+- dataset:          dataset number to operate on
+- d_cutoff:         cutoff distance (for Kdtree)
+- maxn:             maximum number of neighbors considered (for Entropy)
 """
 function findintra!(intra::AbstractIntraDrift,
     cost_fun::String,
@@ -128,61 +112,76 @@ function findintra!(intra::AbstractIntraDrift,
     d_cutoff::AbstractFloat,
     maxn::Int)
 
-#   idx = smld.datasetnum .== dataset
     idx = [e.dataset for e in smld.emitters] .== dataset
-    if intra.ndims == 2
-        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                               [e.y for e in smld.emitters[idx]])
-        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
-                               [e.σ_y for e in smld.emitters[idx]])
-    elseif intra.ndims == 3
-        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                               [e.y for e in smld.emitters[idx]],
-                               [e.z for e in smld.emitters[idx]])
-        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
-                               [e.σ_y for e in smld.emitters[idx]],
-                               [e.σ_z for e in smld.emitters[idx]])
-    end
-    #coords = cat(dims = 2, smld.x[idx], smld.y[idx])
-    #stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
-    framenum = [e.frame for e in smld.emitters[idx]]
-    data = transpose(coords)
-    se = transpose(stderr)
+    emitters = smld.emitters[idx]
+    N = length(emitters)
 
-    rscale = 0.01
-    if intra.ndims == 2
-        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                               [e.y for e in smld.emitters[idx]])
-        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
-                               [e.σ_y for e in smld.emitters[idx]])
-    elseif intra.ndims == 3
-        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                               [e.y for e in smld.emitters[idx]],
-                               [e.z for e in smld.emitters[idx]])
-        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
-                               [e.σ_y for e in smld.emitters[idx]],
-                               [e.σ_z for e in smld.emitters[idx]])
-    end
-    #coords = cat(dims = 2, smld.x[idx], smld.y[idx])
-    #stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
-#   framenum = smld.framenum[idx]
-    framenum = [e.frame for e in smld.emitters[idx]]
-    data = transpose(coords)
-    se = transpose(stderr)
+    # Extract vectors directly (avoid matrix construction)
+    x = Float64[e.x for e in emitters]
+    y = Float64[e.y for e in emitters]
+    σ_x = Float64[e.σ_x for e in emitters]
+    σ_y = Float64[e.σ_y for e in emitters]
+    framenum = Int[e.frame for e in emitters]
 
+    if intra.ndims == 3
+        z = Float64[e.z for e in emitters]
+        σ_z = Float64[e.σ_z for e in emitters]
+    end
+
+    # Initialize with small random values
     rscale = 0.01
     nframes = smld.n_frames
     initialize_random!(intra, rscale, nframes)
 
-    #convert all intra drift parameters to a single vector for optimization
+    # Convert intra drift parameters to a single vector for optimization
     θ0 = Float64.(intra2theta(intra))
 
-    if cost_fun == "Kdtree"
-        myfun = θ -> costfun(θ, data, framenum, d_cutoff, intra)
-    elseif cost_fun == "Entropy"
-        myfun = θ -> costfun(θ, data, se, framenum, maxn, intra)
+    # Pre-allocate work arrays (reused across all cost function calls)
+    x_work = similar(x)
+    y_work = similar(y)
+
+    # Select cost function based on dimensionality and method
+    if intra.ndims == 2
+        if cost_fun == "Kdtree"
+            myfun = θ -> costfun_kdtree_intra_2D(θ, x, y, framenum, Float64(d_cutoff), intra;
+                                                  x_work=x_work, y_work=y_work)
+        elseif cost_fun == "Entropy"
+            myfun = θ -> costfun_entropy_intra_2D(θ, x, y, σ_x, σ_y, framenum, maxn, intra;
+                                                   divmethod="KL", x_work=x_work, y_work=y_work)
+        elseif cost_fun == "SymEntropy"
+            myfun = θ -> costfun_entropy_intra_2D(θ, x, y, σ_x, σ_y, framenum, maxn, intra;
+                                                   divmethod="Symmetric", x_work=x_work, y_work=y_work)
+        elseif cost_fun == "Bhattacharyya"
+            myfun = θ -> costfun_entropy_intra_2D(θ, x, y, σ_x, σ_y, framenum, maxn, intra;
+                                                   divmethod="Bhattacharyya", x_work=x_work, y_work=y_work)
+        elseif cost_fun == "Mahalanobis"
+            myfun = θ -> costfun_entropy_intra_2D(θ, x, y, σ_x, σ_y, framenum, maxn, intra;
+                                                   divmethod="Mahalanobis", x_work=x_work, y_work=y_work)
+        else
+            error("cost_fun not recognized: $cost_fun")
+        end
+    else # 3D
+        z_work = similar(z)
+        if cost_fun == "Kdtree"
+            myfun = θ -> costfun_kdtree_intra_3D(θ, x, y, z, framenum, Float64(d_cutoff), intra;
+                                                  x_work=x_work, y_work=y_work, z_work=z_work)
+        elseif cost_fun == "Entropy"
+            myfun = θ -> costfun_entropy_intra_3D(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra;
+                                                   divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work)
+        elseif cost_fun == "SymEntropy"
+            myfun = θ -> costfun_entropy_intra_3D(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra;
+                                                   divmethod="Symmetric", x_work=x_work, y_work=y_work, z_work=z_work)
+        elseif cost_fun == "Bhattacharyya"
+            myfun = θ -> costfun_entropy_intra_3D(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra;
+                                                   divmethod="Bhattacharyya", x_work=x_work, y_work=y_work, z_work=z_work)
+        elseif cost_fun == "Mahalanobis"
+            myfun = θ -> costfun_entropy_intra_3D(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra;
+                                                   divmethod="Mahalanobis", x_work=x_work, y_work=y_work, z_work=z_work)
+        else
+            error("cost_fun not recognized: $cost_fun")
+        end
     end
-    # println(myfun(θ0))
+
     opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
@@ -191,90 +190,71 @@ function findintra!(intra::AbstractIntraDrift,
 end
 
 """
-Find and correct inter-detaset drift.
+Find and correct inter-dataset drift.
+Optimized version with pre-allocated work arrays.
 
 # Fields:
-- dm:               inter-dataset structure
-- cost_fun:         cost function: {"Kdtree", "Entropy"}
+- dm:               drift model structure
+- cost_fun:         cost function: {"Kdtree", "Entropy", ...}
 - smld_uncorrected: data structure containing uncorrected coordinate data
-- dataset1:         dataset number for the reference dataset
-- dataset2:         dataset numbers to operate on
-- d_cutoff:         cutoff distance
-- maxn:             maximum number of neighbors considered
+- dataset1:         dataset number for the dataset to correct
+- dataset2:         reference dataset numbers
+- d_cutoff:         cutoff distance (for Kdtree)
+- maxn:             maximum number of neighbors considered (for Entropy)
 - histbinsize:      histogram bin size for optional cross-correlation correction
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
     smld_uncorrected::SMLD,
-#   smld_uncorrected::SMLD{Float64, <:Union{Emitter2DFit{Float64},
-#                                           Emitter3DFit{Float64}}},
     dataset1::Int,
     dataset2::Vector{Int},
     d_cutoff::AbstractFloat,
     maxn::Int,
-    histbinsize::AbstractFloat
-    )
+    histbinsize::AbstractFloat)
 
     n_dims = nDims(smld_uncorrected)
 
-    # get uncorrected coords for dataset 1 
-#   idx1 = smld_uncorrected.datasetnum .== dataset1
+    # Get uncorrected coords for dataset1
     idx1 = [e.dataset for e in smld_uncorrected.emitters] .== dataset1
-    idx1 = findall(idx1)
-    if n_dims == 2
-        coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
-                                [e.y for e in smld_uncorrected.emitters[idx1]])
-        stderr1 = cat(dims = 2, [e.σ_x for e in smld_uncorrected.emitters[idx1]],
-                                [e.σ_y for e in smld_uncorrected.emitters[idx1]])
-    elseif n_dims == 3
-        coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
-                                [e.y for e in smld_uncorrected.emitters[idx1]],
-                                [e.y for e in smld_uncorrected.emitters[idx1]])
-        stderr1 = cat(dims = 2, [e.σ_x for e in smld_uncorrected.emitters[idx1]],
-                                [e.σ_y for e in smld_uncorrected.emitters[idx1]],
-                                [e.σ_z for e in smld_uncorrected.emitters[idx1]])
-    end
-    data = transpose(coords1)
-    se = transpose(stderr1)
+    idx1_find = findall(idx1)
+    emitters1 = smld_uncorrected.emitters[idx1]
 
-    # correct everything
+    x1 = Float64[e.x for e in emitters1]
+    y1 = Float64[e.y for e in emitters1]
+    σ_x1 = Float64[e.σ_x for e in emitters1]
+    σ_y1 = Float64[e.σ_y for e in emitters1]
+    if n_dims == 3
+        z1 = Float64[e.z for e in emitters1]
+        σ_z1 = Float64[e.σ_z for e in emitters1]
+    end
+
+    # Correct everything with current model
     smld = correctdrift(smld_uncorrected, dm)
 
-    # get corrected coords for reference datasets
-    # (in other words, make a sum image)
+    # Get corrected coords for reference datasets (build sum image)
     idx2 = zeros(Bool, length(smld.emitters))
-    for nn in eachindex(dataset2)
-#       idx2 = idx2 .| (smld.emitters.dataset .== dataset2[nn])
-        idx2 = idx2 .| ([e.dataset for e in smld.emitters] .== dataset2[nn])
-    end   
-    if n_dims == 2
-        coords2 = cat(dims = 2, [e.x for e in smld.emitters[idx2]],
-                                [e.y for e in smld.emitters[idx2]])
-    elseif n_dims == 3
-        coords2 = cat(dims = 2, [e.x for e in smld.emitters[idx2]],
-                                [e.y for e in smld.emitters[idx2]],
-                                [e.z for e in smld.emitters[idx2]])
+    for nn in dataset2
+        idx2 .= idx2 .| ([e.dataset for e in smld.emitters] .== nn)
     end
-    data_ref = transpose(coords2)
+    emitters2 = smld.emitters[idx2]
 
+    x2 = Float64[e.x for e in emitters2]
+    y2 = Float64[e.y for e in emitters2]
+    if n_dims == 3
+        z2 = Float64[e.z for e in emitters2]
+    end
+
+    # Optional cross-correlation correction
     if histbinsize > 0.0
-        # Apply an optional cross-correlation correction.
-        #println("=== dataset1 = $dataset1, dataset2 = $dataset2")
-#       smld1 = SMLMData.isolatesmld(smld, idx1)
-#       smld2 = SMLMData.isolatesmld(smld, idx2)
-        smld1 = filter_emitters(smld, idx1)
+        smld1 = filter_emitters(smld, idx1_find)
         smld2 = filter_emitters(smld, idx2)
         shift = findshift(smld1, smld2; histbinsize=histbinsize)
-        #shift = .-shift # correct sign of shift
-        #println("shift = $shift")
         correctdrift!(smld1, shift)
-#       smld.x[idx1] = smld1.x
-#       smld.y[idx1] = smld1.y
-        for nn in eachindex(idx1)
-            smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
-            smld.emitters[idx1[nn]].y = smld1.emitters[nn].y
+        for nn in eachindex(idx1_find)
+            smld.emitters[idx1_find[nn]].x = smld1.emitters[nn].x
+            smld.emitters[idx1_find[nn]].y = smld1.emitters[nn].y
             if n_dims == 3
-                smld.emitters[idx1[nn]].z = smld1.emitters[nn].z
+                smld.emitters[idx1_find[nn]].z = smld1.emitters[nn].z
             end
         end
         if cost_fun == "None"
@@ -283,41 +263,82 @@ function findinter!(dm::AbstractIntraInter,
         end
     end
 
-    # build static kdtree from ref data
-    kdtree = KDTree(data_ref; leafsize = 10)
-
-    # use current model as starting point 
-    inter=dm.inter[dataset1]
-    θ0 = Float64.(inter2theta(inter))
-    
-    if cost_fun == "Kdtree"
-        myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
-    elseif cost_fun == "Entropy"
-        myfun = θ -> costfun(θ, data, se, maxn, inter)
+    # Build static KDTree from reference data
+    if n_dims == 2
+        data_ref = Matrix{Float64}(undef, 2, length(x2))
+        @inbounds for i in eachindex(x2)
+            data_ref[1, i] = x2[i]
+            data_ref[2, i] = y2[i]
+        end
     else
-        error("cost_fun not recognized")
+        data_ref = Matrix{Float64}(undef, 3, length(x2))
+        @inbounds for i in eachindex(x2)
+            data_ref[1, i] = x2[i]
+            data_ref[2, i] = y2[i]
+            data_ref[3, i] = z2[i]
+        end
     end
-    #println(myfun(θ0))
+    kdtree = KDTree(data_ref; leafsize=10)
+
+    # Use current model as starting point
+    inter = dm.inter[dataset1]
+    θ0 = Float64.(inter2theta(inter))
+
+    # Pre-allocate work arrays
+    x_work = similar(x1)
+    y_work = similar(y1)
+
+    if n_dims == 2
+        if cost_fun == "Kdtree"
+            myfun = θ -> costfun_kdtree_inter_2D(θ, x1, y1, kdtree, Float64(d_cutoff), inter;
+                                                  x_work=x_work, y_work=y_work)
+        elseif cost_fun == "Entropy"
+            myfun = θ -> costfun_entropy_inter_2D(θ, x1, y1, σ_x1, σ_y1, maxn, inter;
+                                                   divmethod="KL", x_work=x_work, y_work=y_work)
+        elseif cost_fun == "SymEntropy"
+            myfun = θ -> costfun_entropy_inter_2D(θ, x1, y1, σ_x1, σ_y1, maxn, inter;
+                                                   divmethod="Symmetric", x_work=x_work, y_work=y_work)
+        elseif cost_fun == "Bhattacharyya"
+            myfun = θ -> costfun_entropy_inter_2D(θ, x1, y1, σ_x1, σ_y1, maxn, inter;
+                                                   divmethod="Bhattacharyya", x_work=x_work, y_work=y_work)
+        elseif cost_fun == "Mahalanobis"
+            myfun = θ -> costfun_entropy_inter_2D(θ, x1, y1, σ_x1, σ_y1, maxn, inter;
+                                                   divmethod="Mahalanobis", x_work=x_work, y_work=y_work)
+        else
+            error("cost_fun not recognized: $cost_fun")
+        end
+    else # 3D
+        z_work = similar(z1)
+        if cost_fun == "Kdtree"
+            myfun = θ -> costfun_kdtree_inter_3D(θ, x1, y1, z1, kdtree, Float64(d_cutoff), inter;
+                                                  x_work=x_work, y_work=y_work, z_work=z_work)
+        elseif cost_fun == "Entropy"
+            myfun = θ -> costfun_entropy_inter_3D(θ, x1, y1, z1, σ_x1, σ_y1, σ_z1, maxn, inter;
+                                                   divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work)
+        elseif cost_fun == "SymEntropy"
+            myfun = θ -> costfun_entropy_inter_3D(θ, x1, y1, z1, σ_x1, σ_y1, σ_z1, maxn, inter;
+                                                   divmethod="Symmetric", x_work=x_work, y_work=y_work, z_work=z_work)
+        elseif cost_fun == "Bhattacharyya"
+            myfun = θ -> costfun_entropy_inter_3D(θ, x1, y1, z1, σ_x1, σ_y1, σ_z1, maxn, inter;
+                                                   divmethod="Bhattacharyya", x_work=x_work, y_work=y_work, z_work=z_work)
+        elseif cost_fun == "Mahalanobis"
+            myfun = θ -> costfun_entropy_inter_3D(θ, x1, y1, z1, σ_x1, σ_y1, σ_z1, maxn, inter;
+                                                   divmethod="Mahalanobis", x_work=x_work, y_work=y_work, z_work=z_work)
+        else
+            error("cost_fun not recognized: $cost_fun")
+        end
+    end
+
     opt = Optim.Options(iterations = 10000, show_trace = false)
     res = optimize(myfun, θ0, opt)
     θ_found = res.minimizer
-    #println("θ_found = $θ_found")
-    
+
     theta2inter!(inter, θ_found)
     return res.minimum
 end
 
 """
-Find and correct inter-detaset drift.
-
-# Fields:
-- dm:               inter-dataset structure
-- cost_fun:         cost function: {"Kdtree", "Entropy"}
-- smld_uncorrected: data structure containing uncorrected coordinate data
-- dataset1:         dataset number for the reference dataset
-- d_cutoff:         cutoff distance
-- maxn:             maximum number of neighbors considered
-- histbinsize:      histogram bin size for optional cross-correlation correction
+Find and correct inter-dataset drift (simplified interface).
 """
 function findinter!(dm::AbstractIntraInter,
     cost_fun::String,
@@ -328,26 +349,6 @@ function findinter!(dm::AbstractIntraInter,
     histbinsize::AbstractFloat)
     refdatasets = Int.(1:smld_uncorrected.n_datasets)
     deleteat!(refdatasets, dataset1)
-    return findinter!(dm, cost_fun,  smld_uncorrected, dataset1, refdatasets,
-                      d_cutoff, maxn, histbinsize)   
-end
-
-"""
-Experimental.
-"""
-function globalcost(smld::SMLD; k::Int=4, d_cutoff=1.0)
-    
-    coords1 = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                            [e.y for e in smld.emitters[idx]])
-    data = transpose(coords1)
-    
-    kdtree = KDTree(data; leafsize = 10)
-    idxs, dists = knn(kdtree, data, k+1, true)
-    
-    cost = 0.0
-    for nn = 2:size(data, 2)    
-        # cost += sum(min.(dists[nn], d_cutoff))
-        cost -= sum(exp.(-dists[nn]./d_cutoff))
-    end
-    return cost
+    return findinter!(dm, cost_fun, smld_uncorrected, dataset1, refdatasets,
+                      d_cutoff, maxn, histbinsize)
 end

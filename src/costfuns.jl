@@ -1,167 +1,292 @@
 """
+Cost functions for drift correction optimization.
+Optimized to avoid unnecessary allocations.
+"""
+
+# ============================================================================
+# KDTree-based cost functions (KNN approach)
+# ============================================================================
+
+"""
 INTRA-KNN
 Cost function computes the cost of an intra-dataset drift correction proposal.
-    Here, the cost is the sum of the scaled negative exponentials of the
-    nearest neighbor distances computed frame-by-frame within a dataset.
+Here, the cost is the sum of the scaled negative exponentials of the
+nearest neighbor distances computed frame-by-frame within a dataset.
+
+Optimized: applies drift directly without deepcopy.
 
 # Fields:
-- θ:                parameters for a drift correction proposal
-- data_uncorrected: uncorrected coordinate data for each localization
-- framenum:         frame number for each localization
-- d_cutoff:         cutoff distance
-- intra:            intra-dataset data structure
+- θ:          parameters for a drift correction proposal
+- x, y:       uncorrected coordinates (vectors)
+- framenum:   frame number for each localization
+- d_cutoff:   cutoff distance
+- intra:      intra-dataset data structure
+- x_work, y_work: pre-allocated work arrays (optional)
 """
-function costfun(θ, data_uncorrected, framenum::Vector{Int}, d_cutoff::AbstractFloat, intra::AbstractIntraDrift)
+function costfun_kdtree_intra_2D(θ, x::Vector{T}, y::Vector{T},
+                                  framenum::Vector{Int}, d_cutoff::T,
+                                  intra::AbstractIntraDrift;
+                                  x_work::Vector{T}=similar(x),
+                                  y_work::Vector{T}=similar(y)) where {T<:Real}
     theta2intra!(intra, θ)
-    data = deepcopy(data_uncorrected)
+    N = length(x)
 
-    # Apply the current model to the uncorrected data.
-    ndims = size(data, 1)
-    nloc = size(data, 2)
-    for nn = 1:ndims, ii = 1:nloc
-        data[nn, ii] = correctdrift(data_uncorrected[nn, ii], framenum[ii], intra.dm[nn])
+    # Apply drift correction to work arrays
+    @inbounds for i in 1:N
+        x_work[i] = correctdrift(x[i], framenum[i], intra.dm[1])
+        y_work[i] = correctdrift(y[i], framenum[i], intra.dm[2])
     end
 
-    k = 4   # number of nearest neighbors
-    kdtree = KDTree(data; leafsize = 10)
+    # Build KDTree from corrected data
+    data = Matrix{T}(undef, 2, N)
+    @inbounds for i in 1:N
+        data[1, i] = x_work[i]
+        data[2, i] = y_work[i]
+    end
+
+    k = min(4, N - 1)   # number of nearest neighbors (bounded by available points)
+    if k < 1
+        return T(0)  # Not enough points for meaningful cost
+    end
+    kdtree = KDTree(data; leafsize=10)
     idxs, dists = knn(kdtree, data, k, true)
-    # println(size(dists))
-    cost = 0.0
-    for nn = 2:size(dists, 1)
-        # cost += sum(min.(dists[nn], d_cutoff))
-        cost -= sum(exp.(-dists[nn]./d_cutoff))
+
+    cost = T(0)
+    @inbounds for nn in 2:length(dists)
+        for d in dists[nn]
+            cost -= exp(-d / d_cutoff)
+        end
     end
-    
+
     return cost
 end
 
 """
-INTER-KNN ref_data
-Cost function computes the cost of an inter-dataset drift correction proposal.
-    Here, the cost is the sum of the scaled negative exponentials of the
-    k nearest neighbor distances computed dataset-by-dataset.
-# Fields:
-- θ:                parameters for a drift correction proposal
-- data_uncorrected: uncorrected coordinate data for each localization
-- ref_data:         reference data for producing the KDTree
-- d_cutoff:         cutoff distance
-- inter:            inter-dataset data structure
+INTRA-KNN for 3D
 """
-function costfun(θ, data_uncorrected, ref_data, d_cutoff::AbstractFloat, inter::InterShift)
-    
-    theta2inter!(inter, θ)
-    data = deepcopy(data_uncorrected)
-
-    # Apply the current model to the uncorrected data.
-    ndims = size(data, 1)
-    nloc = size(data, 2)
-    for nn = 1:ndims, ii = 1:nloc
-        data[nn, ii] = correctdrift(data_uncorrected[nn, ii], inter, nn)
-    end
-
-    k = 4   # number of nearest neighbors.
-    kdtree = KDTree(ref_data; leafsize = 10)
-    idxs, dists = knn(kdtree, data, k, true)
-    
-    cost = 0.0
-    for nn = 1:size(data, 2)    
-        # cost += sum(min.(dists[nn], d_cutoff))
-        cost -= sum(exp.(-dists[nn]./d_cutoff))
-    end
-    return cost
-end
-
-"""
-INTER-KNN kdtree
-Cost function computes the cost of an inter-dataset drift correction proposal.
-    Here, the cost is the sum of the scaled negative exponentials of the
-    k nearest neighbor distances computed dataset-by-dataset against a static
-    reference k-D tree.
-# Fields:
-- θ:                parameters for a drift correction proposal
-- data_uncorrected: uncorrected coordinate data for each localization
-- kdtree:           kdtree constructed from a reference dataset (see routine above)
-- d_cutoff:         cutoff distance
-- inter:            inter-dataset data structure
-"""
-function costfun(θ, data_uncorrected, kdtree::KDTree, d_cutoff::AbstractFloat, inter::InterShift)
-    
-    theta2inter!(inter, θ)
-    data = deepcopy(data_uncorrected)
-
-    # Apply the current model to the uncorrected data.
-    ndims = size(data, 1)
-    nloc = size(data, 2)
-    for nn = 1:ndims, ii = 1:nloc
-        data[nn, ii] = correctdrift(data_uncorrected[nn, ii], inter, nn)
-    end
-
-    k = 4   # number of nearest neighbors
-
-    idxs, dists = knn(kdtree, data, k, true)
-    
-    cost = 0.0
-    for nn = 1:size(data, 2)    
-        # cost += sum(min.(dists[nn], d_cutoff))
-        cost -= sum(exp.(-dists[nn]./d_cutoff))
-    end
-    return cost
-end
-
-"""
-INTRA-ENTROPY
-Cost function computes the cost of an intra-dataset drift correction proposal.
-    Here, the cost is the entropy upper bound computed frame-by-frame within a dataset.
-
-# Fields:
-- θ:                parameters for a drift correction proposal
-- data_uncorrected: uncorrected coordinate data for each localization
-- se:               standard errors for each localization
-- framenum:         frame number for each localization
-- maxn:             maxinum number of neighbors considered
-- intra:            intra-dataset data structure
-"""
-function costfun(θ, data_uncorrected, se, framenum::Vector{Int}, maxn::Int, intra::AbstractIntraDrift)
+function costfun_kdtree_intra_3D(θ, x::Vector{T}, y::Vector{T}, z::Vector{T},
+                                  framenum::Vector{Int}, d_cutoff::T,
+                                  intra::AbstractIntraDrift;
+                                  x_work::Vector{T}=similar(x),
+                                  y_work::Vector{T}=similar(y),
+                                  z_work::Vector{T}=similar(z)) where {T<:Real}
     theta2intra!(intra, θ)
-    data = deepcopy(data_uncorrected)
+    N = length(x)
 
-    # Apply the current model to the uncorrected data.
-    ndims = size(data, 1)
-    nloc = size(data, 2)
-    for nn = 1:ndims, ii = 1:nloc
-        data[nn, ii] = correctdrift(data_uncorrected[nn, ii], framenum[ii], intra.dm[nn])
+    @inbounds for i in 1:N
+        x_work[i] = correctdrift(x[i], framenum[i], intra.dm[1])
+        y_work[i] = correctdrift(y[i], framenum[i], intra.dm[2])
+        z_work[i] = correctdrift(z[i], framenum[i], intra.dm[3])
     end
 
-    cost = ub_entropy(transpose(data), transpose(se); maxn = maxn)
-    
+    data = Matrix{T}(undef, 3, N)
+    @inbounds for i in 1:N
+        data[1, i] = x_work[i]
+        data[2, i] = y_work[i]
+        data[3, i] = z_work[i]
+    end
+
+    k = min(4, N - 1)
+    if k < 1
+        return T(0)
+    end
+    kdtree = KDTree(data; leafsize=10)
+    idxs, dists = knn(kdtree, data, k, true)
+
+    cost = T(0)
+    @inbounds for nn in 2:length(dists)
+        for d in dists[nn]
+            cost -= exp(-d / d_cutoff)
+        end
+    end
+
     return cost
 end
 
 """
-INTER-ENTROPY
-Cost function computes the cost of an inter-dataset drift correction proposal.
-    Here, the cost is the entropy upper bound computed dataset-by-dataset.
+INTER-KNN with prebuilt KDTree
+Cost function for inter-dataset drift correction using a static reference KDTree.
 
 # Fields:
-- θ:                parameters for a drift correction proposal
-- data_uncorrected: uncorrected coordinate data for each localization
-- se:               standard errors for each localization
-- maxn:             maximum number of neighbors considered
-- inter:            inter-dataset data structure
+- θ:          parameters for a drift correction proposal
+- x, y:       uncorrected coordinates (vectors)
+- kdtree:     KDTree from reference dataset
+- d_cutoff:   cutoff distance
+- inter:      inter-dataset data structure
 """
-function costfun(θ, data_uncorrected, se, maxn::Int, inter::InterShift)
-    
+function costfun_kdtree_inter_2D(θ, x::Vector{T}, y::Vector{T},
+                                  kdtree::KDTree, d_cutoff::T,
+                                  inter::InterShift;
+                                  x_work::Vector{T}=similar(x),
+                                  y_work::Vector{T}=similar(y)) where {T<:Real}
     theta2inter!(inter, θ)
-    data = deepcopy(data_uncorrected)
+    N = length(x)
 
-    # Apply the current model to the uncorrected data.
-    ndims = size(data, 1)
-    nloc = size(data, 2)
-    for nn = 1:ndims, ii = 1:nloc
-        data[nn, ii] = correctdrift(data_uncorrected[nn, ii], inter, nn)
+    @inbounds for i in 1:N
+        x_work[i] = correctdrift(x[i], inter, 1)
+        y_work[i] = correctdrift(y[i], inter, 2)
     end
 
-    cost = ub_entropy(transpose(data), transpose(se); maxn = maxn)
+    data = Matrix{T}(undef, 2, N)
+    @inbounds for i in 1:N
+        data[1, i] = x_work[i]
+        data[2, i] = y_work[i]
+    end
+
+    k = min(4, N - 1)
+    if k < 1
+        return T(0)
+    end
+    idxs, dists = knn(kdtree, data, k, true)
+
+    cost = T(0)
+    @inbounds for nn in 1:length(dists)
+        for d in dists[nn]
+            cost -= exp(-d / d_cutoff)
+        end
+    end
 
     return cost
+end
+
+"""
+INTER-KNN for 3D with prebuilt KDTree
+"""
+function costfun_kdtree_inter_3D(θ, x::Vector{T}, y::Vector{T}, z::Vector{T},
+                                  kdtree::KDTree, d_cutoff::T,
+                                  inter::InterShift;
+                                  x_work::Vector{T}=similar(x),
+                                  y_work::Vector{T}=similar(y),
+                                  z_work::Vector{T}=similar(z)) where {T<:Real}
+    theta2inter!(inter, θ)
+    N = length(x)
+
+    @inbounds for i in 1:N
+        x_work[i] = correctdrift(x[i], inter, 1)
+        y_work[i] = correctdrift(y[i], inter, 2)
+        z_work[i] = correctdrift(z[i], inter, 3)
+    end
+
+    data = Matrix{T}(undef, 3, N)
+    @inbounds for i in 1:N
+        data[1, i] = x_work[i]
+        data[2, i] = y_work[i]
+        data[3, i] = z_work[i]
+    end
+
+    k = min(4, N - 1)
+    if k < 1
+        return T(0)
+    end
+    idxs, dists = knn(kdtree, data, k, true)
+
+    cost = T(0)
+    @inbounds for nn in 1:length(dists)
+        for d in dists[nn]
+            cost -= exp(-d / d_cutoff)
+        end
+    end
+
+    return cost
+end
+
+# ============================================================================
+# Entropy-based cost functions
+# ============================================================================
+
+"""
+INTRA-ENTROPY for 2D
+Cost function using entropy upper bound. Optimized to avoid deepcopy.
+
+# Fields:
+- θ:          parameters for a drift correction proposal
+- x, y:       uncorrected coordinates (vectors)
+- σ_x, σ_y:   localization uncertainties
+- framenum:   frame number for each localization
+- maxn:       maximum number of neighbors
+- intra:      intra-dataset data structure
+- divmethod:  divergence method
+- x_work, y_work: pre-allocated work arrays
+"""
+function costfun_entropy_intra_2D(θ, x::Vector{T}, y::Vector{T},
+                                   σ_x::Vector{T}, σ_y::Vector{T},
+                                   framenum::Vector{Int}, maxn::Int,
+                                   intra::AbstractIntraDrift;
+                                   divmethod::String="KL",
+                                   x_work::Vector{T}=similar(x),
+                                   y_work::Vector{T}=similar(y)) where {T<:Real}
+    theta2intra!(intra, θ)
+    N = length(x)
+
+    @inbounds for i in 1:N
+        x_work[i] = correctdrift(x[i], framenum[i], intra.dm[1])
+        y_work[i] = correctdrift(y[i], framenum[i], intra.dm[2])
+    end
+
+    return ub_entropy(x_work, y_work, σ_x, σ_y; maxn=maxn, divmethod=divmethod)
+end
+
+"""
+INTRA-ENTROPY for 3D
+"""
+function costfun_entropy_intra_3D(θ, x::Vector{T}, y::Vector{T}, z::Vector{T},
+                                   σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T},
+                                   framenum::Vector{Int}, maxn::Int,
+                                   intra::AbstractIntraDrift;
+                                   divmethod::String="KL",
+                                   x_work::Vector{T}=similar(x),
+                                   y_work::Vector{T}=similar(y),
+                                   z_work::Vector{T}=similar(z)) where {T<:Real}
+    theta2intra!(intra, θ)
+    N = length(x)
+
+    @inbounds for i in 1:N
+        x_work[i] = correctdrift(x[i], framenum[i], intra.dm[1])
+        y_work[i] = correctdrift(y[i], framenum[i], intra.dm[2])
+        z_work[i] = correctdrift(z[i], framenum[i], intra.dm[3])
+    end
+
+    return ub_entropy(x_work, y_work, z_work, σ_x, σ_y, σ_z; maxn=maxn, divmethod=divmethod)
+end
+
+"""
+INTER-ENTROPY for 2D
+"""
+function costfun_entropy_inter_2D(θ, x::Vector{T}, y::Vector{T},
+                                   σ_x::Vector{T}, σ_y::Vector{T},
+                                   maxn::Int, inter::InterShift;
+                                   divmethod::String="KL",
+                                   x_work::Vector{T}=similar(x),
+                                   y_work::Vector{T}=similar(y)) where {T<:Real}
+    theta2inter!(inter, θ)
+    N = length(x)
+
+    @inbounds for i in 1:N
+        x_work[i] = correctdrift(x[i], inter, 1)
+        y_work[i] = correctdrift(y[i], inter, 2)
+    end
+
+    return ub_entropy(x_work, y_work, σ_x, σ_y; maxn=maxn, divmethod=divmethod)
+end
+
+"""
+INTER-ENTROPY for 3D
+"""
+function costfun_entropy_inter_3D(θ, x::Vector{T}, y::Vector{T}, z::Vector{T},
+                                   σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T},
+                                   maxn::Int, inter::InterShift;
+                                   divmethod::String="KL",
+                                   x_work::Vector{T}=similar(x),
+                                   y_work::Vector{T}=similar(y),
+                                   z_work::Vector{T}=similar(z)) where {T<:Real}
+    theta2inter!(inter, θ)
+    N = length(x)
+
+    @inbounds for i in 1:N
+        x_work[i] = correctdrift(x[i], inter, 1)
+        y_work[i] = correctdrift(y[i], inter, 2)
+        z_work[i] = correctdrift(z[i], inter, 3)
+    end
+
+    return ub_entropy(x_work, y_work, z_work, σ_x, σ_y, σ_z; maxn=maxn, divmethod=divmethod)
 end

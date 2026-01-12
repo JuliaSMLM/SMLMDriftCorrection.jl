@@ -131,7 +131,7 @@ using Test
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
     # --- Test driftcorrect (default: Entropy) ---
-    smld_DC = DC.driftcorrect(smld_drift)
+    smld_DC, model = DC.driftcorrect(smld_drift)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
@@ -140,7 +140,7 @@ using Test
     @test isapprox(rmsd, 0.0; atol = 5.0)  # Relaxed tolerance for new SMLMSim API
 
     # --- Test driftcorrect (Entropy) ---
-    smld_DC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100, verbose=1)
+    smld_DC, _ = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100, verbose=1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
@@ -149,7 +149,7 @@ using Test
     @test isapprox(rmsd, 0.0; atol = 5.0)  # Relaxed tolerance for new SMLMSim API
 
     # --- Test driftcorrect (histbinsize > 0) ---
-    smld_DC = DC.driftcorrect(smld_drift; histbinsize=0.1)
+    smld_DC, _ = DC.driftcorrect(smld_drift; histbinsize=0.1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
@@ -179,7 +179,7 @@ using Test
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
     # --- Test driftcorrect (default: Entropy) ---
-    smld_DC = DC.driftcorrect(smld_drift3)
+    smld_DC, _ = DC.driftcorrect(smld_drift3)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     smld_DC_z = [e.z for e in smld_DC.emitters]
@@ -190,7 +190,7 @@ using Test
     @test isapprox(rmsd, 0.0; atol = 10.0)  # Relaxed tolerance for new SMLMSim API
 
     # --- Test driftcorrect (Entropy) ---
-    smld_DC = DC.driftcorrect(smld_drift3; cost_fun="Entropy", maxn=100, verbose=1)
+    smld_DC, _ = DC.driftcorrect(smld_drift3; cost_fun="Entropy", maxn=100, verbose=1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     smld_DC_z = [e.z for e in smld_DC.emitters]
@@ -201,7 +201,7 @@ using Test
     @test isapprox(rmsd, 0.0; atol = 10.0)  # Relaxed tolerance for new SMLMSim API
 
     # --- Test driftcorrect (histbinsize > 0) ---
-    smld_DC = DC.driftcorrect(smld_drift3; histbinsize=0.1)
+    smld_DC, _ = DC.driftcorrect(smld_drift3; histbinsize=0.1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     smld_DC_z = [e.z for e in smld_DC.emitters]
