@@ -61,7 +61,7 @@ function Polynomial(ndims::Int, ndatasets::Int, nframes::Int;
         end
     end
 
-    if initialize=="continous"
+    if initialize=="continuous"
         for ii=1:ndatasets, jj=1:ndims
             if ii==1
                 inter[ii].dm[jj]=rscale*randn()
@@ -135,4 +135,51 @@ function initialize_random!(p::IntraPolynomial, rscale::Real, nframes::Int)
         degree = p.dm[jj].degree
         p.dm[jj].coefficients = rscale * randn() ./ (nframes .^ (1:degree))
     end
+end
+
+"""
+    evaluate_at_frame(p::Polynomial1D, frame::Int)
+
+Evaluate polynomial drift at a specific frame number.
+Returns the drift value (not the corrected coordinate).
+"""
+function evaluate_at_frame(p::Polynomial1D, frame::Int)
+    val = 0.0
+    for nn in 1:p.degree
+        val += p.coefficients[nn] * frame^nn
+    end
+    return val
+end
+
+"""
+    evaluate_drift(intra::IntraPolynomial, frame::Int)
+
+Evaluate intra-dataset drift at a specific frame.
+Returns vector of drift values [dx, dy] or [dx, dy, dz].
+"""
+function evaluate_drift(intra::IntraPolynomial, frame::Int)
+    drift = zeros(intra.ndims)
+    for dim in 1:intra.ndims
+        drift[dim] = evaluate_at_frame(intra.dm[dim], frame)
+    end
+    return drift
+end
+
+"""
+    endpoint_drift(intra::IntraPolynomial, n_frames::Int)
+
+Evaluate drift at the endpoint (last frame) of a dataset.
+"""
+function endpoint_drift(intra::IntraPolynomial, n_frames::Int)
+    return evaluate_drift(intra, n_frames)
+end
+
+"""
+    startpoint_drift(intra::IntraPolynomial)
+
+Evaluate drift at the startpoint (frame 1) of a dataset.
+For standard polynomials, this is small (c1 + c2 + ... ≈ small).
+"""
+function startpoint_drift(intra::IntraPolynomial)
+    return evaluate_drift(intra, 1)
 end

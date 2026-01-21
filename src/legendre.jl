@@ -31,6 +31,10 @@ end
 """
 Normalize frame number to [-1, 1] for Legendre polynomial evaluation.
 Frame 1 maps to -1, frame n_frames maps to +1.
+
+Note: If frame is outside [1, n_frames], the Legendre polynomial evaluation will
+throw a DomainError. This is intentional - it exposes bugs in frame assignment
+rather than hiding them with defensive clamping.
 """
 function normalize_frame(frame::Int, n_frames::Int)
     return 2 * (frame - 1) / (n_frames - 1) - 1
@@ -184,4 +188,55 @@ function LegendrePolynomial(smld::BasicSMLD{Float64, Emitter3DFit{Float64}};
                             degree::Int=2, initialize::String="zeros", rscale=0.1)
     return LegendrePolynomial(3, smld.n_datasets, smld.n_frames;
                               degree=degree, initialize=initialize, rscale=rscale)
+end
+
+"""
+    evaluate_at_frame(p::LegendrePoly1D, frame::Int)
+
+Evaluate Legendre polynomial drift at a specific frame number.
+Returns the drift value (not the corrected coordinate).
+"""
+function evaluate_at_frame(p::LegendrePoly1D, frame::Int)
+    t = normalize_frame(frame, p.n_frames)
+    val = 0.0
+    for nn in 1:p.degree
+        val += p.coefficients[nn] * Pl(t, nn)
+    end
+    return val
+end
+
+"""
+    evaluate_drift(intra::IntraLegendre, frame::Int)
+
+Evaluate intra-dataset Legendre drift at a specific frame.
+Returns vector of drift values [dx, dy] or [dx, dy, dz].
+"""
+function evaluate_drift(intra::IntraLegendre, frame::Int)
+    drift = zeros(intra.ndims)
+    for dim in 1:intra.ndims
+        drift[dim] = evaluate_at_frame(intra.dm[dim], frame)
+    end
+    return drift
+end
+
+"""
+    endpoint_drift(intra::IntraLegendre, n_frames::Int)
+
+Evaluate Legendre drift at the endpoint (last frame) of a dataset.
+Note: For Legendre, this evaluates at t=+1.
+"""
+function endpoint_drift(intra::IntraLegendre, n_frames::Int)
+    return evaluate_drift(intra, n_frames)
+end
+
+"""
+    startpoint_drift(intra::IntraLegendre)
+
+Evaluate Legendre drift at the startpoint (frame 1) of a dataset.
+Note: For Legendre, this evaluates at t=-1, which is NOT zero.
+"""
+function startpoint_drift(intra::IntraLegendre)
+    # Frame 1 - need n_frames from the polynomial itself
+    n_frames = intra.dm[1].n_frames
+    return evaluate_drift(intra, 1)
 end
