@@ -157,6 +157,15 @@ using Test
     print("rmsd 2D (PairCorr) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 5.0)  # Relaxed tolerance for new SMLMSim API
 
+    # --- Test driftcorrect (Kdtree with adaptive neighbors) ---
+    smld_DC, _ = DC.driftcorrect(smld_drift; cost_fun="Kdtree", d_cutoff=0.01, verbose=1)
+    smld_DC_x = [e.x for e in smld_DC.emitters]
+    smld_DC_y = [e.y for e in smld_DC.emitters]
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
+                    (smld_DC_y .- smld_noisy_y).^2) ./ N)
+    print("rmsd 2D (Kdtree adaptive) = $rmsd\n")
+    @test isapprox(rmsd, 0.0; atol = 5.0)
+
     # ========== 3D ==========
     
     # --- Test correctdrift ---
@@ -210,4 +219,15 @@ using Test
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
     print("rmsd 3D (PairCorr) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 10.0)  # Relaxed tolerance for new SMLMSim API
+
+    # --- Test driftcorrect (Kdtree with adaptive neighbors) ---
+    smld_DC, _ = DC.driftcorrect(smld_drift3; cost_fun="Kdtree", d_cutoff=0.01, verbose=1)
+    smld_DC_x = [e.x for e in smld_DC.emitters]
+    smld_DC_y = [e.y for e in smld_DC.emitters]
+    smld_DC_z = [e.z for e in smld_DC.emitters]
+    rmsd = sqrt(sum((smld_DC_x .- smld_noisy3_x).^2 .+
+                    (smld_DC_y .- smld_noisy3_y).^2 .+
+                    (smld_DC_z .- smld_noisy3_z).^2) ./ N)
+    print("rmsd 3D (Kdtree adaptive) = $rmsd\n")
+    @test isapprox(rmsd, 0.0; atol = 12.0)  # Slightly relaxed for 3D Kdtree
 end
