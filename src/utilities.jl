@@ -147,3 +147,117 @@ function chunk_smld(smld::SMLD; chunk_frames::Int=0, n_chunks::Int=0)
         original_n_frames=smld.n_frames
     )
 end
+
+"""
+    drift_trajectory(model; dataset=nothing, frames=nothing)
+
+Extract drift trajectory from a drift model for plotting.
+
+# Arguments
+- `model`: Polynomial or LegendrePolynomial drift model
+- `dataset`: specific dataset to extract (default: all datasets combined for continuous)
+- `frames`: frame range to evaluate (default: 1:n_frames for each dataset)
+
+# Returns
+NamedTuple with fields ready for plotting:
+- `frames`: frame numbers (global if multiple datasets)
+- `x`: x-drift values (μm)
+- `y`: y-drift values (μm)
+- `z`: z-drift values (μm) - only present for 3D models
+- `dataset`: dataset index for each point (useful for coloring)
+
+# Example
+```julia
+result = driftcorrect(smld; dataset_mode=:continuous, n_chunks=4)
+traj = drift_trajectory(result.model)
+plot(traj.frames, traj.x, label="X drift")
+plot!(traj.frames, traj.y, label="Y drift")
+```
+"""
+function drift_trajectory(model::AbstractIntraInter; dataset::Union{Int,Nothing}=nothing, frames::Union{AbstractRange,Nothing}=nothing)
+    ndims = model.intra[1].ndims
+    n_frames = model.n_frames
+
+    if dataset !== nothing
+        # Single dataset requested
+        datasets_to_process = [dataset]
+        frame_offset = 0
+    else
+        # All datasets (for continuous trajectory)
+        datasets_to_process = 1:model.ndatasets
+        frame_offset = 0  # Will accumulate
+    end
+
+    # Preallocate output arrays
+    total_points = length(datasets_to_process) * n_frames
+    all_frames = Vector{Int}(undef, total_points)
+    all_x = Vector{Float64}(undef, total_points)
+    all_y = Vector{Float64}(undef, total_points)
+    all_z = ndims == 3 ? Vector{Float64}(undef, total_points) : Float64[]
+    all_datasets = Vector{Int}(undef, total_points)
+
+    idx = 1
+    global_frame = 0
+
+    for ds in datasets_to_process
+        # Frame range for this dataset
+        ds_frames = frames !== nothing ? frames : 1:n_frames
+
+        for f in ds_frames
+            global_frame += 1
+
+            # Evaluate drift: inter-shift + intra-polynomial
+            drift = evaluate_drift(model.intra[ds], f)
+
+            all_frames[idx] = global_frame
+            all_x[idx] = model.inter[ds].dm[1] + drift[1]
+            all_y[idx] = model.inter[ds].dm[2] + drift[2]
+            if ndims == 3
+                all_z[idx] = model.inter[ds].dm[3] + drift[3]
+            end
+            all_datasets[idx] = ds
+
+            idx += 1
+        end
+    end
+
+    # Trim to actual size (in case frames range was shorter)
+    actual_length = idx - 1
+
+    if ndims == 3
+        return (
+            frames = all_frames[1:actual_length],
+            x = all_x[1:actual_length],
+            y = all_y[1:actual_length],
+            z = all_z[1:actual_length],
+            dataset = all_datasets[1:actual_length]
+        )
+    else
+        return (
+            frames = all_frames[1:actual_length],
+            x = all_x[1:actual_length],
+            y = all_y[1:actual_length],
+            dataset = all_datasets[1:actual_length]
+        )
+    end
+end
+
+"""
+    drift_at_frame(model, dataset, frame)
+
+Evaluate drift at a specific dataset and frame.
+Returns vector [dx, dy] or [dx, dy, dz].
+
+This is the low-level function for getting drift at arbitrary points.
+For plotting trajectories, use `drift_trajectory()` instead.
+"""
+function drift_at_frame(model::AbstractIntraInter, dataset::Int, frame::Int)
+    drift = evaluate_drift(model.intra[dataset], frame)
+    ndims = model.intra[dataset].ndims
+
+    result = zeros(ndims)
+    for dim in 1:ndims
+        result[dim] = model.inter[dataset].dm[dim] + drift[dim]
+    end
+    return result
+end

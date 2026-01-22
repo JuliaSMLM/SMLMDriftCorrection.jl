@@ -14,11 +14,11 @@ include("costfuns.jl")
 include("crosscorr.jl")
 include("interface.jl")
 include("intrainter.jl")
-include("polynomial.jl")
 include("legendre.jl")
 include("utilities.jl")
 
 export driftcorrect
 export filter_emitters
+export drift_trajectory
 
 end

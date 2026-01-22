@@ -124,9 +124,11 @@ end
 
 Combined intra + inter Legendre drift model.
 Contains one IntraLegendre per dataset plus inter-dataset shifts.
+The n_frames field stores the valid frame range for drift evaluation.
 """
 mutable struct LegendrePolynomial <: AbstractIntraInter
     ndatasets::Int
+    n_frames::Int
     intra::Vector{IntraLegendre}
     inter::Vector{InterShift}
 end
@@ -174,7 +176,7 @@ function LegendrePolynomial(ndims::Int, ndatasets::Int, nframes::Int;
         end
     end
 
-    return LegendrePolynomial(ndatasets, intra, inter)
+    return LegendrePolynomial(ndatasets, nframes, intra, inter)
 end
 
 # Constructor from 2D SMLD
