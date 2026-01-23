@@ -28,9 +28,14 @@ Select emitters by boolean mask, indices, or single index.
 
 ### drift_trajectory
 ```julia
-drift_trajectory(model::AbstractIntraInter; dataset=nothing, frames=nothing) -> NamedTuple
+drift_trajectory(model::AbstractIntraInter; dataset=nothing, frames=nothing, cumulative=false) -> NamedTuple
 ```
 Extract drift trajectory from fitted model for plotting.
+
+**Parameters:**
+- `dataset`: specific dataset to extract (default: all)
+- `frames`: frame range to evaluate (default: 1:n_frames)
+- `cumulative`: if true, chain datasets end-to-end showing total accumulated drift (useful for registered mode visualization)
 
 **Returns:** `(frames, x, y, dataset)` or `(frames, x, y, z, dataset)` for 3D
 

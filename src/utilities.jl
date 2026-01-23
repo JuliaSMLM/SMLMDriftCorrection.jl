@@ -149,14 +149,17 @@ function chunk_smld(smld::SMLD; chunk_frames::Int=0, n_chunks::Int=0)
 end
 
 """
-    drift_trajectory(model; dataset=nothing, frames=nothing)
+    drift_trajectory(model; dataset=nothing, frames=nothing, cumulative=false)
 
 Extract drift trajectory from a drift model for plotting.
 
 # Arguments
 - `model`: Polynomial or LegendrePolynomial drift model
-- `dataset`: specific dataset to extract (default: all datasets combined for continuous)
+- `dataset`: specific dataset to extract (default: all datasets)
 - `frames`: frame range to evaluate (default: 1:n_frames for each dataset)
+- `cumulative`: if true, chain datasets end-to-end showing total accumulated drift.
+  Useful for registered acquisitions where you want to visualize what drift
+  would look like without stage registration. Default: false.
 
 # Returns
 NamedTuple with fields ready for plotting:
@@ -168,24 +171,27 @@ NamedTuple with fields ready for plotting:
 
 # Example
 ```julia
-result = driftcorrect(smld; dataset_mode=:continuous, n_chunks=4)
-traj = drift_trajectory(result.model)
-plot(traj.frames, traj.x, label="X drift")
-plot!(traj.frames, traj.y, label="Y drift")
+result = driftcorrect(smld; dataset_mode=:registered)
+traj = drift_trajectory(result.model)  # Each dataset relative to ds1
+
+# Cumulative view - chains datasets end-to-end
+traj_cumul = drift_trajectory(result.model; cumulative=true)
+plot(traj_cumul.frames, traj_cumul.x, label="X drift (cumulative)")
 ```
 """
-function drift_trajectory(model::AbstractIntraInter; dataset::Union{Int,Nothing}=nothing, frames::Union{AbstractRange,Nothing}=nothing)
+function drift_trajectory(model::AbstractIntraInter;
+                          dataset::Union{Int,Nothing}=nothing,
+                          frames::Union{AbstractRange,Nothing}=nothing,
+                          cumulative::Bool=false)
     ndims = model.intra[1].ndims
     n_frames = model.n_frames
 
     if dataset !== nothing
         # Single dataset requested
         datasets_to_process = [dataset]
-        frame_offset = 0
     else
-        # All datasets (for continuous trajectory)
+        # All datasets
         datasets_to_process = 1:model.ndatasets
-        frame_offset = 0  # Will accumulate
     end
 
     # Preallocate output arrays
@@ -199,25 +205,58 @@ function drift_trajectory(model::AbstractIntraInter; dataset::Union{Int,Nothing}
     idx = 1
     global_frame = 0
 
+    # Cumulative offset - chains endpoint of ds N to start of ds N+1
+    cumulative_offset = zeros(ndims)
+
     for ds in datasets_to_process
         # Frame range for this dataset
         ds_frames = frames !== nothing ? frames : 1:n_frames
 
+        # For cumulative mode, compute offset to chain from previous dataset
+        if cumulative && ds > first(datasets_to_process)
+            # Start this dataset where the previous one ended
+            # Previous endpoint is already in cumulative_offset from last iteration
+            # Subtract this dataset's starting drift so it connects smoothly
+            start_drift = evaluate_drift(model.intra[ds], 1)
+            for dim in 1:ndims
+                cumulative_offset[dim] -= start_drift[dim]
+            end
+        end
+
         for f in ds_frames
             global_frame += 1
 
-            # Evaluate drift: inter-shift + intra-polynomial
+            # Evaluate intra-dataset drift at this frame
             drift = evaluate_drift(model.intra[ds], f)
 
             all_frames[idx] = global_frame
-            all_x[idx] = model.inter[ds].dm[1] + drift[1]
-            all_y[idx] = model.inter[ds].dm[2] + drift[2]
-            if ndims == 3
-                all_z[idx] = model.inter[ds].dm[3] + drift[3]
+
+            if cumulative
+                # Cumulative mode: offset + intra drift only (no inter)
+                all_x[idx] = cumulative_offset[1] + drift[1]
+                all_y[idx] = cumulative_offset[2] + drift[2]
+                if ndims == 3
+                    all_z[idx] = cumulative_offset[3] + drift[3]
+                end
+            else
+                # Standard mode: inter-shift + intra-polynomial
+                all_x[idx] = model.inter[ds].dm[1] + drift[1]
+                all_y[idx] = model.inter[ds].dm[2] + drift[2]
+                if ndims == 3
+                    all_z[idx] = model.inter[ds].dm[3] + drift[3]
+                end
             end
             all_datasets[idx] = ds
 
             idx += 1
+        end
+
+        # Update cumulative offset with endpoint of this dataset
+        if cumulative
+            end_drift = evaluate_drift(model.intra[ds], n_frames)
+            for dim in 1:ndims
+                cumulative_offset[dim] += end_drift[dim]
+            end
         end
     end
 
