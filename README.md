@@ -7,10 +7,7 @@
 
 ## Overview
 
-Drift correction.  The main algorithm (*driftcorrect*) consists of an
-intra-dataset portion and an inter-dataset portion (dataset refers to a
-collection or segment of movie frames).  The drift corrected coordinates are
-returned as output.  All distance units are in μm.
+Fiducial-free drift correction for Single Molecule Localization Microscopy (SMLM). The algorithm uses entropy minimization with Legendre polynomial drift models to correct both intra-dataset drift (within each movie segment) and inter-dataset drift (between segments). All distance units are in μm.
 
 ## Installation
 ```julia
@@ -25,9 +22,7 @@ using SMLMSim
 using SMLMDriftCorrection
 DC = SMLMDriftCorrection
 
-# Make an Nmer dataset.  Simulation parameters use physical units, while smld
-# structures are in units of pixels and frames.
-# Original noisy data ...
+# Simulate an Nmer dataset
 smld_true, smld_model, smld_noisy = simulate(;
     ρ=1.0,                # emitters per μm²
     σ_psf=0.13,           # PSF width in μm (130nm)
@@ -36,30 +31,29 @@ smld_true, smld_model, smld_noisy = simulate(;
     nframes=1000,         # frames per dataset
     framerate=50.0,       # frames per second
     pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
-    molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
-    camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
+    molecule=GenericFluor(; q=[0 50; 1e-2 0]),
+    camera=IdealCamera(1:256, 1:256, 0.1)
 )
 
-## Set up a degree 2 polynomial drift model with normalized random coefficients
-drift_true = DC.Polynomial(smld_noisy; degree=2, initialize="random", rscale=0.1)
-
-# Produce drifted data ...
+# Create and apply synthetic drift for testing
+drift_true = DC.LegendrePolynomial(smld_noisy; degree=2, initialize="random", rscale=0.1)
 smld_drifted = DC.applydrift(smld_noisy, drift_true)
 
-## Correct drift (Kdtree cost function by default)
-smld_corrected = driftcorrect(smld_drifted; verbose=1)
+# Correct drift
+result = driftcorrect(smld_drifted; verbose=1)
+smld_corrected = result.smld
 
-# Compute the RMSD (root mean square deviation) between the original and
-# corrected SMLD structures
+# Extract drift trajectory for plotting
+traj = drift_trajectory(result.model)
+# traj.frames, traj.x, traj.y are ready for plotting
+
+# Compute RMSD between original and corrected
 N = length(smld_noisy.emitters)
-smld_noisy_x = [e.x for e in smld_noisy.emitters]
-smld_noisy_y = [e.y for e in smld_noisy.emitters]
-smld_corrected_x = [e.x for e in smld_corrected.emitters]
-smld_corrected_y = [e.y for e in smld_corrected.emitters]
-rmsd = sqrt(sum((smld_corrected_x .- smld_noisy_x).^2 .+
-		(smld_corrected_y .- smld_noisy_y).^2) ./ N)
-print("rmsd 2D [driftcorrect] = $rmsd\n")
-
+rmsd = sqrt(sum(
+    ([e.x for e in smld_corrected.emitters] .- [e.x for e in smld_noisy.emitters]).^2 .+
+    ([e.y for e in smld_corrected.emitters] .- [e.y for e in smld_noisy.emitters]).^2
+) / N)
+println("RMSD = $rmsd μm")
 ```
 
 ## Common Workflows
@@ -68,8 +62,11 @@ print("rmsd 2D [driftcorrect] = $rmsd\n")
 ```julia
 using SMLMDriftCorrection
 
-smld = ...
-smld_DC = driftcorrect(smld)
+result = driftcorrect(smld)
+smld_corrected = result.smld
+
+# Or destructure directly:
+(; smld, model) = driftcorrect(smld)
 ```
 
 ### SMITE Results.mat File
@@ -78,125 +75,102 @@ using SMLMData
 using SMLMDriftCorrection
 
 smd = SmiteSMD(path, file)   # *_Results.mat file
-smld2 = load_smite_2d(smd)   # To check keys, use: varnames = keys(smld2)
-smld2_DC = driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
+smld = load_smite_2d(smd)
+result = driftcorrect(smld; verbose=1)
 ```
 
 ### Selecting a ROI to Analyze
 ```julia
-using SMLMData
 using SMLMDriftCorrection
 
-println("N_smld2    = $(length(smld2.emitters))")
-smld2_x = [e.x for e in smld2.emitters]
-smld2_y = [e.y for e in smld2.emitters]
-subind = (smld2_x .> 64.0) .& (smld2_x .< 128.0) .&
-         (smld2_y .> 64.0) .& (smld2_y .< 128.0)
-smld2roi = DC.filter_emitters(smld2, subind)
-println("N_smld2roi = $(length(smld2roi.emitters))")
+x = [e.x for e in smld.emitters]
+y = [e.y for e in smld.emitters]
+mask = (x .> 64.0) .& (x .< 128.0) .& (y .> 64.0) .& (y .< 128.0)
+smld_roi = filter_emitters(smld, mask)
 
-smld2roi_DC = driftcorrect(smld2roi)
+result = driftcorrect(smld_roi)
+```
+
+### Continuous Acquisition (Drift Accumulates Across Datasets)
+```julia
+using SMLMDriftCorrection
+
+# For data where drift accumulates across files (one long acquisition)
+result = driftcorrect(smld; dataset_mode=:continuous)
+
+# With chunking for finer-grained correction
+result = driftcorrect(smld; dataset_mode=:continuous, n_chunks=10)
 ```
 
 ## Interface
 
-**driftcorrect** is the main interface for drift correction (DC).  This
-algorithm consists of an intra-dataset portion and an inter-dataset portion.
-The drift corrected coordinates are returned as output.  All distance units
-are in μm.
+**driftcorrect** is the main interface for drift correction.
 
-```
+```julia
 function driftcorrect(smld::SMLD;
-    intramodel::String = "Polynomial",
-    cost_fun::String = "Kdtree",
-    cost_fun_intra::String = "",
-    cost_fun_inter::String = "",
     degree::Int = 2,
-    d_cutoff::AbstractFloat = 0.01,
+    dataset_mode::Symbol = :registered,
+    chunk_frames::Int = 0,
+    n_chunks::Int = 0,
     maxn::Int = 200,
-    histbinsize::AbstractFloat = -1.0,
-    verbose::Int = 0)
+    verbose::Int = 0) -> (smld, model)
 ```
+
 ### Input
-- ***smld***:           structure containing (X, Y) or (X, Y, Z) localization
-                        coordinates (μm) - see SMLMData
-### Optional Keyword Input Fields
-- ***intramodel***:     polynomial model for intra-dataset drift correction:
-                        {"Polynomial", "LegendrePoly"} = "Polynomial"
-- ***cost_fun:***       intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
-- ***cost_fun_intra***: intra cost function override: ""
-- ***cost_fun_inter***: inter cost function override: ""
-- ***degree***:         degree for polynomial intra-dataset drift correction = 2
-- ***d_cutoff***:       distance cutoff (μm) = 0.01 [Kdtree cost function]
-- ***maxn***:           maximum number of neighbors considered = 200
-                        [Entropy cost function]
-- ***histbinsize***:    histogram bin size for inter-datset cross-correlation
-                        correction (μm) = -1.0 [< 0 means no correction]
-- ***verbose***:        flag for more output = 0
+- **smld**: SMLD structure containing (X, Y) or (X, Y, Z) localization coordinates (μm)
+
+### Keyword Arguments
+- **degree**: Polynomial degree for intra-dataset drift model (default: 2)
+- **dataset_mode**: How to handle multi-dataset alignment:
+  - `:registered` (default): Datasets are independent (stage registered between acquisitions)
+  - `:continuous`: Drift accumulates across datasets (one long acquisition split into files)
+- **chunk_frames**: For continuous mode, split each dataset into chunks of this many frames (0 = no chunking)
+- **n_chunks**: Alternative to chunk_frames - specify number of chunks per dataset (0 = no chunking)
+- **maxn**: Maximum number of neighbors for entropy calculation (default: 200)
+- **verbose**: Verbosity level (0=quiet, 1=info, 2=debug)
+
 ### Output
-- ***smld_found***:     structure containing drift corrected coordinates (μm)
+Returns a `NamedTuple` with:
+- **smld**: Drift-corrected SMLD structure
+- **model**: Fitted `LegendrePolynomial` drift model (use `drift_trajectory(model)` for plotting)
 
-## Other Entry Points into SMLMDriftCorrect
-- ***Polynomial*** define data type for intra-dataset drifts, which will be a
-                   collection of univariate polynomials of a given degree
-	           indexed by each coordinate dimension and frame number
-- ***applydrift*** apply drift to simulated data
-- ***crosscorr***  computes the cross-correlation between 2 histogram images
-- ***findshift***  computes histogram image shift between 2 SMLDs representing
-                   locaiizations via cross-correlation
-- ***histImage***  produces a histogram image from the localization coordinates
-- ***entropy_HD*** is the entropy summed over all/nearest neighbor localizations
-- ***ub_entropy*** is an upper bound on the entropy based on nearest neighbors
+## Other Functions
 
-## Algorithms
+- **drift_trajectory(model)**: Extract drift trajectory from model for plotting. Returns NamedTuple with `frames`, `x`, `y` (and `z` for 3D)
+- **filter_emitters(smld, mask)**: Select emitters by boolean mask or indices
+- **LegendrePolynomial(smld; degree, initialize, rscale)**: Create drift model directly
+- **applydrift(smld, model)**: Apply drift model to data (for simulation/testing)
+- **correctdrift(smld, model)**: Correct drift using model (inverse of applydrift)
+- **findshift(smld1, smld2; histbinsize)**: Find shift between two SMLDs via cross-correlation
+- **histimage2D/histimage3D**: Create histogram images from coordinates
+- **crosscorr2D/crosscorr3D**: Cross-correlation via FFT
+- **entropy_HD(σ_x, σ_y)**: Base entropy of localization uncertainties
+- **ub_entropy(x, y, σ_x, σ_y; maxn)**: Upper bound entropy for drift optimization
 
-The procedure divides the problem into intra-dataset and inter-dataset drift
-correction, both minimizing a cost function that is based on the predicted
-emitter positions in a dataset, either with respect to itself for intra-dataset
-drift correction (noting that different sets of localizations over time are
-coming from the blinking fluorophores), or the first dataset for inter-dataset
-drift correction. Intra-dataset drift correction is performed first, with the
-results saved for the next phase. For inter-dataset drift correction, the
-datasets are drift corrected in sequence against the first dataset.  Here,
-"dataset" means a segment or collection of movie frames.  Several datasets make
-up a full movie.
+## Algorithm
 
-- **Kdtree**: cost function is simply the thresholded sum of the nearest
-  neighbor distances for all the predicted emitter positions in a dataset,
-  either with respect to itself for intra-dataset drift correction (noting that
-  different sets of localizations over time are coming from the blinking
-  fluorophores), or the first dataset for inter-dataset drift correction.  The
-  fast nearest neighbor search is done using a k-dimensional tree data
-  structure to partition the image.  See [Wester2021], and also
-  [SchodtWester2023] for a MATLAB implementation.
-- **Entropy**; cost function (Drift at Minimum Entropy as described in
-  [Cnossen2021].  The cost is the upper bound on the statistical entropy of a
-  Gaussian Mixture Model characterizing the sum of the localization probability
-  distributions.
-- **histbinsize > 0**: performs cross correlation between two histogram images
-  formed from dataset sum images with the specified histogram bin size.  This
-  is performed for inter-dataset drift correction only.
+The algorithm uses **entropy minimization** with **Legendre polynomial** drift models:
+
+1. **Intra-dataset correction**: For each dataset, fits a Legendre polynomial (degree 2 by default) to model drift over time. Uses KL divergence-based entropy as the cost function, with adaptive KDTree neighbor rebuilding for efficiency.
+
+2. **Inter-dataset correction**: Aligns datasets to each other using constant shifts. In `:registered` mode, all datasets align to dataset 1. In `:continuous` mode, shifts chain sequentially to maintain drift continuity.
+
+The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
 
 ## References
 
 - **[Cnossen2021]** Jelmer Cnossen, Tao Ju Cui, Chirlmin Joo and Carlas Smith,
   "Drift correction in localization microscopy using entropy minimization",
   *Optics Express*, Volume 29, Number 18, August 30, 2021, 27961-27974,
-  PMID: 34614938,
-  https://doi.org/10.1364/OE.426620,
-  (DOI: 10.1364/OE.426620)
+  https://doi.org/10.1364/OE.426620
+
 - **[Wester2021]** Michael J. Wester, David J. Schodt, Hanieh Mazloom-Farsibaf,
   Mohamadreza Fazel, Sandeep Pallikkuth and Keith A. Lidke, "Robust,
   fiducial-free drift correction for super-resolution imaging", *Scientific
-  Reports*, Volume 11, Article 23672, December 8, 2021, 1-14,
-  https://www.nature.com/articles/s41598-021-02850-7,
-  (DOI: 10.1038/s41598-021-02850-7).
-- **[SchodtWester2023]** David J. Schodt*, Michael J. Wester*, Mohamadreza
-  Fazel, Sajjad Khan, Hanieh Mazloom-Farsibaf, Sandeep Pallikkuth, Marjolein
-  B. M. Meddens, Farzin Farzam, Eric A. Burns, William K. Kanagy, Derek A.
-  Rinaldi, Elton Jhamba, Sheng Liu, Peter K. Relich, Mark J. Olah, Stanly L.
-  Steinberg and Keith A. Lidke (* = co-1st author), "SMITE: Single Molecule
-  Imaging Toolbox Extraordinaire (MATLAB)", *Journal of Open Source Software*,
-  Volume 8, Number 90, 2023, p. 5563,
-  https://joss.theoj.org/papers/10.21105/joss.05563, (DOI:
-  10.21105/joss.05563).
+  Reports*, Volume 11, Article 23672, December 8, 2021,
+  https://doi.org/10.1038/s41598-021-02850-7
+
+- **[SchodtWester2023]** David J. Schodt*, Michael J. Wester*, et al.,
+  "SMITE: Single Molecule Imaging Toolbox Extraordinaire (MATLAB)",
+  *Journal of Open Source Software*, Volume 8, Number 90, 2023, p. 5563,
+  https://doi.org/10.21105/joss.05563
