@@ -1,6 +1,5 @@
 ## Demonstrate applying and correcting drift with inter-dataset offsets
 
-using Revise
 using SMLMDriftCorrection
 DC = SMLMDriftCorrection
 using SMLMData

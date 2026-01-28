@@ -273,18 +273,46 @@ function costfun_entropy_intra_3D_adaptive(θ, x::Vector{T}, y::Vector{T}, z::Ve
 end
 
 # ============================================================================
-# Inter-dataset entropy cost functions (merged cloud approach)
+# Inter-dataset entropy cost functions (optimized merged cloud approach)
 # ============================================================================
+
+"""
+    InterNeighborState
+
+State for inter-dataset entropy optimization with adaptive neighbor rebuilding.
+Only rebuilds KDTree when shift magnitude changes significantly.
+"""
+mutable struct InterNeighborState{T<:Real}
+    neighbor_indices::Vector{Vector{Int}}  # neighbor_indices[i] = indices of neighbors of point i
+    last_shift::Vector{T}                   # shift at last rebuild
+    rebuild_threshold::T                    # shift change that triggers rebuild
+    rebuild_count::Int                      # for diagnostics
+    k::Int                                  # number of neighbors
+end
+
+function InterNeighborState(N_n::Int, k::Int, rebuild_threshold::T) where {T<:Real}
+    neighbor_indices = [Int[] for _ in 1:N_n]
+    return InterNeighborState{T}(neighbor_indices, T[Inf, Inf], rebuild_threshold, 0, k)
+end
+
+function InterNeighborState3D(N_n::Int, k::Int, rebuild_threshold::T) where {T<:Real}
+    neighbor_indices = [Int[] for _ in 1:N_n]
+    return InterNeighborState{T}(neighbor_indices, T[Inf, Inf, Inf], rebuild_threshold, 0, k)
+end
 
 """
     costfun_entropy_inter_2D_merged(θ, x_n, y_n, σ_x_n, σ_y_n,
                                      x_ref, y_ref, σ_x_ref, σ_y_ref,
                                      maxn, inter; kwargs...)
 
-Inter-dataset entropy cost: compute entropy of combined cloud
-(shifted dataset_n + reference datasets).
+Inter-dataset entropy cost: compute entropy contribution from dataset_n points
+when merged with reference datasets.
 
-When properly aligned, the combined cloud is tighter (lower entropy).
+OPTIMIZATION: Uses adaptive neighbor rebuilding - only rebuilds KDTree when
+shift changes by more than 0.5 μm. Since typical inter-dataset shifts are
+small, neighbors are stable across most optimizer iterations.
+
+When properly aligned, dataset_n points have lower entropy (neighbors are closer).
 
 # Arguments
 - `θ`: shift parameters [dx, dy]
@@ -296,8 +324,10 @@ When properly aligned, the combined cloud is tighter (lower entropy).
 - `inter`: InterShift struct to update
 
 # Keyword Arguments
-- `divmethod`: divergence method ("KL" or "KL2")
+- `divmethod`: divergence method ("KL")
 - `x_work, y_work`: pre-allocated work arrays for shifted coords
+- `data_combined`: pre-allocated 2×(N_n+N_ref) matrix for KDTree
+- `state`: InterNeighborState for adaptive rebuilding
 """
 function costfun_entropy_inter_2D_merged(θ,
     x_n::Vector{T}, y_n::Vector{T}, σ_x_n::Vector{T}, σ_y_n::Vector{T},
@@ -305,24 +335,87 @@ function costfun_entropy_inter_2D_merged(θ,
     maxn::Int, inter::InterShift;
     divmethod::String="KL",
     x_work::Vector{T}=similar(x_n),
-    y_work::Vector{T}=similar(y_n)) where {T<:Real}
+    y_work::Vector{T}=similar(y_n),
+    data_combined::Matrix{T}=Matrix{T}(undef, 2, length(x_n)+length(x_ref)),
+    state::Union{InterNeighborState{T}, Nothing}=nothing) where {T<:Real}
+
+    divfunc = select_divfunc_2D(divmethod)
 
     # Apply shift to dataset_n
     theta2inter!(inter, θ)
     N_n = length(x_n)
+    N_ref = length(x_ref)
+    N_combined = N_n + N_ref
+
     @inbounds for i in 1:N_n
         x_work[i] = correctdrift(x_n[i], inter, 1)
         y_work[i] = correctdrift(y_n[i], inter, 2)
     end
 
-    # Combine shifted dataset with reference (reference is already corrected)
-    x_combined = vcat(x_work, x_ref)
-    y_combined = vcat(y_work, y_ref)
-    σ_x_combined = vcat(σ_x_n, σ_x_ref)
-    σ_y_combined = vcat(σ_y_n, σ_y_ref)
+    # Build combined coordinate matrix for KDTree
+    # First N_n entries are shifted dataset_n, rest are reference
+    @inbounds for i in 1:N_n
+        data_combined[1, i] = x_work[i]
+        data_combined[2, i] = y_work[i]
+    end
+    @inbounds for i in 1:N_ref
+        data_combined[1, N_n + i] = x_ref[i]
+        data_combined[2, N_n + i] = y_ref[i]
+    end
 
-    return ub_entropy(x_combined, y_combined, σ_x_combined, σ_y_combined;
-                      maxn=maxn, divmethod=divmethod)
+    k = min(maxn, N_combined - 1)
+
+    # Check if we need to rebuild neighbors
+    need_rebuild = state === nothing ||
+                   isempty(state.neighbor_indices[1]) ||
+                   sqrt((θ[1] - state.last_shift[1])^2 + (θ[2] - state.last_shift[2])^2) > state.rebuild_threshold
+
+    if need_rebuild
+        kdtree = KDTree(data_combined; leafsize=10)
+        query_points = view(data_combined, :, 1:N_n)
+        idxs, _ = knn(kdtree, query_points, k + 1, true)
+
+        if state !== nothing
+            @inbounds for i in 1:N_n
+                state.neighbor_indices[i] = idxs[i][2:end]  # exclude self
+            end
+            state.last_shift[1] = θ[1]
+            state.last_shift[2] = θ[2]
+            state.rebuild_count += 1
+        end
+    end
+
+    # Get neighbor indices
+    neighbor_indices = state !== nothing ? state.neighbor_indices : [idxs[i][2:end] for i in 1:N_n]
+
+    # Compute entropy contribution from dataset_n points only
+    log_k = log(T(k))
+    kldiv = Vector{T}(undef, k)
+    out = T(0)
+
+    @inbounds for i in 1:N_n
+        idx = neighbor_indices[i]
+        xi, yi = x_work[i], y_work[i]
+        sxi, syi = σ_x_n[i], σ_y_n[i]
+
+        for j in 1:k
+            jj = idx[j]
+            # Get coordinates from combined cloud
+            if jj <= N_n
+                xj, yj = x_work[jj], y_work[jj]
+                sxj, syj = σ_x_n[jj], σ_y_n[jj]
+            else
+                ref_idx = jj - N_n
+                xj, yj = x_ref[ref_idx], y_ref[ref_idx]
+                sxj, syj = σ_x_ref[ref_idx], σ_y_ref[ref_idx]
+            end
+            kldiv[j] = divfunc(xi, yi, sxi, syi, xj, yj, sxj, syj)
+        end
+
+        out += logsumexp(-kldiv) - log_k
+    end
+
+    return entropy_HD(σ_x_n, σ_y_n) - out / N_n
 end
 
 """
@@ -330,7 +423,7 @@ end
                                      x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
                                      maxn, inter; kwargs...)
 
-3D version of `costfun_entropy_inter_2D_merged`.
+3D version of `costfun_entropy_inter_2D_merged`. Same adaptive rebuilding optimization.
 """
 function costfun_entropy_inter_3D_merged(θ,
     x_n::Vector{T}, y_n::Vector{T}, z_n::Vector{T},
@@ -341,26 +434,86 @@ function costfun_entropy_inter_3D_merged(θ,
     divmethod::String="KL",
     x_work::Vector{T}=similar(x_n),
     y_work::Vector{T}=similar(y_n),
-    z_work::Vector{T}=similar(z_n)) where {T<:Real}
+    z_work::Vector{T}=similar(z_n),
+    data_combined::Matrix{T}=Matrix{T}(undef, 3, length(x_n)+length(x_ref)),
+    state::Union{InterNeighborState{T}, Nothing}=nothing) where {T<:Real}
+
+    divfunc = select_divfunc_3D(divmethod)
 
     # Apply shift to dataset_n
     theta2inter!(inter, θ)
     N_n = length(x_n)
+    N_ref = length(x_ref)
+    N_combined = N_n + N_ref
+
     @inbounds for i in 1:N_n
         x_work[i] = correctdrift(x_n[i], inter, 1)
         y_work[i] = correctdrift(y_n[i], inter, 2)
         z_work[i] = correctdrift(z_n[i], inter, 3)
     end
 
-    # Combine shifted dataset with reference (reference is already corrected)
-    x_combined = vcat(x_work, x_ref)
-    y_combined = vcat(y_work, y_ref)
-    z_combined = vcat(z_work, z_ref)
-    σ_x_combined = vcat(σ_x_n, σ_x_ref)
-    σ_y_combined = vcat(σ_y_n, σ_y_ref)
-    σ_z_combined = vcat(σ_z_n, σ_z_ref)
+    # Build combined coordinate matrix for KDTree
+    @inbounds for i in 1:N_n
+        data_combined[1, i] = x_work[i]
+        data_combined[2, i] = y_work[i]
+        data_combined[3, i] = z_work[i]
+    end
+    @inbounds for i in 1:N_ref
+        data_combined[1, N_n + i] = x_ref[i]
+        data_combined[2, N_n + i] = y_ref[i]
+        data_combined[3, N_n + i] = z_ref[i]
+    end
 
-    return ub_entropy(x_combined, y_combined, z_combined,
-                      σ_x_combined, σ_y_combined, σ_z_combined;
-                      maxn=maxn, divmethod=divmethod)
+    k = min(maxn, N_combined - 1)
+
+    # Check if we need to rebuild neighbors
+    need_rebuild = state === nothing ||
+                   isempty(state.neighbor_indices[1]) ||
+                   sqrt((θ[1] - state.last_shift[1])^2 + (θ[2] - state.last_shift[2])^2 + (θ[3] - state.last_shift[3])^2) > state.rebuild_threshold
+
+    if need_rebuild
+        kdtree = KDTree(data_combined; leafsize=10)
+        query_points = view(data_combined, :, 1:N_n)
+        idxs, _ = knn(kdtree, query_points, k + 1, true)
+
+        if state !== nothing
+            @inbounds for i in 1:N_n
+                state.neighbor_indices[i] = idxs[i][2:end]
+            end
+            state.last_shift[1] = θ[1]
+            state.last_shift[2] = θ[2]
+            state.last_shift[3] = θ[3]
+            state.rebuild_count += 1
+        end
+    end
+
+    neighbor_indices = state !== nothing ? state.neighbor_indices : [idxs[i][2:end] for i in 1:N_n]
+
+    # Compute entropy contribution from dataset_n points only
+    log_k = log(T(k))
+    kldiv = Vector{T}(undef, k)
+    out = T(0)
+
+    @inbounds for i in 1:N_n
+        idx = neighbor_indices[i]
+        xi, yi, zi = x_work[i], y_work[i], z_work[i]
+        sxi, syi, szi = σ_x_n[i], σ_y_n[i], σ_z_n[i]
+
+        for j in 1:k
+            jj = idx[j]
+            if jj <= N_n
+                xj, yj, zj = x_work[jj], y_work[jj], z_work[jj]
+                sxj, syj, szj = σ_x_n[jj], σ_y_n[jj], σ_z_n[jj]
+            else
+                ref_idx = jj - N_n
+                xj, yj, zj = x_ref[ref_idx], y_ref[ref_idx], z_ref[ref_idx]
+                sxj, syj, szj = σ_x_ref[ref_idx], σ_y_ref[ref_idx], σ_z_ref[ref_idx]
+            end
+            kldiv[j] = divfunc(xi, yi, zi, sxi, syi, szi, xj, yj, zj, sxj, syj, szj)
+        end
+
+        out += logsumexp(-kldiv) - log_k
+    end
+
+    return entropy_HD(σ_x_n, σ_y_n, σ_z_n) - out / N_n
 end

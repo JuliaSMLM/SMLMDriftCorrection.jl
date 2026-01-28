@@ -246,22 +246,33 @@ function findinter!(dm::AbstractIntraInter,
     end
 
     # Pre-allocate work arrays
+    N_n = length(x_n)
+    N_ref = length(x_ref)
     x_work = similar(x_n)
     y_work = similar(y_n)
 
+    # Adaptive neighbor state - only rebuild KDTree when shift changes significantly
+    k = min(maxn, N_n + N_ref - 1)
+    rebuild_threshold = 0.5  # μm - same as intra-dataset
+
     if n_dims == 2
+        # Pre-allocate combined data matrix for KDTree (avoids allocation per iteration)
+        data_combined = Matrix{Float64}(undef, 2, N_n + N_ref)
+        state = InterNeighborState(N_n, k, rebuild_threshold)
         myfun = θ -> costfun_entropy_inter_2D_merged(θ,
             x_n, y_n, σ_x_n, σ_y_n,
             x_ref, y_ref, σ_x_ref, σ_y_ref,
             maxn, inter;
-            divmethod="KL", x_work=x_work, y_work=y_work)
+            divmethod="KL", x_work=x_work, y_work=y_work, data_combined=data_combined, state=state)
     else # 3D
         z_work = similar(z_n)
+        data_combined = Matrix{Float64}(undef, 3, N_n + N_ref)
+        state = InterNeighborState3D(N_n, k, rebuild_threshold)
         myfun = θ -> costfun_entropy_inter_3D_merged(θ,
             x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
             x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
             maxn, inter;
-            divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work)
+            divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work, data_combined=data_combined, state=state)
     end
 
     # Optimize with convergence tolerances
