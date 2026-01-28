@@ -73,11 +73,18 @@ function driftcorrect(smld::SMLD;
     driftmodel = LegendrePolynomial(smld_work; degree=degree)
 
     # Intra-dataset correction (parallel over datasets)
-    if verbose > 0
-        @info("SMLMDriftCorrection: starting intra-dataset correction")
-    end
-    Threads.@threads for nn = 1:smld_work.n_datasets
-        findintra!(driftmodel.intra[nn], smld_work, nn, maxn)
+    # Skip if degree=0 (no intra-dataset parameters to optimize)
+    if degree > 0
+        if verbose > 0
+            @info("SMLMDriftCorrection: starting intra-dataset correction")
+        end
+        Threads.@threads for nn = 1:smld_work.n_datasets
+            findintra!(driftmodel.intra[nn], smld_work, nn, maxn)
+        end
+    else
+        if verbose > 0
+            @info("SMLMDriftCorrection: degree=0, skipping intra-dataset correction")
+        end
     end
 
     # Inter-dataset correction

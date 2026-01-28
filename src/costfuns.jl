@@ -273,47 +273,94 @@ function costfun_entropy_intra_3D_adaptive(θ, x::Vector{T}, y::Vector{T}, z::Ve
 end
 
 # ============================================================================
-# Inter-dataset entropy cost functions (non-adaptive, tree built once)
+# Inter-dataset entropy cost functions (merged cloud approach)
 # ============================================================================
 
 """
-INTER-ENTROPY for 2D
-"""
-function costfun_entropy_inter_2D(θ, x::Vector{T}, y::Vector{T},
-                                   σ_x::Vector{T}, σ_y::Vector{T},
-                                   maxn::Int, inter::InterShift;
-                                   divmethod::String="KL",
-                                   x_work::Vector{T}=similar(x),
-                                   y_work::Vector{T}=similar(y)) where {T<:Real}
-    theta2inter!(inter, θ)
-    N = length(x)
+    costfun_entropy_inter_2D_merged(θ, x_n, y_n, σ_x_n, σ_y_n,
+                                     x_ref, y_ref, σ_x_ref, σ_y_ref,
+                                     maxn, inter; kwargs...)
 
-    @inbounds for i in 1:N
-        x_work[i] = correctdrift(x[i], inter, 1)
-        y_work[i] = correctdrift(y[i], inter, 2)
+Inter-dataset entropy cost: compute entropy of combined cloud
+(shifted dataset_n + reference datasets).
+
+When properly aligned, the combined cloud is tighter (lower entropy).
+
+# Arguments
+- `θ`: shift parameters [dx, dy]
+- `x_n, y_n`: coordinates of dataset to be shifted (uncorrected)
+- `σ_x_n, σ_y_n`: uncertainties of dataset to be shifted
+- `x_ref, y_ref`: coordinates of reference datasets (already corrected)
+- `σ_x_ref, σ_y_ref`: uncertainties of reference datasets
+- `maxn`: maximum neighbors for entropy calculation
+- `inter`: InterShift struct to update
+
+# Keyword Arguments
+- `divmethod`: divergence method ("KL" or "KL2")
+- `x_work, y_work`: pre-allocated work arrays for shifted coords
+"""
+function costfun_entropy_inter_2D_merged(θ,
+    x_n::Vector{T}, y_n::Vector{T}, σ_x_n::Vector{T}, σ_y_n::Vector{T},
+    x_ref::Vector{T}, y_ref::Vector{T}, σ_x_ref::Vector{T}, σ_y_ref::Vector{T},
+    maxn::Int, inter::InterShift;
+    divmethod::String="KL",
+    x_work::Vector{T}=similar(x_n),
+    y_work::Vector{T}=similar(y_n)) where {T<:Real}
+
+    # Apply shift to dataset_n
+    theta2inter!(inter, θ)
+    N_n = length(x_n)
+    @inbounds for i in 1:N_n
+        x_work[i] = correctdrift(x_n[i], inter, 1)
+        y_work[i] = correctdrift(y_n[i], inter, 2)
     end
 
-    return ub_entropy(x_work, y_work, σ_x, σ_y; maxn=maxn, divmethod=divmethod)
+    # Combine shifted dataset with reference (reference is already corrected)
+    x_combined = vcat(x_work, x_ref)
+    y_combined = vcat(y_work, y_ref)
+    σ_x_combined = vcat(σ_x_n, σ_x_ref)
+    σ_y_combined = vcat(σ_y_n, σ_y_ref)
+
+    return ub_entropy(x_combined, y_combined, σ_x_combined, σ_y_combined;
+                      maxn=maxn, divmethod=divmethod)
 end
 
 """
-INTER-ENTROPY for 3D
-"""
-function costfun_entropy_inter_3D(θ, x::Vector{T}, y::Vector{T}, z::Vector{T},
-                                   σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T},
-                                   maxn::Int, inter::InterShift;
-                                   divmethod::String="KL",
-                                   x_work::Vector{T}=similar(x),
-                                   y_work::Vector{T}=similar(y),
-                                   z_work::Vector{T}=similar(z)) where {T<:Real}
-    theta2inter!(inter, θ)
-    N = length(x)
+    costfun_entropy_inter_3D_merged(θ, x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
+                                     x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
+                                     maxn, inter; kwargs...)
 
-    @inbounds for i in 1:N
-        x_work[i] = correctdrift(x[i], inter, 1)
-        y_work[i] = correctdrift(y[i], inter, 2)
-        z_work[i] = correctdrift(z[i], inter, 3)
+3D version of `costfun_entropy_inter_2D_merged`.
+"""
+function costfun_entropy_inter_3D_merged(θ,
+    x_n::Vector{T}, y_n::Vector{T}, z_n::Vector{T},
+    σ_x_n::Vector{T}, σ_y_n::Vector{T}, σ_z_n::Vector{T},
+    x_ref::Vector{T}, y_ref::Vector{T}, z_ref::Vector{T},
+    σ_x_ref::Vector{T}, σ_y_ref::Vector{T}, σ_z_ref::Vector{T},
+    maxn::Int, inter::InterShift;
+    divmethod::String="KL",
+    x_work::Vector{T}=similar(x_n),
+    y_work::Vector{T}=similar(y_n),
+    z_work::Vector{T}=similar(z_n)) where {T<:Real}
+
+    # Apply shift to dataset_n
+    theta2inter!(inter, θ)
+    N_n = length(x_n)
+    @inbounds for i in 1:N_n
+        x_work[i] = correctdrift(x_n[i], inter, 1)
+        y_work[i] = correctdrift(y_n[i], inter, 2)
+        z_work[i] = correctdrift(z_n[i], inter, 3)
     end
 
-    return ub_entropy(x_work, y_work, z_work, σ_x, σ_y, σ_z; maxn=maxn, divmethod=divmethod)
+    # Combine shifted dataset with reference (reference is already corrected)
+    x_combined = vcat(x_work, x_ref)
+    y_combined = vcat(y_work, y_ref)
+    z_combined = vcat(z_work, z_ref)
+    σ_x_combined = vcat(σ_x_n, σ_x_ref)
+    σ_y_combined = vcat(σ_y_n, σ_y_ref)
+    σ_z_combined = vcat(σ_z_n, σ_z_ref)
+
+    return ub_entropy(x_combined, y_combined, z_combined,
+                      σ_x_combined, σ_y_combined, σ_z_combined;
+                      maxn=maxn, divmethod=divmethod)
 end

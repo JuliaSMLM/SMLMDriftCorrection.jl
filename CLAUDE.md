@@ -67,9 +67,18 @@ InterShift (per-dataset constant shift)
 - `crosscorr.jl`: Cross-correlation helpers (`findshift`, `histimage2D`, `crosscorr2D`)
 - `typedefs.jl`: Abstract types and `InterShift`
 
-### Adaptive Neighbor Optimization
+### Adaptive Neighbor Optimization (Intra-dataset)
 
 The `NeighborState` struct tracks KDTree neighbors and rebuilds only when drift changes significantly (threshold: 0.5 μm). This avoids O(N log N) tree rebuilds on every optimizer iteration.
+
+### Inter-dataset Alignment (Merged Cloud Entropy)
+
+Inter-dataset alignment uses a "merged cloud" entropy approach:
+1. Combine shifted dataset with reference dataset(s)
+2. Compute entropy of the combined point cloud
+3. Optimizer finds shift that minimizes entropy (tighter combined cloud = better alignment)
+
+This properly incorporates localization uncertainties (σ) and works well for real SMLM data where datasets image the same underlying structure.
 
 ### Dataset Modes
 
@@ -147,3 +156,4 @@ This branch (`adaptive-neighbors`) has simplified the codebase to use only:
 - Legendre polynomial models (better optimization conditioning than standard polynomials)
 - Entropy-based cost function (removed Kdtree cost function option)
 - Adaptive neighbor rebuilding for intra-dataset optimization
+- Merged cloud entropy for inter-dataset alignment (combines datasets, minimizes joint entropy)

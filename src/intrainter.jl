@@ -157,49 +157,111 @@ function findintra!(intra::AbstractIntraDrift,
 end
 
 """
-    findinter!(dm, smld_uncorrected, dataset1, dataset2, maxn)
+    filter_by_dataset(smld, datasets)
+
+Filter SMLD to include only emitters from specified dataset(s).
+"""
+function filter_by_dataset(smld::SMLD, dataset::Int)
+    idx = [e.dataset == dataset for e in smld.emitters]
+    return filter_emitters(smld, idx)
+end
+
+function filter_by_dataset(smld::SMLD, datasets::Vector{Int})
+    idx = [e.dataset in datasets for e in smld.emitters]
+    return filter_emitters(smld, idx)
+end
+
+"""
+    findinter!(dm, smld_uncorrected, dataset_n, ref_datasets, maxn)
 
 Find and correct inter-dataset drift using entropy minimization.
+
+Aligns `dataset_n` to the reference datasets by minimizing the entropy
+of the combined point cloud. Uses cross-correlation for initial guess,
+then refines with entropy optimization.
+
+# Arguments
+- `dm`: drift model (modified in place)
+- `smld_uncorrected`: original SMLD data (not corrected)
+- `dataset_n`: dataset index to shift/align
+- `ref_datasets`: vector of reference dataset indices
+- `maxn`: maximum neighbors for entropy calculation
 """
 function findinter!(dm::AbstractIntraInter,
     smld_uncorrected::SMLD,
-    dataset1::Int,
-    dataset2::Vector{Int},
+    dataset_n::Int,
+    ref_datasets::Vector{Int},
     maxn::Int)
 
     n_dims = nDims(smld_uncorrected)
 
-    # Get uncorrected coords for dataset1
-    idx1 = [e.dataset for e in smld_uncorrected.emitters] .== dataset1
-    emitters1 = smld_uncorrected.emitters[idx1]
+    # Get uncorrected coords for dataset_n (these will be shifted)
+    idx_n = [e.dataset == dataset_n for e in smld_uncorrected.emitters]
+    emitters_n = smld_uncorrected.emitters[idx_n]
 
-    x1 = Float64[e.x for e in emitters1]
-    y1 = Float64[e.y for e in emitters1]
-    σ_x1 = Float64[e.σ_x for e in emitters1]
-    σ_y1 = Float64[e.σ_y for e in emitters1]
+    x_n = Float64[e.x for e in emitters_n]
+    y_n = Float64[e.y for e in emitters_n]
+    σ_x_n = Float64[e.σ_x for e in emitters_n]
+    σ_y_n = Float64[e.σ_y for e in emitters_n]
     if n_dims == 3
-        z1 = Float64[e.z for e in emitters1]
-        σ_z1 = Float64[e.σ_z for e in emitters1]
+        z_n = Float64[e.z for e in emitters_n]
+        σ_z_n = Float64[e.σ_z for e in emitters_n]
     end
 
-    # Correct everything with current model
-    smld = correctdrift(smld_uncorrected, dm)
+    # Correct everything with current model to get reference positions
+    smld_corrected = correctdrift(smld_uncorrected, dm)
 
-    # Use current model as starting point
-    inter = dm.inter[dataset1]
-    θ0 = Float64.(inter2theta(inter))
+    # Extract CORRECTED coords from reference datasets
+    idx_ref = [e.dataset in ref_datasets for e in smld_corrected.emitters]
+    emitters_ref = smld_corrected.emitters[idx_ref]
+
+    x_ref = Float64[e.x for e in emitters_ref]
+    y_ref = Float64[e.y for e in emitters_ref]
+    σ_x_ref = Float64[e.σ_x for e in emitters_ref]
+    σ_y_ref = Float64[e.σ_y for e in emitters_ref]
+    if n_dims == 3
+        z_ref = Float64[e.z for e in emitters_ref]
+        σ_z_ref = Float64[e.σ_z for e in emitters_ref]
+    end
+
+    # Get cross-correlation initial guess (coarse estimate)
+    # Note: This works best when datasets image the same structure (real data).
+    # For simulated data with independent random emitters, CC may not help.
+    smld_n_corrected = filter_by_dataset(smld_corrected, dataset_n)
+    smld_ref = filter_by_dataset(smld_corrected, ref_datasets)
+
+    inter = dm.inter[dataset_n]
+
+    # Try cross-correlation, but use zero init if result is unreasonable
+    θ0 = zeros(Float64, n_dims)
+    try
+        cc_shift = findshift(smld_ref, smld_n_corrected; histbinsize=0.05)  # 50nm bins
+        # findshift(A, B) returns -(B - A), so we need θ = -cc_shift
+        # Sanity check: shift should be < 5 μm typically
+        if maximum(abs.(cc_shift)) < 5.0
+            θ0 = Float64.(-cc_shift)
+        end
+    catch
+        # Keep zero initialization
+    end
 
     # Pre-allocate work arrays
-    x_work = similar(x1)
-    y_work = similar(y1)
+    x_work = similar(x_n)
+    y_work = similar(y_n)
 
     if n_dims == 2
-        myfun = θ -> costfun_entropy_inter_2D(θ, x1, y1, σ_x1, σ_y1, maxn, inter;
-                                               divmethod="KL", x_work=x_work, y_work=y_work)
+        myfun = θ -> costfun_entropy_inter_2D_merged(θ,
+            x_n, y_n, σ_x_n, σ_y_n,
+            x_ref, y_ref, σ_x_ref, σ_y_ref,
+            maxn, inter;
+            divmethod="KL", x_work=x_work, y_work=y_work)
     else # 3D
-        z_work = similar(z1)
-        myfun = θ -> costfun_entropy_inter_3D(θ, x1, y1, z1, σ_x1, σ_y1, σ_z1, maxn, inter;
-                                               divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work)
+        z_work = similar(z_n)
+        myfun = θ -> costfun_entropy_inter_3D_merged(θ,
+            x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
+            x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
+            maxn, inter;
+            divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work)
     end
 
     # Optimize with convergence tolerances
