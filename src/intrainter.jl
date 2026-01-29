@@ -195,20 +195,22 @@ function findinter!(dm::AbstractIntraInter,
 
     n_dims = nDims(smld_uncorrected)
 
-    # Get uncorrected coords for dataset_n (these will be shifted)
+    # Get UNCORRECTED coords for dataset_n
     idx_n = [e.dataset == dataset_n for e in smld_uncorrected.emitters]
     emitters_n = smld_uncorrected.emitters[idx_n]
 
-    x_n = Float64[e.x for e in emitters_n]
-    y_n = Float64[e.y for e in emitters_n]
+    # Apply ONLY intra-drift correction (not inter) to dataset_n
+    # This way the optimizer finds the TOTAL inter-shift needed.
+    x_n = Float64[correctdrift(e.x, e.frame, dm.intra[dataset_n].dm[1]) for e in emitters_n]
+    y_n = Float64[correctdrift(e.y, e.frame, dm.intra[dataset_n].dm[2]) for e in emitters_n]
     σ_x_n = Float64[e.σ_x for e in emitters_n]
     σ_y_n = Float64[e.σ_y for e in emitters_n]
     if n_dims == 3
-        z_n = Float64[e.z for e in emitters_n]
+        z_n = Float64[correctdrift(e.z, e.frame, dm.intra[dataset_n].dm[3]) for e in emitters_n]
         σ_z_n = Float64[e.σ_z for e in emitters_n]
     end
 
-    # Correct everything with current model to get reference positions
+    # Correct reference datasets fully (intra + inter) for comparison
     smld_corrected = correctdrift(smld_uncorrected, dm)
 
     # Extract CORRECTED coords from reference datasets
@@ -224,25 +226,41 @@ function findinter!(dm::AbstractIntraInter,
         σ_z_ref = Float64[e.σ_z for e in emitters_ref]
     end
 
-    # Get cross-correlation initial guess (coarse estimate)
-    # Note: This works best when datasets image the same structure (real data).
-    # For simulated data with independent random emitters, CC may not help.
-    smld_n_corrected = filter_by_dataset(smld_corrected, dataset_n)
-    smld_ref = filter_by_dataset(smld_corrected, ref_datasets)
-
     inter = dm.inter[dataset_n]
 
-    # Try cross-correlation, but use zero init if result is unreasonable
-    θ0 = zeros(Float64, n_dims)
-    try
-        cc_shift = findshift(smld_ref, smld_n_corrected; histbinsize=0.05)  # 50nm bins
-        # findshift(A, B) returns -(B - A), so we need θ = -cc_shift
-        # Sanity check: shift should be < 5 μm typically
-        if maximum(abs.(cc_shift)) < 5.0
-            θ0 = Float64.(-cc_shift)
+    # Initial guess: use current inter value if non-zero, otherwise try CC
+    # This allows the second pass to refine from the first pass result.
+    if any(abs.(inter.dm) .> 1e-10)
+        # Use current inter as starting point (preserves first pass result)
+        θ0 = Float64.(inter.dm)
+    else
+        # First pass: try cross-correlation for initial guess
+        # Note: For CC we need both datasets in the same reference frame
+        smld_ref = filter_by_dataset(smld_corrected, ref_datasets)
+
+        # Create intra-only corrected SMLD for dataset_n (to match what optimizer uses)
+        # This is a temporary copy for CC only
+        smld_n_intra_only = deepcopy(filter_by_dataset(smld_uncorrected, dataset_n))
+        for i in eachindex(smld_n_intra_only.emitters)
+            e = smld_n_intra_only.emitters[i]
+            smld_n_intra_only.emitters[i].x = correctdrift(e.x, e.frame, dm.intra[dataset_n].dm[1])
+            smld_n_intra_only.emitters[i].y = correctdrift(e.y, e.frame, dm.intra[dataset_n].dm[2])
+            if n_dims == 3
+                smld_n_intra_only.emitters[i].z = correctdrift(e.z, e.frame, dm.intra[dataset_n].dm[3])
+            end
         end
-    catch
-        # Keep zero initialization
+
+        θ0 = zeros(Float64, n_dims)
+        try
+            cc_shift = findshift(smld_ref, smld_n_intra_only; histbinsize=0.05)  # 50nm bins
+            # findshift(A, B) returns -(B - A), so we need θ = -cc_shift
+            # Sanity check: shift should be < 5 μm typically
+            if maximum(abs.(cc_shift)) < 5.0
+                θ0 = Float64.(-cc_shift)
+            end
+        catch
+            # Keep zero initialization
+        end
     end
 
     # Pre-allocate work arrays
@@ -275,9 +293,10 @@ function findinter!(dm::AbstractIntraInter,
             divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work, data_combined=data_combined, state=state)
     end
 
-    # Optimize with convergence tolerances
-    opt = Optim.Options(iterations=10000, f_abstol=1e-2, x_abstol=1e-4, show_trace=false)
-    res = optimize(myfun, θ0, opt)
+    # Optimize with gradient-based method for better convergence
+    # BFGS handles flat entropy landscapes better than Nelder-Mead (2x slower but ~4x more accurate)
+    opt = Optim.Options(iterations=10000, g_abstol=1e-8, show_trace=false)
+    res = optimize(myfun, θ0, BFGS())
     theta2inter!(inter, res.minimizer)
     return res.minimum
 end

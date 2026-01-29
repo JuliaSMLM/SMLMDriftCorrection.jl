@@ -88,30 +88,31 @@ function driftcorrect(smld::SMLD;
     end
 
     # Inter-dataset correction
+    # Both modes use the same approach: align datasets via entropy minimization.
+    # The only difference is conceptual interpretation after correction.
     if dataset_mode == :continuous
-        # Continuous mode: initialize inter-shifts from endpoints, then optimize
         if verbose > 0
-            @info("SMLMDriftCorrection: continuous mode - chaining inter-dataset shifts")
+            @info("SMLMDriftCorrection: continuous mode - aligning datasets to reference")
         end
 
-        ndims = driftmodel.intra[1].ndims
-        driftmodel.inter[1].dm .= 0.0
-
+        # Align each dataset to dataset 1 first
         for nn = 2:smld_work.n_datasets
-            endpoint_prev = endpoint_drift(driftmodel.intra[nn-1], smld_work.n_frames)
-            startpoint_curr = startpoint_drift(driftmodel.intra[nn])
+            findinter!(driftmodel, smld_work, nn, [1], maxn)
+        end
 
-            for dim in 1:ndims
-                driftmodel.inter[nn].dm[dim] = driftmodel.inter[nn-1].dm[dim] +
-                                                endpoint_prev[dim] -
-                                                startpoint_curr[dim]
-            end
-
-            if verbose > 1
-                println("  Chunk $nn initial inter: $(driftmodel.inter[nn].dm)")
-            end
-
+        # Refine by aligning to all previous datasets
+        for nn = 2:smld_work.n_datasets
             findinter!(driftmodel, smld_work, nn, collect(1:(nn-1)), maxn)
+        end
+
+        # Normalize so drift at (DS=1, frame=1) = 0
+        # This removes the global offset ambiguity for continuous mode
+        ndims = driftmodel.intra[1].ndims
+        for dim in 1:ndims
+            offset = evaluate_at_frame(driftmodel.intra[1].dm[dim], 1) + driftmodel.inter[1].dm[dim]
+            for nn = 1:smld_work.n_datasets
+                driftmodel.inter[nn].dm[dim] -= offset
+            end
         end
 
     elseif dataset_mode == :registered

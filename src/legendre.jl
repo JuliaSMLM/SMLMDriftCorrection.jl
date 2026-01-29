@@ -164,15 +164,32 @@ function LegendrePolynomial(ndims::Int, ndatasets::Int, nframes::Int;
     end
 
     if initialize == "continuous"
-        for ii = 1:ndatasets, jj = 1:ndims
-            if ii == 1
-                inter[ii].dm[jj] = rscale * randn()
-            else
-                # Chain inter-shifts for continuous drift
-                inter[ii].dm[jj] = inter[ii-1].dm[jj] +
-                    applydrift(0.0, nframes, intra[ii-1].dm[jj])
+        # For continuous drift: total_drift(DS=1, frame=1) = 0, and drift is
+        # continuous at all dataset boundaries.
+        #
+        # Strategy: Generate random intra polynomials, then set inter-shifts
+        # so that total drift = intra + inter has the right properties.
+
+        for jj = 1:ndims
+            for ii = 1:ndatasets
+                # Generate random intra polynomial
+                intra[ii].dm[jj].coefficients = rscale * randn(degree)
             end
-            intra[ii].dm[jj].coefficients = rscale * randn(degree)
+
+            # Set inter-shifts to ensure continuity
+            # total(ds, frame) = intra[ds](frame) + inter[ds]
+            # Requirement: total(1, 1) = 0  →  inter[1] = -intra[1](1)
+            # Requirement: total(n, 1) = total(n-1, nframes)
+            #   intra[n](1) + inter[n] = intra[n-1](nframes) + inter[n-1]
+            #   inter[n] = inter[n-1] + intra[n-1](nframes) - intra[n](1)
+
+            inter[1].dm[jj] = -evaluate_at_frame(intra[1].dm[jj], 1)
+
+            for ii = 2:ndatasets
+                inter[ii].dm[jj] = inter[ii-1].dm[jj] +
+                    evaluate_at_frame(intra[ii-1].dm[jj], nframes) -
+                    evaluate_at_frame(intra[ii].dm[jj], 1)
+            end
         end
     end
 

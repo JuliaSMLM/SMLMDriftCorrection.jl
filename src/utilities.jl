@@ -55,6 +55,33 @@ function compute_chunk_params(n_frames::Int; chunk_frames::Int=0, n_chunks::Int=
     end
 end
 
+# Helper functions to create emitters - supports both SMLMData 0.5 and 0.6+
+# 0.5: 12 fields (no σ_xy), all positional
+# 0.6: 13 fields (has σ_xy), 8 positional + keyword args
+const _HAS_SIGMA_XY = hasfield(Emitter2DFit{Float64}, :σ_xy)
+
+function _make_emitter_2d(T, x, y, photons, bg, σ_x, σ_y, σ_photons, σ_bg, frame, dataset, track_id, id)
+    if _HAS_SIGMA_XY
+        # SMLMData 0.6+: convenience constructor with keyword args for σ_xy, frame, etc.
+        return T(x, y, photons, bg, σ_x, σ_y, σ_photons, σ_bg;
+                 frame=frame, dataset=dataset, track_id=track_id, id=id)
+    else
+        # SMLMData 0.5: all positional
+        return T(x, y, photons, bg, σ_x, σ_y, σ_photons, σ_bg, frame, dataset, track_id, id)
+    end
+end
+
+function _make_emitter_3d(T, x, y, z, photons, bg, σ_x, σ_y, σ_z, σ_photons, σ_bg, frame, dataset, track_id, id)
+    if _HAS_SIGMA_XY
+        # SMLMData 0.6+: convenience constructor with keyword args
+        return T(x, y, z, photons, bg, σ_x, σ_y, σ_z, σ_photons, σ_bg;
+                 frame=frame, dataset=dataset, track_id=track_id, id=id)
+    else
+        # SMLMData 0.5: all positional
+        return T(x, y, z, photons, bg, σ_x, σ_y, σ_z, σ_photons, σ_bg, frame, dataset, track_id, id)
+    end
+end
+
 """
     chunk_smld(smld; chunk_frames=0, n_chunks=0)
 
@@ -108,19 +135,18 @@ function chunk_smld(smld::SMLD; chunk_frames::Int=0, n_chunks::Int=0)
         chunk_start = (chunk_idx - 1) * frames_per_chunk + 1
         new_frame = e.frame - chunk_start + 1
 
-        # Create new emitter with updated dataset and frame using keyword constructors
+        # Create new emitter with updated dataset and frame
+        # Support both SMLMData 0.5 (positional) and 0.6+ (keyword) constructors
         if is_3d
-            new_emitters[i] = typeof(e)(;
-                x=e.x, y=e.y, z=e.z, photons=e.photons, bg=e.bg,
-                σ_x=e.σ_x, σ_y=e.σ_y, σ_z=e.σ_z, σ_photons=e.σ_photons, σ_bg=e.σ_bg,
-                frame=new_frame, dataset=new_dataset, track_id=e.track_id, id=e.id
-            )
+            new_emitters[i] = _make_emitter_3d(typeof(e),
+                e.x, e.y, e.z, e.photons, e.bg,
+                e.σ_x, e.σ_y, e.σ_z, e.σ_photons, e.σ_bg,
+                new_frame, new_dataset, e.track_id, e.id)
         else
-            new_emitters[i] = typeof(e)(;
-                x=e.x, y=e.y, photons=e.photons, bg=e.bg,
-                σ_x=e.σ_x, σ_y=e.σ_y, σ_photons=e.σ_photons, σ_bg=e.σ_bg,
-                frame=new_frame, dataset=new_dataset, track_id=e.track_id, id=e.id
-            )
+            new_emitters[i] = _make_emitter_2d(typeof(e),
+                e.x, e.y, e.photons, e.bg,
+                e.σ_x, e.σ_y, e.σ_photons, e.σ_bg,
+                new_frame, new_dataset, e.track_id, e.id)
         end
     end
 
