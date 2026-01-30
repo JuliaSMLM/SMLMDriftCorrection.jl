@@ -118,28 +118,89 @@ using Test
     print("rmsd 2D [correctdrift] = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
-    # --- Test driftcorrect (default) ---
-    smld_DC, model = DC.driftcorrect(smld_drift)
-    smld_DC_x = [e.x for e in smld_DC.emitters]
-    smld_DC_y = [e.y for e in smld_DC.emitters]
+    # --- Test DriftResult type ---
+    @testset "DriftResult structure" begin
+        result = DC.driftcorrect(smld_drift)
+        @test result isa DC.DriftResult
+        @test result.smld isa DC.SMLD
+        @test result.model isa DC.LegendrePolynomial
+        @test result.iterations >= 1
+        @test result.converged == true
+        @test result.entropy isa Float64
+        @test result.history isa Vector{Float64}
+    end
+
+    # --- Test driftcorrect (default = singlepass) ---
+    result = DC.driftcorrect(smld_drift)
+    smld_DC_x = [e.x for e in result.smld.emitters]
+    smld_DC_y = [e.y for e in result.smld.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
-    print("rmsd 2D (default) = $rmsd\n")
+    print("rmsd 2D (singlepass) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 5.0)
+    @test result.iterations == 1
+
+    # --- Test quality=:fft ---
+    @testset "FFT quality tier" begin
+        result_fft = DC.driftcorrect(smld_drift; quality=:fft)
+        @test result_fft isa DC.DriftResult
+        @test result_fft.iterations == 0
+        @test result_fft.converged == true
+        # FFT is less accurate but should still be reasonable
+        smld_DC_x = [e.x for e in result_fft.smld.emitters]
+        smld_DC_y = [e.y for e in result_fft.smld.emitters]
+        rmsd_fft = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
+                            (smld_DC_y .- smld_noisy_y).^2) ./ N)
+        print("rmsd 2D (fft) = $rmsd_fft\n")
+        # FFT should at least be in the ballpark (< 15 μm)
+        # Note: FFT is less accurate than entropy-based methods
+        @test rmsd_fft < 15.0
+    end
+
+    # --- Test quality=:iterative ---
+    @testset "Iterative quality tier" begin
+        result_iter = DC.driftcorrect(smld_drift; quality=:iterative, max_iterations=3, verbose=1)
+        @test result_iter isa DC.DriftResult
+        @test result_iter.iterations >= 1
+        @test length(result_iter.history) >= 1
+        smld_DC_x = [e.x for e in result_iter.smld.emitters]
+        smld_DC_y = [e.y for e in result_iter.smld.emitters]
+        rmsd_iter = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
+                             (smld_DC_y .- smld_noisy_y).^2) ./ N)
+        print("rmsd 2D (iterative) = $rmsd_iter\n")
+        @test rmsd_iter < 5.0
+    end
+
+    # --- Test continuation (dispatch on DriftResult) ---
+    @testset "DriftResult continuation" begin
+        result1 = DC.driftcorrect(smld_drift; quality=:singlepass)
+        result2 = DC.driftcorrect(result1; max_iterations=2)
+        @test result2 isa DC.DriftResult
+        @test result2.iterations > result1.iterations
+        print("Continuation: $(result1.iterations) -> $(result2.iterations) iterations\n")
+    end
+
+    # --- Test driftcorrect! (in-place) ---
+    @testset "driftcorrect! in-place" begin
+        result = DC.driftcorrect(smld_drift)
+        initial_iter = result.iterations
+        DC.driftcorrect!(result; max_iterations=1)
+        @test result.iterations > initial_iter
+    end
 
     # --- Test driftcorrect with verbose ---
-    smld_DC, _ = DC.driftcorrect(smld_drift; maxn=100, verbose=1)
-    smld_DC_x = [e.x for e in smld_DC.emitters]
-    smld_DC_y = [e.y for e in smld_DC.emitters]
+    result, _ = DC.driftcorrect(smld_drift; maxn=100, verbose=1), nothing
+    smld_DC_x = [e.x for e in result.smld.emitters]
+    smld_DC_y = [e.y for e in result.smld.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd 2D (maxn=100) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 5.0)
 
     # --- Test driftcorrect with different degree ---
-    smld_DC, _ = DC.driftcorrect(smld_drift; degree=3)
-    smld_DC_x = [e.x for e in smld_DC.emitters]
-    smld_DC_y = [e.y for e in smld_DC.emitters]
+    result = DC.driftcorrect(smld_drift; degree=3)
+    smld_DC_x = [e.x for e in result.smld.emitters]
+    smld_DC_y = [e.y for e in result.smld.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd 2D (degree=3) = $rmsd\n")
@@ -166,10 +227,11 @@ using Test
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
     # --- Test driftcorrect (default) ---
-    smld_DC, _ = DC.driftcorrect(smld_drift3)
-    smld_DC_x = [e.x for e in smld_DC.emitters]
-    smld_DC_y = [e.y for e in smld_DC.emitters]
-    smld_DC_z = [e.z for e in smld_DC.emitters]
+    result = DC.driftcorrect(smld_drift3)
+    @test result isa DC.DriftResult
+    smld_DC_x = [e.x for e in result.smld.emitters]
+    smld_DC_y = [e.y for e in result.smld.emitters]
+    smld_DC_z = [e.z for e in result.smld.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy3_x).^2 .+
                     (smld_DC_y .- smld_noisy3_y).^2 .+
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
@@ -177,13 +239,24 @@ using Test
     @test isapprox(rmsd, 0.0; atol = 10.0)
 
     # --- Test driftcorrect with verbose ---
-    smld_DC, _ = DC.driftcorrect(smld_drift3; maxn=100, verbose=1)
-    smld_DC_x = [e.x for e in smld_DC.emitters]
-    smld_DC_y = [e.y for e in smld_DC.emitters]
-    smld_DC_z = [e.z for e in smld_DC.emitters]
+    result = DC.driftcorrect(smld_drift3; maxn=100, verbose=1)
+    smld_DC_x = [e.x for e in result.smld.emitters]
+    smld_DC_y = [e.y for e in result.smld.emitters]
+    smld_DC_z = [e.z for e in result.smld.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy3_x).^2 .+
                     (smld_DC_y .- smld_noisy3_y).^2 .+
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
     print("rmsd 3D (maxn=100) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 10.0)
+
+    # --- Test 3D quality tiers ---
+    @testset "3D quality tiers" begin
+        # FFT
+        result_fft = DC.driftcorrect(smld_drift3; quality=:fft)
+        @test result_fft.iterations == 0
+
+        # Iterative
+        result_iter = DC.driftcorrect(smld_drift3; quality=:iterative, max_iterations=2)
+        @test result_iter.iterations >= 1
+    end
 end

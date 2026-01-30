@@ -12,12 +12,14 @@ include("typedefs.jl")
 include("cost_entropy.jl")
 include("costfuns.jl")
 include("crosscorr.jl")
-include("interface.jl")
-include("intrainter.jl")
 include("legendre.jl")
+include("intrainter.jl")
 include("utilities.jl")
+include("interface.jl")
 
 export driftcorrect
+export driftcorrect!
+export DriftResult
 export filter_emitters
 export drift_trajectory
 
