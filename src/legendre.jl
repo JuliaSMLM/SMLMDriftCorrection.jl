@@ -134,10 +134,12 @@ mutable struct LegendrePolynomial <: AbstractIntraInter
 end
 
 """
-Construct Legendre drift model from SMLD data.
+Construct Legendre drift model.
 
 # Arguments
-- `smld`: SMLD data structure
+- `ndims`: number of spatial dimensions (2 or 3)
+- `ndatasets`: number of datasets
+- `nframes`: frames per dataset
 - `degree`: polynomial degree (default 2)
 - `initialize`: "zeros" (default) or "random"
 - `rscale`: scale for random initialization (default 0.01)
@@ -160,36 +162,6 @@ function LegendrePolynomial(ndims::Int, ndatasets::Int, nframes::Int;
             # because basis functions are already normalized to [-1, 1]
             # Use 'degree' coefficients for P_1 through P_degree (no P_0)
             intra[ii].dm[jj].coefficients = rscale * randn(degree)
-        end
-    end
-
-    if initialize == "continuous"
-        # For continuous drift: total_drift(DS=1, frame=1) = 0, and drift is
-        # continuous at all dataset boundaries.
-        #
-        # Strategy: Generate random intra polynomials, then set inter-shifts
-        # so that total drift = intra + inter has the right properties.
-
-        for jj = 1:ndims
-            for ii = 1:ndatasets
-                # Generate random intra polynomial
-                intra[ii].dm[jj].coefficients = rscale * randn(degree)
-            end
-
-            # Set inter-shifts to ensure continuity
-            # total(ds, frame) = intra[ds](frame) + inter[ds]
-            # Requirement: total(1, 1) = 0  →  inter[1] = -intra[1](1)
-            # Requirement: total(n, 1) = total(n-1, nframes)
-            #   intra[n](1) + inter[n] = intra[n-1](nframes) + inter[n-1]
-            #   inter[n] = inter[n-1] + intra[n-1](nframes) - intra[n](1)
-
-            inter[1].dm[jj] = -evaluate_at_frame(intra[1].dm[jj], 1)
-
-            for ii = 2:ndatasets
-                inter[ii].dm[jj] = inter[ii-1].dm[jj] +
-                    evaluate_at_frame(intra[ii-1].dm[jj], nframes) -
-                    evaluate_at_frame(intra[ii].dm[jj], 1)
-            end
         end
     end
 

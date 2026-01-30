@@ -9,9 +9,9 @@ entropy-based cost function and adaptive KDTree neighbor building.
 
 # Keyword Arguments
 - `degree=2`: polynomial degree for intra-dataset drift model
-- `dataset_mode=:registered`: acquisition mode for multi-dataset handling:
-    - `:registered`: datasets are independent (stage registered between acquisitions)
-    - `:continuous`: drift accumulates across datasets (one long acquisition split into files)
+- `dataset_mode=:registered`: semantic label for multi-dataset handling (algorithm is identical):
+    - `:registered`: datasets are independent acquisitions (use default trajectory plotting)
+    - `:continuous`: one long acquisition split into files (use `drift_trajectory(model; cumulative=true)` for plotting)
 - `chunk_frames=0`: for continuous mode, split each dataset into chunks of this many frames (0 = no chunking)
 - `n_chunks=0`: alternative to chunk_frames - specify number of chunks per dataset (0 = no chunking)
 - `maxn=200`: maximum number of neighbors for entropy calculation
@@ -88,25 +88,54 @@ function driftcorrect(smld::SMLD;
     end
 
     # Inter-dataset correction
-    # Both modes use the same approach: align datasets via entropy minimization.
-    # The only difference is conceptual interpretation after correction.
-    if dataset_mode == :continuous
+    # Both modes use the same entropy-based alignment algorithm.
+    # The difference is semantic: :registered assumes independent acquisitions,
+    # :continuous assumes one long acquisition split into files.
+    # For visualization, use drift_trajectory(model; cumulative=true) with continuous mode.
+    if dataset_mode ∉ (:registered, :continuous)
+        error("Unknown dataset_mode: $dataset_mode. Use :registered or :continuous")
+    end
+
+    if verbose > 0
+        @info("SMLMDriftCorrection: $dataset_mode mode - aligning datasets via entropy")
+    end
+
+    # For continuous mode, compute warm start for inter-shifts from polynomial endpoints.
+    # This chains the drift across chunks: endpoint of chunk n-1 should match startpoint of chunk n.
+    # Without this, the optimizer starts from 0 and can find spurious solutions.
+    if dataset_mode == :continuous && smld_work.n_datasets > 1
+        ndims = driftmodel.intra[1].ndims
+        for nn = 2:smld_work.n_datasets
+            # Chain: inter[n] = inter[n-1] + endpoint(n-1) - startpoint(n)
+            endpoint_prev = endpoint_drift(driftmodel.intra[nn-1], smld_work.n_frames)
+            startpoint_curr = startpoint_drift(driftmodel.intra[nn])
+            for dim in 1:ndims
+                driftmodel.inter[nn].dm[dim] = driftmodel.inter[nn-1].dm[dim] +
+                                               endpoint_prev[dim] - startpoint_curr[dim]
+            end
+        end
         if verbose > 0
-            @info("SMLMDriftCorrection: continuous mode - aligning datasets to reference")
+            @info("SMLMDriftCorrection: initialized inter-shifts from polynomial endpoints")
         end
+    end
 
-        # Align each dataset to dataset 1 first
-        for nn = 2:smld_work.n_datasets
-            findinter!(driftmodel, smld_work, nn, [1], maxn)
-        end
+    # Align each dataset to dataset 1 first
+    for nn = 2:smld_work.n_datasets
+        findinter!(driftmodel, smld_work, nn, [1], maxn)
+    end
 
-        # Refine by aligning to all previous datasets
-        for nn = 2:smld_work.n_datasets
-            findinter!(driftmodel, smld_work, nn, collect(1:(nn-1)), maxn)
-        end
+    # Refine by aligning to all previous datasets
+    if verbose > 0
+        @info("SMLMDriftCorrection: refining inter-dataset alignment")
+    end
+    for nn = 2:smld_work.n_datasets
+        findinter!(driftmodel, smld_work, nn, collect(1:(nn-1)), maxn)
+    end
 
-        # Normalize so drift at (DS=1, frame=1) = 0
-        # This removes the global offset ambiguity for continuous mode
+    # For continuous mode, normalize so drift at (DS=1, frame=1) = 0
+    # This removes the global offset ambiguity for continuous acquisitions
+    # For registered mode, keep inter[1]=0 convention (set by algorithm)
+    if dataset_mode == :continuous
         ndims = driftmodel.intra[1].ndims
         for dim in 1:ndims
             offset = evaluate_at_frame(driftmodel.intra[1].dm[dim], 1) + driftmodel.inter[1].dm[dim]
@@ -114,25 +143,6 @@ function driftcorrect(smld::SMLD;
                 driftmodel.inter[nn].dm[dim] -= offset
             end
         end
-
-    elseif dataset_mode == :registered
-        # Registered mode: datasets are independent
-        if verbose > 0
-            @info("SMLMDriftCorrection: registered mode - aligning to dataset 1")
-        end
-        for nn = 2:smld_work.n_datasets
-            findinter!(driftmodel, smld_work, nn, [1], maxn)
-        end
-
-        if verbose > 0
-            @info("SMLMDriftCorrection: refining inter-dataset alignment")
-        end
-        for ii = 2:smld_work.n_datasets
-            findinter!(driftmodel, smld_work, ii, collect(1:(ii-1)), maxn)
-        end
-
-    else
-        error("Unknown dataset_mode: $dataset_mode. Use :registered or :continuous")
     end
 
     # Apply corrections

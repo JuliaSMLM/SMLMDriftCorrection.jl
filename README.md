@@ -121,9 +121,9 @@ function driftcorrect(smld::SMLD;
 
 ### Keyword Arguments
 - **degree**: Polynomial degree for intra-dataset drift model (default: 2)
-- **dataset_mode**: How to handle multi-dataset alignment:
-  - `:registered` (default): Datasets are independent (stage registered between acquisitions)
-  - `:continuous`: Drift accumulates across datasets (one long acquisition split into files)
+- **dataset_mode**: Semantic label for multi-dataset handling (algorithm is identical):
+  - `:registered` (default): Datasets are independent acquisitions
+  - `:continuous`: One long acquisition split into files (use `drift_trajectory(model; cumulative=true)` for plotting)
 - **chunk_frames**: For continuous mode, split each dataset into chunks of this many frames (0 = no chunking)
 - **n_chunks**: Alternative to chunk_frames - specify number of chunks per dataset (0 = no chunking)
 - **maxn**: Maximum number of neighbors for entropy calculation (default: 200)
@@ -153,7 +153,7 @@ The algorithm uses **entropy minimization** with **Legendre polynomial** drift m
 
 1. **Intra-dataset correction**: For each dataset, fits a Legendre polynomial (degree 2 by default) to model drift over time. Uses KL divergence-based entropy as the cost function, with adaptive KDTree neighbor rebuilding for efficiency.
 
-2. **Inter-dataset correction**: Aligns datasets to each other using constant shifts. In `:registered` mode, all datasets align to dataset 1. In `:continuous` mode, shifts chain sequentially to maintain drift continuity.
+2. **Inter-dataset correction**: Aligns datasets to each other using constant shifts optimized via entropy minimization. All datasets align to dataset 1, then refine against all previous datasets.
 
 The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
 

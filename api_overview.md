@@ -13,7 +13,7 @@ Main interface for drift correction. Returns `(smld=corrected_smld, model=Legend
 **Parameters:**
 - `smld`: SMLD structure with localization coordinates
 - `degree`: Polynomial degree for intra-dataset drift (default: 2)
-- `dataset_mode`: `:registered` (independent datasets) or `:continuous` (drift accumulates)
+- `dataset_mode`: `:registered` or `:continuous` (same algorithm, semantic label for plotting)
 - `chunk_frames`: Split datasets into chunks of N frames (0 = no chunking)
 - `n_chunks`: Alternative - specify number of chunks per dataset
 - `maxn`: Max neighbors for entropy calculation (default: 200)
@@ -35,7 +35,7 @@ Extract drift trajectory from fitted model for plotting.
 **Parameters:**
 - `dataset`: specific dataset to extract (default: all)
 - `frames`: frame range to evaluate (default: 1:n_frames)
-- `cumulative`: if true, chain datasets end-to-end showing total accumulated drift (useful for registered mode visualization)
+- `cumulative`: if true, chain datasets end-to-end showing total accumulated drift (useful for continuous mode visualization)
 
 **Returns:** `(frames, x, y, dataset)` or `(frames, x, y, z, dataset)` for 3D
 

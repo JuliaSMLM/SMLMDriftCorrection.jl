@@ -101,9 +101,11 @@ result = driftcorrect(smld; dataset_mode=:continuous, n_chunks=10)
 
 ## Dataset Modes
 
-- **`:registered`** (default): Datasets are independent acquisitions with stage registration between them. Each dataset aligns to dataset 1.
+Both modes use the same entropy-based alignment algorithm. The difference is semantic:
 
-- **`:continuous`**: One long acquisition split into multiple files. Drift accumulates across datasets, and inter-dataset shifts chain sequentially.
+- **`:registered`** (default): Datasets are independent acquisitions. Use default trajectory plotting.
+
+- **`:continuous`**: One long acquisition split into multiple files. Use `drift_trajectory(model; cumulative=true)` for plotting accumulated drift.
 
 ## Algorithm
 

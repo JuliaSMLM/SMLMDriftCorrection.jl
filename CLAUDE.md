@@ -82,8 +82,10 @@ This properly incorporates localization uncertainties (σ) and works well for re
 
 ### Dataset Modes
 
-- `:registered` (default): Datasets are independent (stage registered between acquisitions)
-- `:continuous`: Drift accumulates across datasets (one long acquisition split into files)
+Both modes use the same entropy-based alignment algorithm. The difference is semantic:
+
+- `:registered` (default): Datasets are independent acquisitions. Use default trajectory plotting.
+- `:continuous`: One long acquisition split into files. Use `drift_trajectory(model; cumulative=true)` for plotting.
 
 For continuous mode, optional chunking splits datasets for finer-grained correction:
 ```julia
