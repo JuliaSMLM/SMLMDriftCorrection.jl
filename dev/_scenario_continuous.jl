@@ -31,6 +31,9 @@ function run_continuous_diagnostics(;
     verbose && println("CONTINUOUS MODE DIAGNOSTICS")
     verbose && println("=" ^ 60)
 
+    # Clean output directory at start
+    ensure_output_dir(SCENARIO_CONTINUOUS; clean=true)
+
     # =========================================================================
     # 1. Generate test data
     # =========================================================================
@@ -201,20 +204,19 @@ function run_continuous_diagnostics(;
     fig_boundary = plot_boundary_analysis(model_true, model_recovered)
     save_figure(fig_boundary, SCENARIO_CONTINUOUS, "boundary_analysis.png")
 
-    # Per-chunk table
+    # Per-chunk data (stored in stats, not separate file)
     df_per_chunk = DataFrame(
         dataset = 1:n_datasets,
         rmsd_nm = per_ds_rmsd,
         boundary_error_nm = vcat([0.0], boundary_errors)  # No boundary before DS 1
     )
-    save_dataframe(df_per_chunk, SCENARIO_CONTINUOUS, "per_chunk_table.txt")
 
     # =========================================================================
     # 6. Save statistics
     # =========================================================================
     verbose && println("\n[6/6] Saving statistics...")
 
-    stats = Dict(
+    stats = Dict{String, Any}(
         "rmsd_nm" => rmsd_nm,
         "mean_error_nm" => mean_error,
         "max_error_nm" => max_error,
@@ -233,6 +235,8 @@ function run_continuous_diagnostics(;
         "mean_intra_error_nm" => mean(df_intra.mean_intra_error_nm),
         "max_intra_error_nm" => maximum(df_intra.max_intra_error_nm),
         "seed" => seed,
+        "per_dataset_rmsd_nm" => per_ds_rmsd,
+        "per_dataset_boundary_error_nm" => vcat([0.0], boundary_errors),
     )
 
     save_stats(stats, SCENARIO_CONTINUOUS)

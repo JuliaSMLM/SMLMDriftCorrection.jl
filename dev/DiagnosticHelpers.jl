@@ -143,7 +143,23 @@ function apply_test_drift(smld, scenario::Symbol;
 
     elseif scenario == :continuous
         # Continuous: drift accumulates across datasets
-        model = DC.LegendrePolynomial(smld; degree=degree, initialize="continuous", rscale=drift_scale)
+        # Generate random intra polynomials, then chain inter-shifts for continuity
+        model = DC.LegendrePolynomial(smld; degree=degree, initialize="random", rscale=drift_scale)
+
+        # Set inter-shifts to ensure continuity at boundaries
+        # total(ds, frame) = intra[ds](frame) + inter[ds]
+        # Requirement: total(1, 1) = 0  →  inter[1] = -intra[1](1)
+        # Requirement: total(n, 1) = total(n-1, nframes)
+        n_frames = smld.n_frames
+        ndims = 2
+        for dim in 1:ndims
+            model.inter[1].dm[dim] = -DC.evaluate_at_frame(model.intra[1].dm[dim], 1)
+            for ds = 2:smld.n_datasets
+                model.inter[ds].dm[dim] = model.inter[ds-1].dm[dim] +
+                    DC.evaluate_at_frame(model.intra[ds-1].dm[dim], n_frames) -
+                    DC.evaluate_at_frame(model.intra[ds].dm[dim], 1)
+            end
+        end
 
     elseif scenario == :registered
         # Registered: independent inter-offsets + intra-drift
@@ -884,12 +900,19 @@ end
 # =============================================================================
 
 """
-    ensure_output_dir(scenario::Symbol) -> String
+    ensure_output_dir(scenario::Symbol; clean=true) -> String
 
 Ensure output directory exists and return its path.
+If `clean=true` (default), removes existing files in the directory.
 """
-function ensure_output_dir(scenario::Symbol)
+function ensure_output_dir(scenario::Symbol; clean::Bool=true)
     dir = joinpath(@__DIR__, "output", string(scenario))
+    if clean && isdir(dir)
+        # Remove all files in directory
+        for f in readdir(dir)
+            rm(joinpath(dir, f), force=true)
+        end
+    end
     mkpath(dir)
     return dir
 end
@@ -900,7 +923,7 @@ end
 Save figure to output directory.
 """
 function save_figure(fig, scenario::Symbol, name::String)
-    dir = ensure_output_dir(scenario)
+    dir = ensure_output_dir(scenario; clean=false)  # Don't clean when saving
     path = joinpath(dir, name)
     save(path, fig)
     println("  Saved: $path")
@@ -913,7 +936,7 @@ end
 Save statistics to markdown file with nice formatting.
 """
 function save_stats_md(stats::Dict, scenario::Symbol; notes::String="")
-    dir = ensure_output_dir(scenario)
+    dir = ensure_output_dir(scenario; clean=false)  # Don't clean when saving
     path = joinpath(dir, "stats.md")
 
     open(path, "w") do io
@@ -984,6 +1007,44 @@ function save_stats_md(stats::Dict, scenario::Symbol; notes::String="")
             println(io)
         end
 
+        # Per-dataset table
+        if haskey(stats, "per_dataset_rmsd_nm")
+            println(io, "## Per-Dataset Results")
+            println(io)
+            rmsd_arr = stats["per_dataset_rmsd_nm"]
+            n_ds = length(rmsd_arr)
+
+            # Build header based on available columns
+            header = "| Dataset | RMSD (nm) |"
+            divider = "|---------|-----------|"
+            has_inter = haskey(stats, "per_dataset_inter_error_nm")
+            has_boundary = haskey(stats, "per_dataset_boundary_error_nm")
+
+            if has_inter
+                header *= " Inter Error (nm) |"
+                divider *= "------------------|"
+            end
+            if has_boundary
+                header *= " Boundary Error (nm) |"
+                divider *= "---------------------|"
+            end
+
+            println(io, header)
+            println(io, divider)
+
+            for i in 1:n_ds
+                row = @sprintf("| %d | %.2f |", i, rmsd_arr[i])
+                if has_inter
+                    row *= @sprintf(" %.2f |", stats["per_dataset_inter_error_nm"][i])
+                end
+                if has_boundary
+                    row *= @sprintf(" %.2f |", stats["per_dataset_boundary_error_nm"][i])
+                end
+                println(io, row)
+            end
+            println(io)
+        end
+
         # Simulation parameters
         println(io, "## Simulation Parameters")
         println(io)
@@ -1009,12 +1070,15 @@ function save_stats_md(stats::Dict, scenario::Symbol; notes::String="")
             println(io)
         end
 
-        # All stats for reference
+        # All stats for reference (scalar values only, arrays shown in tables above)
         println(io, "## All Statistics")
         println(io)
         println(io, "```")
         for (key, value) in sort(collect(stats), by=x->string(x[1]))
-            if value isa AbstractFloat
+            # Skip array values (already shown in per-dataset table)
+            if value isa AbstractVector
+                continue
+            elseif value isa AbstractFloat
                 @printf(io, "%-30s: %.6f\n", key, value)
             elseif value isa Integer
                 @printf(io, "%-30s: %d\n", key, value)

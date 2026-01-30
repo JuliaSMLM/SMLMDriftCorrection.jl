@@ -33,6 +33,9 @@ function run_registered_diagnostics(;
     verbose && println("REGISTERED MODE DIAGNOSTICS")
     verbose && println("=" ^ 60)
 
+    # Clean output directory at start
+    ensure_output_dir(SCENARIO_REGISTERED; clean=true)
+
     # =========================================================================
     # 1. Generate test data
     # =========================================================================
@@ -189,13 +192,12 @@ function run_registered_diagnostics(;
     fig_inter = plot_inter_shift_comparison(df_inter)
     save_figure(fig_inter, SCENARIO_REGISTERED, "inter_shift_comparison.png")
 
-    # Per-dataset table
+    # Per-dataset table (stored in stats, not separate file)
     df_per_ds = DataFrame(
         dataset = 1:n_datasets,
         rmsd_nm = per_ds_rmsd,
         inter_error_nm = df_inter.error_total_nm
     )
-    save_dataframe(df_per_ds, SCENARIO_REGISTERED, "per_dataset_table.txt")
 
     # Dataset overlay (color by dataset)
     fig_ds_overlay = _create_dataset_overlay_reg(smld_corrected, n_datasets)
@@ -206,7 +208,7 @@ function run_registered_diagnostics(;
     # =========================================================================
     verbose && println("\n[6/6] Saving statistics...")
 
-    stats = Dict(
+    stats = Dict{String, Any}(
         "rmsd_nm" => rmsd_nm,
         "mean_error_nm" => mean_error,
         "max_error_nm" => max_error,
@@ -224,6 +226,8 @@ function run_registered_diagnostics(;
         "mean_intra_error_nm" => mean(df_intra.mean_intra_error_nm),
         "max_intra_error_nm" => maximum(df_intra.max_intra_error_nm),
         "seed" => seed,
+        "per_dataset_rmsd_nm" => per_ds_rmsd,
+        "per_dataset_inter_error_nm" => df_inter.error_total_nm,
     )
 
     save_stats(stats, SCENARIO_REGISTERED)

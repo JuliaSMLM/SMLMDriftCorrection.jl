@@ -29,6 +29,9 @@ function run_single_diagnostics(;
     verbose && println("SINGLE DATASET DIAGNOSTICS")
     verbose && println("=" ^ 60)
 
+    # Clean output directory at start
+    ensure_output_dir(SCENARIO_SINGLE; clean=true)
+
     # =========================================================================
     # 1. Generate test data
     # =========================================================================
