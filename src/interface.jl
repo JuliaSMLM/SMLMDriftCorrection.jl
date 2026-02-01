@@ -198,63 +198,93 @@ end
 
 """
 FFT quality tier - fast cross-correlation only, no entropy optimization.
+
+Two-pass approach:
+1. First pass: align each dataset to dataset 1 (rough alignment)
+2. Second pass: align each dataset to all others (refinement)
 """
 function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                             dataset_mode::Symbol, verbose::Int)
     if verbose > 0
-        @info("SMLMDriftCorrection: FFT mode - cross-correlation alignment only")
+        @info("SMLMDriftCorrection: FFT mode - two-pass cross-correlation alignment")
     end
 
     n_dims = nDims(smld)
+    n_datasets = smld.n_datasets
 
-    # For :fft mode, degree is effectively 0 (no intra-dataset correction)
-    # Just compute inter-dataset shifts using cross-correlation
+    if n_datasets < 2
+        return (iterations=0, converged=true, history=Float64[])
+    end
 
-    if smld.n_datasets > 1
-        if dataset_mode == :continuous
-            # Chain from previous: CC finds LOCAL shift relative to previous chunk
-            for nn = 2:smld.n_datasets
-                smld_prev = filter_by_dataset(smld, nn - 1)
-                smld_n = filter_by_dataset(smld, nn)
-
-                # Apply previous inter-shift to get reference
-                smld_prev_shifted = deepcopy(smld_prev)
-                for i in eachindex(smld_prev_shifted.emitters)
-                    smld_prev_shifted.emitters[i].x -= model.inter[nn-1].dm[1]
-                    smld_prev_shifted.emitters[i].y -= model.inter[nn-1].dm[2]
-                    if n_dims == 3
-                        smld_prev_shifted.emitters[i].z -= model.inter[nn-1].dm[3]
-                    end
-                end
-
-                try
-                    cc_shift = findshift(smld_prev_shifted, smld_n; histbinsize=0.05)
-                    # Chain: inter[n] = inter[n-1] + local_shift
-                    for dim in 1:n_dims
-                        model.inter[nn].dm[dim] = model.inter[nn-1].dm[dim] - cc_shift[dim]
-                    end
-                catch e
-                    if verbose > 0
-                        @warn("SMLMDriftCorrection: FFT failed for dataset $nn, keeping zero shift")
-                    end
-                end
+    # Pass 1: Align each dataset to dataset 1 (rough alignment)
+    smld_ref = filter_by_dataset(smld, 1)
+    for nn = 2:n_datasets
+        smld_n = filter_by_dataset(smld, nn)
+        try
+            cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05)
+            for dim in 1:n_dims
+                model.inter[nn].dm[dim] = -cc_shift[dim]
             end
-        else  # :registered - align each to dataset 1
-            smld_ref = filter_by_dataset(smld, 1)
-            for nn = 2:smld.n_datasets
-                smld_n = filter_by_dataset(smld, nn)
-                try
-                    cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05)
-                    for dim in 1:n_dims
-                        model.inter[nn].dm[dim] = -cc_shift[dim]
-                    end
-                catch e
-                    if verbose > 0
-                        @warn("SMLMDriftCorrection: FFT failed for dataset $nn, keeping zero shift")
-                    end
-                end
+        catch e
+            if verbose > 0
+                @warn("SMLMDriftCorrection: FFT pass 1 failed for dataset $nn, keeping zero shift")
             end
         end
+    end
+
+    if verbose > 0
+        @info("SMLMDriftCorrection: FFT pass 1 complete (each vs DS1)")
+    end
+
+    # Pass 2: Refine by aligning each dataset to all others
+    for nn = 2:n_datasets
+        smld_n = filter_by_dataset(smld, nn)
+
+        # Build merged reference from all other datasets (shifted)
+        others = setdiff(1:n_datasets, nn)
+        ref_emitters = eltype(smld.emitters)[]
+
+        for other_ds in others
+            smld_other = filter_by_dataset(smld, other_ds)
+            for e in smld_other.emitters
+                e_shifted = deepcopy(e)
+                e_shifted.x -= model.inter[other_ds].dm[1]
+                e_shifted.y -= model.inter[other_ds].dm[2]
+                if n_dims == 3
+                    e_shifted.z -= model.inter[other_ds].dm[3]
+                end
+                push!(ref_emitters, e_shifted)
+            end
+        end
+
+        # Create reference SMLD from merged emitters
+        smld_merged = typeof(smld)(
+            ref_emitters,
+            smld.camera,
+            smld.n_frames,
+            1,  # merged into single "dataset"
+            copy(smld.metadata)
+        )
+
+        try
+            cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05)
+            for dim in 1:n_dims
+                model.inter[nn].dm[dim] = -cc_shift[dim]
+            end
+        catch e
+            if verbose > 0
+                @warn("SMLMDriftCorrection: FFT pass 2 failed for dataset $nn, keeping pass 1 shift")
+            end
+        end
+    end
+
+    if verbose > 0
+        @info("SMLMDriftCorrection: FFT pass 2 complete (each vs all others)")
+    end
+
+    # Normalize for continuous mode (drift at DS1, frame 1 = 0)
+    if dataset_mode == :continuous
+        # Nothing special needed for FFT mode (no intra correction)
     end
 
     return (iterations=0, converged=true, history=Float64[])
@@ -283,14 +313,29 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         end
     end
 
-    # Warm start for continuous mode
+    # For continuous mode: compute warm start targets and use regularization
+    # This prevents entropy optimization from diverging while still allowing refinement
+    warm_start_targets = nothing
+    regularization_lambda = 0.0
+
     if dataset_mode == :continuous && smld.n_datasets > 1
         _warmstart_inter_continuous!(model, smld, verbose)
+        # Store warm start targets for regularization
+        warm_start_targets = [copy(model.inter[nn].dm) for nn in 1:smld.n_datasets]
+        # High λ for continuous mode: shifts should be close to polynomial predictions
+        # λ in units of (entropy per μm²), typical entropy ~1e5, so λ~1e6 means 1μm deviation costs ~1e6
+        regularization_lambda = 1e6
+
+        if verbose > 0
+            @info("SMLMDriftCorrection: continuous mode with regularization (λ=$regularization_lambda)")
+        end
     end
 
     # Inter-dataset correction: align each to dataset 1 first
     for nn = 2:smld.n_datasets
-        findinter!(model, smld, nn, [1], maxn)
+        target = warm_start_targets !== nothing ? warm_start_targets[nn] : nothing
+        findinter!(model, smld, nn, [1], maxn;
+                   regularization_target=target, regularization_lambda=regularization_lambda)
     end
 
     # Refine: align each dataset to ALL others (not just previous)
@@ -299,7 +344,9 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     end
     for nn = 2:smld.n_datasets
         others = collect(setdiff(1:smld.n_datasets, nn))
-        findinter!(model, smld, nn, others, maxn)
+        target = warm_start_targets !== nothing ? warm_start_targets[nn] : nothing
+        findinter!(model, smld, nn, others, maxn;
+                   regularization_target=target, regularization_lambda=regularization_lambda)
     end
 
     # Normalize for continuous mode

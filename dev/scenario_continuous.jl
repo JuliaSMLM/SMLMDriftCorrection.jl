@@ -91,18 +91,50 @@ function run_continuous_diagnostics(;
     verbose && @printf("  Total drift magnitude: %.4f μm\n", total_drift)
 
     # =========================================================================
-    # 3. Run drift correction
+    # 3. Run drift correction (all quality tiers)
     # =========================================================================
-    verbose && println("\n[3/6] Running drift correction...")
+    verbose && println("\n[3/6] Running drift correction (all quality tiers)...")
 
-    (; smld, model) = DC.driftcorrect(smld_drifted;
-        degree = degree,
-        dataset_mode = :continuous
-    )
-    smld_corrected = smld
-    model_recovered = model
+    # Run all three quality tiers
+    tier_results = Dict{Symbol, NamedTuple}()
 
-    verbose && println("  Correction complete")
+    for quality in [:fft, :singlepass, :iterative]
+        verbose && println("\n  Running :$quality...")
+        result = DC.driftcorrect(smld_drifted;
+            degree = degree,
+            dataset_mode = :continuous,
+            quality = quality,
+            max_iterations = 5
+        )
+
+        # Compute RMSD for this tier (relative, removing global offset)
+        x_orig = [e.x for e in smld_orig.emitters]
+        y_orig = [e.y for e in smld_orig.emitters]
+        x_corr = [e.x for e in result.smld.emitters]
+        y_corr = [e.y for e in result.smld.emitters]
+        offset_x_tier = mean(x_corr) - mean(x_orig)
+        offset_y_tier = mean(y_corr) - mean(y_orig)
+        dx = (x_corr .- offset_x_tier) .- x_orig
+        dy = (y_corr .- offset_y_tier) .- y_orig
+        rmsd_tier = sqrt(mean(dx.^2 .+ dy.^2)) * 1000
+
+        verbose && @printf("    RMSD (relative): %.2f nm (iterations=%d, converged=%s)\n",
+                          rmsd_tier, result.iterations, result.converged)
+
+        tier_results[quality] = (
+            result = result,
+            rmsd_nm = rmsd_tier
+        )
+    end
+
+    # Use singlepass as the "main" result for detailed analysis
+    smld_corrected = tier_results[:singlepass].result.smld
+    model_recovered = tier_results[:singlepass].result.model
+
+    verbose && println("\n  === Quality Tier Summary ===")
+    verbose && @printf("    :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)
+    verbose && @printf("    :singlepass RMSD: %.2f nm\n", tier_results[:singlepass].rmsd_nm)
+    verbose && @printf("    :iterative  RMSD: %.2f nm\n", tier_results[:iterative].rmsd_nm)
 
     # Show recovered cumulative drift
     verbose && println("  Recovered cumulative drift at dataset boundaries:")
@@ -227,7 +259,6 @@ function run_continuous_diagnostics(;
         rmsd_nm = per_ds_rmsd,
         boundary_error_nm = vcat([0.0], boundary_errors)  # No boundary before DS 1
     )
-    save_dataframe(df_per_chunk, SCENARIO, "per_chunk_table.txt")
 
     # =========================================================================
     # 6. Save statistics
@@ -237,6 +268,9 @@ function run_continuous_diagnostics(;
     stats = Dict(
         "rmsd_nm" => rmsd_nm,
         "rmsd_relative_nm" => rmsd_relative_nm,
+        "rmsd_fft_nm" => tier_results[:fft].rmsd_nm,
+        "rmsd_singlepass_nm" => tier_results[:singlepass].rmsd_nm,
+        "rmsd_iterative_nm" => tier_results[:iterative].rmsd_nm,
         "mean_error_nm" => mean_error,
         "max_error_nm" => max_error,
         "entropy_before" => entropy_before.ub_entropy,
@@ -262,8 +296,10 @@ function run_continuous_diagnostics(;
 
     verbose && println("\n" * "=" ^ 60)
     verbose && println("CONTINUOUS MODE DIAGNOSTICS COMPLETE")
-    verbose && @printf("RMSD (with global offset): %.2f nm\n", rmsd_nm)
-    verbose && @printf("RMSD (relative alignment): %.2f nm  ← true alignment precision\n", rmsd_relative_nm)
+    verbose && println("Quality Tier Results (relative RMSD):")
+    verbose && @printf("  :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)
+    verbose && @printf("  :singlepass RMSD: %.2f nm\n", tier_results[:singlepass].rmsd_nm)
+    verbose && @printf("  :iterative  RMSD: %.2f nm\n", tier_results[:iterative].rmsd_nm)
     verbose && println("=" ^ 60)
 
     return (
@@ -274,6 +310,7 @@ function run_continuous_diagnostics(;
         model_recovered = model_recovered,
         boundary_errors = boundary_errors,
         df_per_chunk = df_per_chunk,
+        tier_results = tier_results,
         stats = stats
     )
 end

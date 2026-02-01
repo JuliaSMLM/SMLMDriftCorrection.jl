@@ -501,7 +501,7 @@ If `include_dataset_colors=true` (for multi-dataset scenarios), also saves:
 """
 function save_render_suite(smld_drifted, smld_corrected, scenario::Symbol;
                            roi=nothing, include_dataset_colors::Bool=false)
-    dir = ensure_output_dir(scenario)
+    dir = ensure_output_dir(scenario; clean=false)
 
     # Common ROI kwargs
     roi_kwargs = roi !== nothing ? (roi=roi,) : ()
@@ -1104,7 +1104,7 @@ end
 Save DataFrame to CSV-like text file.
 """
 function save_dataframe(df::DataFrame, scenario::Symbol, name::String)
-    dir = ensure_output_dir(scenario)
+    dir = ensure_output_dir(scenario; clean=false)
     path = joinpath(dir, name)
 
     open(path, "w") do io

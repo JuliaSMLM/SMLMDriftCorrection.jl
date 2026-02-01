@@ -172,7 +172,7 @@ function filter_by_dataset(smld::SMLD, datasets::Vector{Int})
 end
 
 """
-    findinter!(dm, smld_uncorrected, dataset_n, ref_datasets, maxn)
+    findinter!(dm, smld_uncorrected, dataset_n, ref_datasets, maxn; kwargs...)
 
 Find and correct inter-dataset drift using entropy minimization.
 
@@ -186,12 +186,19 @@ then refines with entropy optimization.
 - `dataset_n`: dataset index to shift/align
 - `ref_datasets`: vector of reference dataset indices
 - `maxn`: maximum neighbors for entropy calculation
+
+# Keyword Arguments
+- `regularization_target`: target shift to regularize towards (default: nothing)
+- `regularization_lambda`: regularization strength (default: 0.0)
+  Cost becomes: entropy + λ*||shift - target||²
 """
 function findinter!(dm::AbstractIntraInter,
     smld_uncorrected::SMLD,
     dataset_n::Int,
     ref_datasets::Vector{Int},
-    maxn::Int)
+    maxn::Int;
+    regularization_target::Union{Nothing, Vector{Float64}} = nothing,
+    regularization_lambda::Float64 = 0.0)
 
     n_dims = nDims(smld_uncorrected)
 
@@ -273,11 +280,12 @@ function findinter!(dm::AbstractIntraInter,
     k = min(maxn, N_n + N_ref - 1)
     rebuild_threshold = 0.5  # μm - same as intra-dataset
 
+    # Build cost function with optional regularization
     if n_dims == 2
         # Pre-allocate combined data matrix for KDTree (avoids allocation per iteration)
         data_combined = Matrix{Float64}(undef, 2, N_n + N_ref)
         state = InterNeighborState(N_n, k, rebuild_threshold)
-        myfun = θ -> costfun_entropy_inter_2D_merged(θ,
+        entropy_cost = θ -> costfun_entropy_inter_2D_merged(θ,
             x_n, y_n, σ_x_n, σ_y_n,
             x_ref, y_ref, σ_x_ref, σ_y_ref,
             maxn, inter;
@@ -286,11 +294,18 @@ function findinter!(dm::AbstractIntraInter,
         z_work = similar(z_n)
         data_combined = Matrix{Float64}(undef, 3, N_n + N_ref)
         state = InterNeighborState3D(N_n, k, rebuild_threshold)
-        myfun = θ -> costfun_entropy_inter_3D_merged(θ,
+        entropy_cost = θ -> costfun_entropy_inter_3D_merged(θ,
             x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
             x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
             maxn, inter;
             divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work, data_combined=data_combined, state=state)
+    end
+
+    # Add regularization if specified: cost = entropy + λ*||θ - target||²
+    if regularization_target !== nothing && regularization_lambda > 0.0
+        myfun = θ -> entropy_cost(θ) + regularization_lambda * sum((θ .- regularization_target).^2)
+    else
+        myfun = entropy_cost
     end
 
     # Optimize with gradient-based method for better convergence

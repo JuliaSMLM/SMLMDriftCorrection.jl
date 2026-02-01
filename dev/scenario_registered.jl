@@ -90,18 +90,41 @@ function run_registered_diagnostics(;
     end
 
     # =========================================================================
-    # 3. Run drift correction
+    # 3. Run drift correction (all quality tiers)
     # =========================================================================
-    verbose && println("\n[3/6] Running drift correction...")
+    verbose && println("\n[3/6] Running drift correction (all quality tiers)...")
 
-    (; smld, model) = DC.driftcorrect(smld_drifted;
-        degree = degree,
-        dataset_mode = :registered
-    )
-    smld_corrected = smld
-    model_recovered = model
+    # Run all three quality tiers
+    tier_results = Dict{Symbol, NamedTuple}()
 
-    verbose && println("  Correction complete")
+    for quality in [:fft, :singlepass, :iterative]
+        verbose && println("\n  Running :$quality...")
+        result = DC.driftcorrect(smld_drifted;
+            degree = degree,
+            dataset_mode = :registered,
+            quality = quality,
+            max_iterations = 5
+        )
+
+        # Compute RMSD for this tier
+        rmsd_tier = compute_rmsd(smld_orig, result.smld)
+        verbose && @printf("    RMSD: %.2f nm (iterations=%d, converged=%s)\n",
+                          rmsd_tier, result.iterations, result.converged)
+
+        tier_results[quality] = (
+            result = result,
+            rmsd_nm = rmsd_tier
+        )
+    end
+
+    # Use singlepass as the "main" result for detailed analysis
+    smld_corrected = tier_results[:singlepass].result.smld
+    model_recovered = tier_results[:singlepass].result.model
+
+    verbose && println("\n  === Quality Tier Summary ===")
+    verbose && @printf("    :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)
+    verbose && @printf("    :singlepass RMSD: %.2f nm\n", tier_results[:singlepass].rmsd_nm)
+    verbose && @printf("    :iterative  RMSD: %.2f nm\n", tier_results[:iterative].rmsd_nm)
 
     # Show recovered inter-shifts
     verbose && println("  Recovered inter-shifts:")
@@ -207,7 +230,6 @@ function run_registered_diagnostics(;
         intra_max_error_nm = df_intra.max_intra_error_nm,
         intra_mean_error_nm = df_intra.mean_intra_error_nm
     )
-    save_dataframe(df_per_ds, SCENARIO, "per_dataset_table.txt")
 
     # =========================================================================
     # 6. Save statistics
@@ -216,6 +238,9 @@ function run_registered_diagnostics(;
 
     stats = Dict(
         "rmsd_nm" => rmsd_nm,
+        "rmsd_fft_nm" => tier_results[:fft].rmsd_nm,
+        "rmsd_singlepass_nm" => tier_results[:singlepass].rmsd_nm,
+        "rmsd_iterative_nm" => tier_results[:iterative].rmsd_nm,
         "mean_error_nm" => mean_error,
         "max_error_nm" => max_error,
         "entropy_before" => entropy_before.ub_entropy,
@@ -238,7 +263,10 @@ function run_registered_diagnostics(;
 
     verbose && println("\n" * "=" ^ 60)
     verbose && println("REGISTERED MODE DIAGNOSTICS COMPLETE")
-    verbose && @printf("Final RMSD: %.2f nm\n", rmsd_nm)
+    verbose && println("Quality Tier Results:")
+    verbose && @printf("  :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)
+    verbose && @printf("  :singlepass RMSD: %.2f nm\n", tier_results[:singlepass].rmsd_nm)
+    verbose && @printf("  :iterative  RMSD: %.2f nm\n", tier_results[:iterative].rmsd_nm)
     verbose && println("=" ^ 60)
 
     return (
@@ -249,6 +277,7 @@ function run_registered_diagnostics(;
         model_recovered = model_recovered,
         df_inter = df_inter,
         df_per_ds = df_per_ds,
+        tier_results = tier_results,
         stats = stats
     )
 end
