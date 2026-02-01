@@ -1,110 +1,176 @@
 """
-Main interface for drift correction (DC).  This algorithm consists of an
-    intra-dataset portion and an inter-dataset portion.  The drift corrected
-    coordinates are returned as output.  All distance units are in μm.
+    driftcorrect(smld; kwargs...) -> (smld, info)
+
+Main interface for drift correction. Uses Legendre polynomial model with
+entropy-based cost function and adaptive KDTree neighbor building.
 
 # Arguments
-- `smld`:           structure containing (X, Y) or (X, Y, Z) localization
-                    coordinates (μm)
-- `intramodel`:     model for intra-dataset DC:
-                    {"Polynomial", "LegendrePoly"} = "Polynomial"
-- `cost_fun`:       intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
-- `cost_fun_intra`: intra cost function override: ""
-- `cost_fun_inter`: inter cost function override: ""
-- `degree`:         degree for polynomial intra-dataset DC = 2
-- `d_cutoff`:       distance cutoff (μm) = 0.01 [Kdtree cost function]
-- `maxn`:           maximum number of neighbors considered = 200
-                    [Entropy cost function]
-- `histbinsize`:    histogram bin size for inter-datset cross-correlation
-                    correction (μm) = -1.0 [< 0 means no correction]
-- `verbose`:        flag for more output = 0
+- `smld`: SMLD structure containing (X, Y) or (X, Y, Z) localization coordinates (μm)
+
+# Keyword Arguments
+- `degree=2`: polynomial degree for intra-dataset drift model
+- `dataset_mode=:registered`: semantic label for multi-dataset handling (algorithm is identical):
+    - `:registered`: datasets are independent acquisitions (use default trajectory plotting)
+    - `:continuous`: one long acquisition split into files (use `drift_trajectory(model; cumulative=true)` for plotting)
+- `chunk_frames=0`: for continuous mode, split each dataset into chunks of this many frames (0 = no chunking)
+- `n_chunks=0`: alternative to chunk_frames - specify number of chunks per dataset (0 = no chunking)
+- `maxn=200`: maximum number of neighbors for entropy calculation
+- `verbose=0`: verbosity level (0=quiet, 1=info, 2=debug)
 
 # Returns
-- `(smld_corrected, info)`: Tuple of corrected SMLD and `DriftInfo` metadata
+Tuple `(smld_corrected, info)` where:
+- `smld_corrected`: drift-corrected SMLD
+- `info`: `DriftInfo` struct with optimization metadata including:
+  - `model`: fitted drift model (use `drift_trajectory(info.model)` to extract plottable arrays)
+  - `elapsed_ns`: wall time in nanoseconds
+  - `iterations`: total optimizer iterations
+  - `converged`: whether all optimizations converged
 
 # Example
 ```julia
-(smld_corrected, info) = driftcorrect(smld; degree=2)
-# Access model for warm starts or trajectory extraction
-model = info.model
+# Basic usage
+(smld_corrected, info) = driftcorrect(smld)
+
+# Higher degree polynomial for complex drift:
+(smld_corrected, info) = driftcorrect(smld; degree=3)
+
+# For continuous acquisition (drift accumulates across datasets):
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous)
+
+# For finer-grained drift correction, chunk into smaller pieces:
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous, n_chunks=10)
+
+# Extract drift trajectory for plotting:
+traj = drift_trajectory(info.model)
+# traj.frames, traj.x, traj.y (and traj.z for 3D) are ready for plotting
 ```
 """
 function driftcorrect(smld::SMLD;
-    intramodel::String = "Polynomial",
-    cost_fun::String = "Kdtree",
-    cost_fun_intra::String = "",
-    cost_fun_inter::String = "",
     degree::Int = 2,
-    d_cutoff::AbstractFloat = 0.01,
+    dataset_mode::Symbol = :registered,
+    chunk_frames::Int = 0,
+    n_chunks::Int = 0,
     maxn::Int = 200,
-    histbinsize::AbstractFloat = -1.0,
     verbose::Int = 0)
 
     t_start = time_ns()
 
-    # Overrides for cost function specifications
-    if isempty(cost_fun_intra)
-        cost_fun_intra = cost_fun
-    end
-    if isempty(cost_fun_inter)
-        cost_fun_inter = cost_fun
+    # Handle chunking for continuous mode
+    chunk_info = nothing
+    smld_work = smld  # Working SMLD (may be chunked)
+
+    if dataset_mode == :continuous && (chunk_frames > 0 || n_chunks > 0)
+        chunk_info = chunk_smld(smld; chunk_frames=chunk_frames, n_chunks=n_chunks)
+        smld_work = chunk_info.smld
+
+        if verbose > 0
+            @info("SMLMDriftCorrection: chunking into $(chunk_info.n_chunks) chunks per dataset " *
+                  "($(chunk_info.frames_per_chunk) frames each, $(smld_work.n_datasets) total chunks)")
+        end
     end
 
-    if intramodel == "Polynomial"
-        driftmodel = Polynomial(smld; degree = degree)
-    elseif intramodel == "LegendrePoly"
-        driftmodel = LegendrePolynomial(smld; degree = degree)
-    end
+    # Use Legendre polynomial model (normalized frame range prevents coefficient explosion)
+    driftmodel = LegendrePolynomial(smld_work; degree=degree)
 
-    # Track optimization results
-    intra_results = Vector{Any}(undef, smld.n_datasets)
+    # Track optimization results for DriftInfo
+    intra_results = Vector{Any}(undef, smld_work.n_datasets)
     inter_costs = Float64[]
 
-    # Intra-dataset
-    if verbose>0
-        @info("SMLMDriftCorrection: starting intra")
-    end
-    Threads.@threads for nn = 1:smld.n_datasets
-        intra_results[nn] = findintra!(driftmodel.intra[nn], cost_fun_intra, smld, nn, d_cutoff,
-	           maxn)
-    end
-
-    # Inter-dataset: Correct them all to datatset 1
-    if verbose>0
-        @info("SMLMDriftCorrection: starting inter to dataset 1")
-    end
-    #Threads.@threads
-    for nn = 2:smld.n_datasets
-        refdatasets = [1]
-        cost = findinter!(driftmodel, cost_fun_inter, smld, nn, refdatasets,
-	           d_cutoff, maxn, histbinsize)
-        push!(inter_costs, cost)
-    end
-
-    # if verbose>0
-    #     @info("SMLMDriftCorrection: starting inter to all others")
-    # end
-    # # Correct each to all others
-    # for ii = 1:2, nn = 1:smld.n_datasets
-    #     if verbose>1
-    #         println("SMLMDriftCorrection: round $ii dataset $nn")
-    #     end
-    #     findinter!(driftmodel, smld, nn, d_cutoff)
-    # end
-
-    if verbose>0
-        @info("SMLMDriftCorrection: starting inter to earlier")
-    end
-    for ii = 2:smld.n_datasets
-        if verbose>1
-            println("SMLMDriftCorrection: dataset $ii")
+    # Intra-dataset correction (parallel over datasets)
+    # Skip if degree=0 (no intra-dataset parameters to optimize)
+    if degree > 0
+        if verbose > 0
+            @info("SMLMDriftCorrection: starting intra-dataset correction")
         end
-        cost = findinter!(driftmodel, cost_fun_inter, smld, ii, collect((1:(ii-1))),
-                   d_cutoff, maxn, histbinsize)
+        Threads.@threads for nn = 1:smld_work.n_datasets
+            intra_results[nn] = findintra!(driftmodel.intra[nn], smld_work, nn, maxn)
+        end
+    else
+        if verbose > 0
+            @info("SMLMDriftCorrection: degree=0, skipping intra-dataset correction")
+        end
+        # Create dummy results for DriftInfo
+        for nn = 1:smld_work.n_datasets
+            intra_results[nn] = (minimum=0.0, iterations=0, converged=true)
+        end
+    end
+
+    # Inter-dataset correction
+    # Both modes use the same entropy-based alignment algorithm.
+    # The difference is semantic: :registered assumes independent acquisitions,
+    # :continuous assumes one long acquisition split into files.
+    # For visualization, use drift_trajectory(model; cumulative=true) with continuous mode.
+    if dataset_mode ∉ (:registered, :continuous)
+        error("Unknown dataset_mode: $dataset_mode. Use :registered or :continuous")
+    end
+
+    if verbose > 0
+        @info("SMLMDriftCorrection: $dataset_mode mode - aligning datasets via entropy")
+    end
+
+    # For continuous mode, compute warm start for inter-shifts from polynomial endpoints.
+    # This chains the drift across chunks: endpoint of chunk n-1 should match startpoint of chunk n.
+    # Without this, the optimizer starts from 0 and can find spurious solutions.
+    if dataset_mode == :continuous && smld_work.n_datasets > 1
+        ndims = driftmodel.intra[1].ndims
+        for nn = 2:smld_work.n_datasets
+            # Chain: inter[n] = inter[n-1] + endpoint(n-1) - startpoint(n)
+            endpoint_prev = endpoint_drift(driftmodel.intra[nn-1], smld_work.n_frames)
+            startpoint_curr = startpoint_drift(driftmodel.intra[nn])
+            for dim in 1:ndims
+                driftmodel.inter[nn].dm[dim] = driftmodel.inter[nn-1].dm[dim] +
+                                               endpoint_prev[dim] - startpoint_curr[dim]
+            end
+        end
+        if verbose > 0
+            @info("SMLMDriftCorrection: initialized inter-shifts from polynomial endpoints")
+        end
+    end
+
+    # Align each dataset to dataset 1 first
+    for nn = 2:smld_work.n_datasets
+        cost = findinter!(driftmodel, smld_work, nn, [1], maxn)
         push!(inter_costs, cost)
     end
 
-    smld_found = correctdrift(smld, driftmodel)
+    # Refine by aligning to all previous datasets
+    if verbose > 0
+        @info("SMLMDriftCorrection: refining inter-dataset alignment")
+    end
+    for nn = 2:smld_work.n_datasets
+        cost = findinter!(driftmodel, smld_work, nn, collect(1:(nn-1)), maxn)
+        push!(inter_costs, cost)
+    end
+
+    # For continuous mode, normalize so drift at (DS=1, frame=1) = 0
+    # This removes the global offset ambiguity for continuous acquisitions
+    # For registered mode, keep inter[1]=0 convention (set by algorithm)
+    if dataset_mode == :continuous
+        ndims = driftmodel.intra[1].ndims
+        for dim in 1:ndims
+            offset = evaluate_at_frame(driftmodel.intra[1].dm[dim], 1) + driftmodel.inter[1].dm[dim]
+            for nn = 1:smld_work.n_datasets
+                driftmodel.inter[nn].dm[dim] -= offset
+            end
+        end
+    end
+
+    # Apply corrections
+    if chunk_info !== nothing && chunk_info.n_chunks > 1
+        smld_work_corrected = correctdrift(smld_work, driftmodel)
+
+        smld_corrected = deepcopy(smld)
+        is_3d = nDims(smld) == 3
+        for i in eachindex(smld.emitters)
+            smld_corrected.emitters[i].x = smld_work_corrected.emitters[i].x
+            smld_corrected.emitters[i].y = smld_work_corrected.emitters[i].y
+            if is_3d
+                smld_corrected.emitters[i].z = smld_work_corrected.emitters[i].z
+            end
+        end
+    else
+        smld_corrected = correctdrift(smld, driftmodel)
+    end
 
     elapsed_ns = time_ns() - t_start
 
@@ -125,5 +191,5 @@ function driftcorrect(smld::SMLD;
         history
     )
 
-    return (smld_found, info)
+    return (smld_corrected, info)
 end

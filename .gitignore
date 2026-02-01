@@ -15,3 +15,5 @@ src/SAVE/intrainter.jl
 src/SAVE/polynomial.jl
 src/SAVE/SMLMDriftCorrection.jl
 src/SAVE/typedefs.jl
+examples/output/
+dev/output/

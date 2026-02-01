@@ -1,4 +1,4 @@
-# Intra+Inter 
+# Intra+Inter drift correction functions
 
 function InterShift(ndims::Int)
     return InterShift(ndims, zeros(ndims))
@@ -46,27 +46,14 @@ function applydrift!(smld::SMLD, dm::AbstractIntraInter)
     end
 end
 
-""" 
-applydrift(smld::SMLMData.Emitter2DFit, driftmodel::AbstractIntraInter) ->
-  SMLMData.Emitter2DFit
+"""
+applydrift(smld, driftmodel) -> smld
 
-Applies a drift model to the Single-Molecule Localization Microscopy (SMLM)
-data and returns the drift-corrected data.
-
-# Arguments
-- `smld::SMLMData.Emitter2DFit`: The SMLM data structure containing the
-  original localization data.
-- `driftmodel::AbstractIntraInter`: The drift model to be applied to the SMLM
-  data.  This model should account for both intra- and inter-frame drift
-  corrections.
-
-# Returns
-- `SMLMData.Emitter2DFit`: A new SMLM data structure with the drift corrections
-  applied.
+Applies a drift model to SMLM data (for simulation/testing).
 """
 function applydrift(smld::SMLD, driftmodel::AbstractIntraInter)
     smld_shifted = deepcopy(smld)
-    applydrift!(smld_shifted::SMLD, driftmodel::AbstractIntraInter)
+    applydrift!(smld_shifted, driftmodel)
     return smld_shifted
 end
 
@@ -92,15 +79,9 @@ function correctdrift(smld::SMLD, driftmodel::AbstractIntraInter)
     return smld_shifted
 end
 
-#function correctdrift!(smld::SMLMData.Emitter2DFit, shift::Vector{AbstractFloat})
-#function correctdrift!(smld::SMLMData.Emitter3DFit, shift::Vector{AbstractFloat})
 function correctdrift!(smld::SMLD, shift::Vector{Float64})
     n_dims = nDims(smld)
 
-    #smld_shifted = deepcopy(smld)
-    #println("correctdrift!: shift = $shift")
-    #smld.x .-= shift[1]
-    #smld.y .-= shift[2]
     for nn in eachindex(smld.emitters)
         smld.emitters[nn].x -= shift[1]
         smld.emitters[nn].y -= shift[2]
@@ -111,247 +92,212 @@ function correctdrift!(smld::SMLD, shift::Vector{Float64})
 end
 
 """
-Find and correct intra-detaset drift.
+    findintra!(intra, smld, dataset, maxn)
 
-# Fields:
-- intra:            intra-dataset structure
-- cost_fun:         cost function: {"Kdtree", "Entropy"}
-- smld:             data structure containing coordinate data
-- dataset           dataset number to operate on
-- d_cutoff:         cutoff distance
-- maxn:             maximum number of neighbors considered
+Find and correct intra-dataset drift using entropy minimization with
+adaptive KDTree neighbor rebuilding.
+
+Uses KL divergence entropy cost function with adaptive neighbor tracking.
+Only rebuilds neighbors when drift changes by more than 0.5 μm.
 """
 function findintra!(intra::AbstractIntraDrift,
-    cost_fun::String,
     smld::SMLD,
     dataset::Int,
-    d_cutoff::AbstractFloat,
     maxn::Int)
 
-#   idx = smld.datasetnum .== dataset
     idx = [e.dataset for e in smld.emitters] .== dataset
-    if intra.ndims == 2
-        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                               [e.y for e in smld.emitters[idx]])
-        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
-                               [e.σ_y for e in smld.emitters[idx]])
-    elseif intra.ndims == 3
-        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                               [e.y for e in smld.emitters[idx]],
-                               [e.z for e in smld.emitters[idx]])
-        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
-                               [e.σ_y for e in smld.emitters[idx]],
-                               [e.σ_z for e in smld.emitters[idx]])
-    end
-    #coords = cat(dims = 2, smld.x[idx], smld.y[idx])
-    #stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
-    framenum = [e.frame for e in smld.emitters[idx]]
-    data = transpose(coords)
-    se = transpose(stderr)
+    emitters = smld.emitters[idx]
+    N = length(emitters)
 
-    rscale = 0.01
-    if intra.ndims == 2
-        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                               [e.y for e in smld.emitters[idx]])
-        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
-                               [e.σ_y for e in smld.emitters[idx]])
-    elseif intra.ndims == 3
-        coords = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                               [e.y for e in smld.emitters[idx]],
-                               [e.z for e in smld.emitters[idx]])
-        stderr = cat(dims = 2, [e.σ_x for e in smld.emitters[idx]],
-                               [e.σ_y for e in smld.emitters[idx]],
-                               [e.σ_z for e in smld.emitters[idx]])
-    end
-    #coords = cat(dims = 2, smld.x[idx], smld.y[idx])
-    #stderr = cat(dims = 2, smld.σ_x[idx], smld.σ_y[idx])
-#   framenum = smld.framenum[idx]
-    framenum = [e.frame for e in smld.emitters[idx]]
-    data = transpose(coords)
-    se = transpose(stderr)
+    # Extract vectors directly
+    x = Float64[e.x for e in emitters]
+    y = Float64[e.y for e in emitters]
+    σ_x = Float64[e.σ_x for e in emitters]
+    σ_y = Float64[e.σ_y for e in emitters]
+    framenum = Int[e.frame for e in emitters]
 
-    rscale = 0.01
+    if intra.ndims == 3
+        z = Float64[e.z for e in emitters]
+        σ_z = Float64[e.σ_z for e in emitters]
+    end
+
+    # Initialize with small random values
     nframes = smld.n_frames
-    for jj = 1:intra.ndims
-        degree = intra.dm[jj].degree
-        intra.dm[jj].coefficients = rscale * randn() ./ (nframes .^ (1:degree))
-    end
+    initialize_random!(intra, 0.01, nframes)
 
-    #convert all intra drift parameters to a single vector for optimization
+    # Convert to parameter vector for optimization
     θ0 = Float64.(intra2theta(intra))
 
-    if cost_fun == "Kdtree"
-        myfun = θ -> costfun(θ, data, framenum, d_cutoff, intra)
-    elseif cost_fun == "Entropy"
-        myfun = θ -> costfun(θ, data, se, framenum, maxn, intra)
-    end
-    # println(myfun(θ0))
-    opt = Optim.Options(iterations = 10000, show_trace = false)
-    res = optimize(myfun, θ0, opt)
-    θ_found = res.minimizer
+    # Pre-allocate work arrays
+    x_work = similar(x)
+    y_work = similar(y)
 
-    theta2intra!(intra, θ_found)
+    # Adaptive entropy cost function
+    k = min(maxn, N - 1)
+    rebuild_threshold = 0.5  # μm - entropy is robust, rebuild rarely
+    state = NeighborState(N, k, rebuild_threshold)
+
+    if intra.ndims == 2
+        build_neighbors!(state, x, y)
+        myfun = θ -> costfun_entropy_intra_2D_adaptive(θ, x, y, σ_x, σ_y, framenum, maxn, intra,
+                                                       state, nframes;
+                                                       divmethod="KL", x_work=x_work, y_work=y_work)
+    else # 3D
+        z_work = similar(z)
+        build_neighbors!(state, x, y, z)
+        myfun = θ -> costfun_entropy_intra_3D_adaptive(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra,
+                                                       state, nframes;
+                                                       divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work)
+    end
+
+    # Optimize with convergence tolerances
+    opt = Optim.Options(iterations=10000, f_abstol=1e-2, x_abstol=1e-4, show_trace=false)
+    res = optimize(myfun, θ0, opt)
+    theta2intra!(intra, res.minimizer)
     return res
 end
 
 """
-Find and correct inter-detaset drift.
+    filter_by_dataset(smld, datasets)
 
-# Fields:
-- dm:               inter-dataset structure
-- cost_fun:         cost function: {"Kdtree", "Entropy"}
-- smld_uncorrected: data structure containing uncorrected coordinate data
-- dataset1:         dataset number for the reference dataset
-- dataset2:         dataset numbers to operate on
-- d_cutoff:         cutoff distance
-- maxn:             maximum number of neighbors considered
-- histbinsize:      histogram bin size for optional cross-correlation correction
+Filter SMLD to include only emitters from specified dataset(s).
+"""
+function filter_by_dataset(smld::SMLD, dataset::Int)
+    idx = [e.dataset == dataset for e in smld.emitters]
+    return filter_emitters(smld, idx)
+end
+
+function filter_by_dataset(smld::SMLD, datasets::Vector{Int})
+    idx = [e.dataset in datasets for e in smld.emitters]
+    return filter_emitters(smld, idx)
+end
+
+"""
+    findinter!(dm, smld_uncorrected, dataset_n, ref_datasets, maxn)
+
+Find and correct inter-dataset drift using entropy minimization.
+
+Aligns `dataset_n` to the reference datasets by minimizing the entropy
+of the combined point cloud. Uses cross-correlation for initial guess,
+then refines with entropy optimization.
+
+# Arguments
+- `dm`: drift model (modified in place)
+- `smld_uncorrected`: original SMLD data (not corrected)
+- `dataset_n`: dataset index to shift/align
+- `ref_datasets`: vector of reference dataset indices
+- `maxn`: maximum neighbors for entropy calculation
 """
 function findinter!(dm::AbstractIntraInter,
-    cost_fun::String,
     smld_uncorrected::SMLD,
-#   smld_uncorrected::SMLD{Float64, <:Union{Emitter2DFit{Float64},
-#                                           Emitter3DFit{Float64}}},
-    dataset1::Int,
-    dataset2::Vector{Int},
-    d_cutoff::AbstractFloat,
-    maxn::Int,
-    histbinsize::AbstractFloat
-    )
+    dataset_n::Int,
+    ref_datasets::Vector{Int},
+    maxn::Int)
 
     n_dims = nDims(smld_uncorrected)
 
-    # get uncorrected coords for dataset 1 
-#   idx1 = smld_uncorrected.datasetnum .== dataset1
-    idx1 = [e.dataset for e in smld_uncorrected.emitters] .== dataset1
-    idx1 = findall(idx1)
-    if n_dims == 2
-        coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
-                                [e.y for e in smld_uncorrected.emitters[idx1]])
-        stderr1 = cat(dims = 2, [e.σ_x for e in smld_uncorrected.emitters[idx1]],
-                                [e.σ_y for e in smld_uncorrected.emitters[idx1]])
-    elseif n_dims == 3
-        coords1 = cat(dims = 2, [e.x for e in smld_uncorrected.emitters[idx1]],
-                                [e.y for e in smld_uncorrected.emitters[idx1]],
-                                [e.y for e in smld_uncorrected.emitters[idx1]])
-        stderr1 = cat(dims = 2, [e.σ_x for e in smld_uncorrected.emitters[idx1]],
-                                [e.σ_y for e in smld_uncorrected.emitters[idx1]],
-                                [e.σ_z for e in smld_uncorrected.emitters[idx1]])
+    # Get UNCORRECTED coords for dataset_n
+    idx_n = [e.dataset == dataset_n for e in smld_uncorrected.emitters]
+    emitters_n = smld_uncorrected.emitters[idx_n]
+
+    # Apply ONLY intra-drift correction (not inter) to dataset_n
+    # This way the optimizer finds the TOTAL inter-shift needed.
+    x_n = Float64[correctdrift(e.x, e.frame, dm.intra[dataset_n].dm[1]) for e in emitters_n]
+    y_n = Float64[correctdrift(e.y, e.frame, dm.intra[dataset_n].dm[2]) for e in emitters_n]
+    σ_x_n = Float64[e.σ_x for e in emitters_n]
+    σ_y_n = Float64[e.σ_y for e in emitters_n]
+    if n_dims == 3
+        z_n = Float64[correctdrift(e.z, e.frame, dm.intra[dataset_n].dm[3]) for e in emitters_n]
+        σ_z_n = Float64[e.σ_z for e in emitters_n]
     end
-    data = transpose(coords1)
-    se = transpose(stderr1)
 
-    # correct everything
-    smld = correctdrift(smld_uncorrected, dm)
+    # Correct reference datasets fully (intra + inter) for comparison
+    smld_corrected = correctdrift(smld_uncorrected, dm)
 
-    # get corrected coords for reference datasets
-    # (in other words, make a sum image)
-    idx2 = zeros(Bool, length(smld.emitters))
-    for nn in eachindex(dataset2)
-#       idx2 = idx2 .| (smld.emitters.dataset .== dataset2[nn])
-        idx2 = idx2 .| ([e.dataset for e in smld.emitters] .== dataset2[nn])
-    end   
-    if n_dims == 2
-        coords2 = cat(dims = 2, [e.x for e in smld.emitters[idx2]],
-                                [e.y for e in smld.emitters[idx2]])
-    elseif n_dims == 3
-        coords2 = cat(dims = 2, [e.x for e in smld.emitters[idx2]],
-                                [e.y for e in smld.emitters[idx2]],
-                                [e.z for e in smld.emitters[idx2]])
+    # Extract CORRECTED coords from reference datasets
+    idx_ref = [e.dataset in ref_datasets for e in smld_corrected.emitters]
+    emitters_ref = smld_corrected.emitters[idx_ref]
+
+    x_ref = Float64[e.x for e in emitters_ref]
+    y_ref = Float64[e.y for e in emitters_ref]
+    σ_x_ref = Float64[e.σ_x for e in emitters_ref]
+    σ_y_ref = Float64[e.σ_y for e in emitters_ref]
+    if n_dims == 3
+        z_ref = Float64[e.z for e in emitters_ref]
+        σ_z_ref = Float64[e.σ_z for e in emitters_ref]
     end
-    data_ref = transpose(coords2)
 
-    if histbinsize > 0.0
-        # Apply an optional cross-correlation correction.
-        #println("=== dataset1 = $dataset1, dataset2 = $dataset2")
-#       smld1 = SMLMData.isolatesmld(smld, idx1)
-#       smld2 = SMLMData.isolatesmld(smld, idx2)
-        smld1 = filter_emitters(smld, idx1)
-        smld2 = filter_emitters(smld, idx2)
-        shift = findshift(smld1, smld2; histbinsize=histbinsize)
-        #shift = .-shift # correct sign of shift
-        #println("shift = $shift")
-        correctdrift!(smld1, shift)
-#       smld.x[idx1] = smld1.x
-#       smld.y[idx1] = smld1.y
-        for nn in eachindex(idx1)
-            smld.emitters[idx1[nn]].x = smld1.emitters[nn].x
-            smld.emitters[idx1[nn]].y = smld1.emitters[nn].y
+    inter = dm.inter[dataset_n]
+
+    # Initial guess: use current inter value if non-zero, otherwise try CC
+    # This allows the second pass to refine from the first pass result.
+    if any(abs.(inter.dm) .> 1e-10)
+        # Use current inter as starting point (preserves first pass result)
+        θ0 = Float64.(inter.dm)
+    else
+        # First pass: try cross-correlation for initial guess
+        # Note: For CC we need both datasets in the same reference frame
+        smld_ref = filter_by_dataset(smld_corrected, ref_datasets)
+
+        # Create intra-only corrected SMLD for dataset_n (to match what optimizer uses)
+        # This is a temporary copy for CC only
+        smld_n_intra_only = deepcopy(filter_by_dataset(smld_uncorrected, dataset_n))
+        for i in eachindex(smld_n_intra_only.emitters)
+            e = smld_n_intra_only.emitters[i]
+            smld_n_intra_only.emitters[i].x = correctdrift(e.x, e.frame, dm.intra[dataset_n].dm[1])
+            smld_n_intra_only.emitters[i].y = correctdrift(e.y, e.frame, dm.intra[dataset_n].dm[2])
             if n_dims == 3
-                smld.emitters[idx1[nn]].z = smld1.emitters[nn].z
+                smld_n_intra_only.emitters[i].z = correctdrift(e.z, e.frame, dm.intra[dataset_n].dm[3])
             end
         end
-        if cost_fun == "None"
-            theta2inter!(dm.inter[dataset1], shift)
-            return 0.0
+
+        θ0 = zeros(Float64, n_dims)
+        try
+            cc_shift = findshift(smld_ref, smld_n_intra_only; histbinsize=0.05)  # 50nm bins
+            # findshift(A, B) returns -(B - A), so we need θ = -cc_shift
+            # Sanity check: shift should be < 5 μm typically
+            if maximum(abs.(cc_shift)) < 5.0
+                θ0 = Float64.(-cc_shift)
+            end
+        catch
+            # Keep zero initialization
         end
     end
 
-    # build static kdtree from ref data
-    kdtree = KDTree(data_ref; leafsize = 10)
+    # Pre-allocate work arrays
+    N_n = length(x_n)
+    N_ref = length(x_ref)
+    x_work = similar(x_n)
+    y_work = similar(y_n)
 
-    # use current model as starting point 
-    inter=dm.inter[dataset1]
-    θ0 = Float64.(inter2theta(inter))
-    
-    if cost_fun == "Kdtree"
-        myfun = θ -> costfun(θ, data, kdtree, d_cutoff, inter)
-    elseif cost_fun == "Entropy"
-        myfun = θ -> costfun(θ, data, se, maxn, inter)
-    else
-        error("cost_fun not recognized")
+    # Adaptive neighbor state - only rebuild KDTree when shift changes significantly
+    k = min(maxn, N_n + N_ref - 1)
+    rebuild_threshold = 0.5  # μm - same as intra-dataset
+
+    if n_dims == 2
+        # Pre-allocate combined data matrix for KDTree (avoids allocation per iteration)
+        data_combined = Matrix{Float64}(undef, 2, N_n + N_ref)
+        state = InterNeighborState(N_n, k, rebuild_threshold)
+        myfun = θ -> costfun_entropy_inter_2D_merged(θ,
+            x_n, y_n, σ_x_n, σ_y_n,
+            x_ref, y_ref, σ_x_ref, σ_y_ref,
+            maxn, inter;
+            divmethod="KL", x_work=x_work, y_work=y_work, data_combined=data_combined, state=state)
+    else # 3D
+        z_work = similar(z_n)
+        data_combined = Matrix{Float64}(undef, 3, N_n + N_ref)
+        state = InterNeighborState3D(N_n, k, rebuild_threshold)
+        myfun = θ -> costfun_entropy_inter_3D_merged(θ,
+            x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
+            x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
+            maxn, inter;
+            divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work, data_combined=data_combined, state=state)
     end
-    #println(myfun(θ0))
-    opt = Optim.Options(iterations = 10000, show_trace = false)
-    res = optimize(myfun, θ0, opt)
-    θ_found = res.minimizer
-    #println("θ_found = $θ_found")
-    
-    theta2inter!(inter, θ_found)
+
+    # Optimize with gradient-based method for better convergence
+    # BFGS handles flat entropy landscapes better than Nelder-Mead (2x slower but ~4x more accurate)
+    opt = Optim.Options(iterations=10000, g_abstol=1e-8, show_trace=false)
+    res = optimize(myfun, θ0, BFGS())
+    theta2inter!(inter, res.minimizer)
     return res.minimum
-end
-
-"""
-Find and correct inter-detaset drift.
-
-# Fields:
-- dm:               inter-dataset structure
-- cost_fun:         cost function: {"Kdtree", "Entropy"}
-- smld_uncorrected: data structure containing uncorrected coordinate data
-- dataset1:         dataset number for the reference dataset
-- d_cutoff:         cutoff distance
-- maxn:             maximum number of neighbors considered
-- histbinsize:      histogram bin size for optional cross-correlation correction
-"""
-function findinter!(dm::AbstractIntraInter,
-    cost_fun::String,
-    smld_uncorrected::SMLD,
-    dataset1::Int,
-    d_cutoff::AbstractFloat,
-    maxn::Int,
-    histbinsize::AbstractFloat)
-    refdatasets = Int.(1:smld_uncorrected.n_datasets)
-    deleteat!(refdatasets, dataset1)
-    return findinter!(dm, cost_fun,  smld_uncorrected, dataset1, refdatasets,
-                      d_cutoff, maxn, histbinsize)   
-end
-
-"""
-Experimental.
-"""
-function globalcost(smld::SMLD; k::Int=4, d_cutoff=1.0)
-    
-    coords1 = cat(dims = 2, [e.x for e in smld.emitters[idx]],
-                            [e.y for e in smld.emitters[idx]])
-    data = transpose(coords1)
-    
-    kdtree = KDTree(data; leafsize = 10)
-    idxs, dists = knn(kdtree, data, k+1, true)
-    
-    cost = 0.0
-    for nn = 2:size(data, 2)    
-        # cost += sum(min.(dists[nn], d_cutoff))
-        cost -= sum(exp.(-dists[nn]./d_cutoff))
-    end
-    return cost
 end
