@@ -47,7 +47,13 @@ drift_true = DC.Polynomial(smld_noisy; degree=2, initialize="random", rscale=0.1
 smld_drifted = DC.applydrift(smld_noisy, drift_true)
 
 ## Correct drift (Kdtree cost function by default)
-smld_corrected = driftcorrect(smld_drifted; verbose=1)
+# Returns (corrected_smld, info) tuple
+(smld_corrected, info) = driftcorrect(smld_drifted; verbose=1)
+
+# Access optimization metadata
+println("Elapsed: $(info.elapsed_ns / 1e9) seconds")
+println("Iterations: $(info.iterations)")
+println("Converged: $(info.converged)")
 
 # Compute the RMSD (root mean square deviation) between the original and
 # corrected SMLD structures
@@ -69,7 +75,7 @@ print("rmsd 2D [driftcorrect] = $rmsd\n")
 using SMLMDriftCorrection
 
 smld = ...
-smld_DC = driftcorrect(smld)
+(smld_DC, info) = driftcorrect(smld)
 ```
 
 ### SMITE Results.mat File
@@ -79,7 +85,7 @@ using SMLMDriftCorrection
 
 smd = SmiteSMD(path, file)   # *_Results.mat file
 smld2 = load_smite_2d(smd)   # To check keys, use: varnames = keys(smld2)
-smld2_DC = driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
+(smld2_DC, info) = driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
 ```
 
 ### Selecting a ROI to Analyze
@@ -95,18 +101,18 @@ subind = (smld2_x .> 64.0) .& (smld2_x .< 128.0) .&
 smld2roi = DC.filter_emitters(smld2, subind)
 println("N_smld2roi = $(length(smld2roi.emitters))")
 
-smld2roi_DC = driftcorrect(smld2roi)
+(smld2roi_DC, info) = driftcorrect(smld2roi)
 ```
 
 ## Interface
 
 **driftcorrect** is the main interface for drift correction (DC).  This
 algorithm consists of an intra-dataset portion and an inter-dataset portion.
-The drift corrected coordinates are returned as output.  All distance units
-are in μm.
+Returns a tuple of drift corrected coordinates and optimization metadata.
+All distance units are in μm.
 
-```
-function driftcorrect(smld::SMLD;
+```julia
+(smld_corrected, info) = driftcorrect(smld::SMLD;
     intramodel::String = "Polynomial",
     cost_fun::String = "Kdtree",
     cost_fun_intra::String = "",
@@ -134,7 +140,25 @@ function driftcorrect(smld::SMLD;
                         correction (μm) = -1.0 [< 0 means no correction]
 - ***verbose***:        flag for more output = 0
 ### Output
-- ***smld_found***:     structure containing drift corrected coordinates (μm)
+- ***smld_corrected***: structure containing drift corrected coordinates (μm)
+- ***info***:           `DriftInfo` struct with optimization metadata
+
+### DriftInfo Struct
+
+```julia
+struct DriftInfo
+    model::AbstractIntraInter   # Fitted drift model (for trajectory extraction)
+    elapsed_ns::UInt64          # Wall time in nanoseconds
+    backend::Symbol             # Computation backend (:cpu)
+    iterations::Int             # Total optimization iterations
+    converged::Bool             # Whether all optimizations converged
+    entropy::Float64            # Final total cost value
+    history::Vector{Float64}    # Per-dataset final cost values
+end
+```
+
+The `model` field can be used for extracting drift trajectories or warm-starting
+subsequent corrections.
 
 ## Other Entry Points into SMLMDriftCorrect
 - ***Polynomial*** define data type for intra-dataset drifts, which will be a

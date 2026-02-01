@@ -131,31 +131,37 @@ using Test
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
     # --- Test driftcorrect (K-d tree) ---
-    smld_DC = DC.driftcorrect(smld_drift)
+    (smld_DC, info) = DC.driftcorrect(smld_drift)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd 2D (K-d tree) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 5.0)  # Relaxed tolerance for new SMLMSim API
+    @test info isa DC.DriftInfo
+    @test info.backend == :cpu
+    @test info.iterations > 0
+    @test info.elapsed_ns > 0
 
     # --- Test driftcorrect (Entropy) ---
-    smld_DC = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100, verbose=1)
+    (smld_DC, info) = DC.driftcorrect(smld_drift; cost_fun="Entropy", maxn=100, verbose=1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd 2D (Entropy) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 5.0)  # Relaxed tolerance for new SMLMSim API
+    @test info isa DC.DriftInfo
 
     # --- Test driftcorrect (histbinsize > 0) ---
-    smld_DC = DC.driftcorrect(smld_drift; histbinsize=0.1)
+    (smld_DC, info) = DC.driftcorrect(smld_drift; histbinsize=0.1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd 2D (PairCorr) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 5.0)  # Relaxed tolerance for new SMLMSim API
+    @test info isa DC.DriftInfo
 
     # ========== 3D ==========
     
@@ -179,7 +185,7 @@ using Test
     @test isapprox(rmsd, 0.0; atol=1e-10)
 
     # --- Test driftcorrect (K-d tree) ---
-    smld_DC = DC.driftcorrect(smld_drift3)
+    (smld_DC, info) = DC.driftcorrect(smld_drift3)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     smld_DC_z = [e.z for e in smld_DC.emitters]
@@ -188,9 +194,10 @@ using Test
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
     print("rmsd 3D (K-d tree) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 10.0)  # Relaxed tolerance for new SMLMSim API
+    @test info isa DC.DriftInfo
 
     # --- Test driftcorrect (Entropy) ---
-    smld_DC = DC.driftcorrect(smld_drift3; cost_fun="Entropy", maxn=100, verbose=1)
+    (smld_DC, info) = DC.driftcorrect(smld_drift3; cost_fun="Entropy", maxn=100, verbose=1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     smld_DC_z = [e.z for e in smld_DC.emitters]
@@ -199,9 +206,10 @@ using Test
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
     print("rmsd 3D (Entropy) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 10.0)  # Relaxed tolerance for new SMLMSim API
+    @test info isa DC.DriftInfo
 
     # --- Test driftcorrect (histbinsize > 0) ---
-    smld_DC = DC.driftcorrect(smld_drift3; histbinsize=0.1)
+    (smld_DC, info) = DC.driftcorrect(smld_drift3; histbinsize=0.1)
     smld_DC_x = [e.x for e in smld_DC.emitters]
     smld_DC_y = [e.y for e in smld_DC.emitters]
     smld_DC_z = [e.z for e in smld_DC.emitters]
@@ -210,4 +218,5 @@ using Test
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
     print("rmsd 3D (PairCorr) = $rmsd\n")
     @test isapprox(rmsd, 0.0; atol = 10.0)  # Relaxed tolerance for new SMLMSim API
+    @test info isa DC.DriftInfo
 end

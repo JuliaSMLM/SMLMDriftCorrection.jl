@@ -22,5 +22,6 @@ include("utilities.jl")
 
 export driftcorrect
 export filter_emitters
+export DriftInfo
 
 end

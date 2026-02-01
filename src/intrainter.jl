@@ -191,6 +191,7 @@ function findintra!(intra::AbstractIntraDrift,
     θ_found = res.minimizer
 
     theta2intra!(intra, θ_found)
+    return res
 end
 
 """

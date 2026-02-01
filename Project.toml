@@ -1,7 +1,7 @@
 name = "SMLMDriftCorrection"
 uuid = "34bda2d1-2fff-475a-a8c4-7f53d4251312"
 authors = ["klidke@unm.edu"]
-version = "0.1.0"
+version = "0.2.0"
 
 [deps]
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
