@@ -183,10 +183,14 @@ histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates.
 """
 function findshift(smld1::T, smld2::T;
-    histbinsize::Union{AbstractVector{U}, U}=1.0
-) where {T<:SMLD, U<:Real}
+    histbinsize::Real=1.0
+) where {T<:SMLD}
 
     n_dims = nDims(smld1)
+
+    # Convert histbinsize to match coordinate type
+    coord_type = typeof(smld1.emitters[1].x)
+    histbinsize = coord_type(histbinsize)
 
     # Compute the histogram images (assume the same size for both images).
     if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&

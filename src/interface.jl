@@ -213,13 +213,9 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     smld_ref = filter_by_dataset(smld, 1)
     for nn = 2:n_datasets
         smld_n = filter_by_dataset(smld, nn)
-        try
-            cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05)
-            for dim in 1:n_dims
-                model.inter[nn].dm[dim] = -cc_shift[dim]
-            end
-        catch e
-            @warn("SMLMDriftCorrection: FFT pass 1 failed for dataset $nn: $(sprint(showerror, e))")
+        cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05)
+        for dim in 1:n_dims
+            model.inter[nn].dm[dim] = -cc_shift[dim]
         end
     end
 
@@ -257,13 +253,9 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
             copy(smld.metadata)
         )
 
-        try
-            cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05)
-            for dim in 1:n_dims
-                model.inter[nn].dm[dim] = -cc_shift[dim]
-            end
-        catch e
-            @warn("SMLMDriftCorrection: FFT pass 2 failed for dataset $nn: $(sprint(showerror, e))")
+        cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05)
+        for dim in 1:n_dims
+            model.inter[nn].dm[dim] = -cc_shift[dim]
         end
     end
 
