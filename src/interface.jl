@@ -219,9 +219,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                 model.inter[nn].dm[dim] = -cc_shift[dim]
             end
         catch e
-            if verbose > 0
-                @warn("SMLMDriftCorrection: FFT pass 1 failed for dataset $nn, keeping zero shift")
-            end
+            @warn("SMLMDriftCorrection: FFT pass 1 failed for dataset $nn: $(sprint(showerror, e))")
         end
     end
 
@@ -265,9 +263,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                 model.inter[nn].dm[dim] = -cc_shift[dim]
             end
         catch e
-            if verbose > 0
-                @warn("SMLMDriftCorrection: FFT pass 2 failed for dataset $nn, keeping pass 1 shift")
-            end
+            @warn("SMLMDriftCorrection: FFT pass 2 failed for dataset $nn: $(sprint(showerror, e))")
         end
     end
 
