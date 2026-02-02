@@ -1,7 +1,7 @@
 # Main interface for drift correction with progressive quality tiers
 
 """
-    driftcorrect(smld; kwargs...) -> DriftResult
+    driftcorrect(smld; kwargs...) -> (corrected_smld, info)
 
 Main interface for drift correction. Uses Legendre polynomial model with
 entropy-based cost function and adaptive KDTree neighbor building.
@@ -20,6 +20,7 @@ entropy-based cost function and adaptive KDTree neighbor building.
 - `maxn=200`: Maximum number of neighbors for entropy calculation
 - `max_iterations=10`: Maximum iterations for `:iterative` mode
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
+- `warm_start=nothing`: Previous model for warm starting optimization
 - `verbose=0`: Verbosity level (0=quiet, 1=info, 2=debug)
 
 # Quality Tiers
@@ -28,9 +29,10 @@ entropy-based cost function and adaptive KDTree neighbor building.
 - `:iterative`: Full convergence - iterates intra↔inter until shift changes < tol
 
 # Returns
-`DriftResult` with fields:
-- `smld`: Drift-corrected SMLD
+Tuple `(corrected_smld, info)` where `info::DriftInfo` contains:
 - `model`: Fitted drift model (LegendrePolynomial)
+- `elapsed_ns`: Wall time in nanoseconds
+- `backend`: Computation backend (`:cpu`)
 - `iterations`: Number of iterations completed
 - `converged`: Whether convergence was achieved
 - `entropy`: Final entropy value
@@ -39,20 +41,20 @@ entropy-based cost function and adaptive KDTree neighbor building.
 # Example
 ```julia
 # Basic usage
-result = driftcorrect(smld)
-corrected_smld = result.smld
+(smld_corrected, info) = driftcorrect(smld)
 
 # Fast FFT-only mode
-result = driftcorrect(smld; quality=:fft)
+(smld_corrected, info) = driftcorrect(smld; quality=:fft)
 
 # Full iterative convergence
-result = driftcorrect(smld; quality=:iterative)
+(smld_corrected, info) = driftcorrect(smld; quality=:iterative)
 
-# Continue from previous result
-result2 = driftcorrect(result; max_iterations=5)
+# Warm start from previous result
+(smld1, info1) = driftcorrect(smld1; degree=2)
+(smld2, info2) = driftcorrect(smld2; warm_start=info1.model)
 
 # Extract drift trajectory for plotting
-traj = drift_trajectory(result.model)
+traj = drift_trajectory(info.model)
 ```
 """
 function driftcorrect(smld::SMLD;
@@ -64,7 +66,10 @@ function driftcorrect(smld::SMLD;
     maxn::Int = 200,
     max_iterations::Int = 10,
     convergence_tol::Float64 = 0.001,
+    warm_start::Union{Nothing, AbstractIntraInter} = nothing,
     verbose::Int = 0)
+
+    t_start = time_ns()
 
     # Validate quality tier
     if quality ∉ (:fft, :singlepass, :iterative)
@@ -90,8 +95,15 @@ function driftcorrect(smld::SMLD;
         end
     end
 
-    # Create drift model
-    driftmodel = LegendrePolynomial(smld_work; degree=degree)
+    # Create drift model (or use warm start)
+    if warm_start !== nothing
+        driftmodel = deepcopy(warm_start)
+        if verbose > 0
+            @info("SMLMDriftCorrection: using warm start from previous model")
+        end
+    else
+        driftmodel = LegendrePolynomial(smld_work; degree=degree)
+    end
 
     # Dispatch to appropriate quality tier
     if quality == :fft
@@ -109,20 +121,25 @@ function driftcorrect(smld::SMLD;
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
-    return DriftResult(
-        smld_corrected,
+    elapsed_ns = time_ns() - t_start
+
+    info = DriftInfo(
         driftmodel,
+        elapsed_ns,
+        :cpu,
         result.iterations,
         result.converged,
         final_entropy,
         result.history
     )
+
+    return (smld_corrected, info)
 end
 
 """
-    driftcorrect(result::DriftResult; kwargs...) -> DriftResult
+    driftcorrect(smld, info::DriftInfo; kwargs...) -> (corrected_smld, info)
 
-Continue drift correction from a previous result. Creates a new DriftResult.
+Continue drift correction from a previous result using the model from info.
 
 # Keyword Arguments
 - `max_iterations=10`: Additional iterations to run
@@ -130,66 +147,42 @@ Continue drift correction from a previous result. Creates a new DriftResult.
 - `maxn=200`: Maximum neighbors for entropy calculation
 - `verbose=0`: Verbosity level
 """
-function driftcorrect(result::DriftResult;
+function driftcorrect(smld::SMLD, info::DriftInfo;
     max_iterations::Int = 10,
     convergence_tol::Float64 = 0.001,
     maxn::Int = 200,
     verbose::Int = 0)
 
+    t_start = time_ns()
+
     # Deep copy to avoid modifying original
-    smld = deepcopy(result.smld)
-    model = deepcopy(result.model)
+    smld_work = deepcopy(smld)
+    model = deepcopy(info.model)
 
     # Continue with iterative refinement
-    iter_result = _driftcorrect_iterate!(model, smld, maxn, max_iterations,
+    iter_result = _driftcorrect_iterate!(model, smld_work, maxn, max_iterations,
                                           convergence_tol, verbose,
-                                          result.iterations, copy(result.history))
+                                          info.iterations, copy(info.history))
 
     # Apply corrections
-    smld_corrected = correctdrift(smld, model)
+    smld_corrected = correctdrift(smld_work, model)
 
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
-    return DriftResult(
-        smld_corrected,
+    elapsed_ns = time_ns() - t_start
+
+    new_info = DriftInfo(
         model,
+        elapsed_ns,
+        :cpu,
         iter_result.iterations,
         iter_result.converged,
         final_entropy,
         iter_result.history
     )
-end
 
-"""
-    driftcorrect!(result::DriftResult; kwargs...) -> DriftResult
-
-Continue drift correction from a previous result, modifying it in place.
-
-# Keyword Arguments
-Same as `driftcorrect(result; kwargs...)`
-"""
-function driftcorrect!(result::DriftResult;
-    max_iterations::Int = 10,
-    convergence_tol::Float64 = 0.001,
-    maxn::Int = 200,
-    verbose::Int = 0)
-
-    # Continue with iterative refinement (modifies model in place)
-    iter_result = _driftcorrect_iterate!(result.model, result.smld, maxn, max_iterations,
-                                          convergence_tol, verbose,
-                                          result.iterations, result.history)
-
-    # Apply corrections
-    correctdrift!(result.smld, result.model)
-
-    # Update result fields
-    result.iterations = iter_result.iterations
-    result.converged = iter_result.converged
-    result.entropy = _compute_entropy(result.smld, maxn)
-    append!(result.history, iter_result.history[length(result.history)+1:end])
-
-    return result
+    return (smld_corrected, new_info)
 end
 
 # ============================================================================

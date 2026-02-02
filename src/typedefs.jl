@@ -12,14 +12,15 @@ mutable struct InterShift
 end
 
 """
-    DriftResult
+    DriftInfo
 
-Result type for drift correction, providing a unified interface across all quality modes.
-Supports dispatch for continuation (driftcorrect(result; kw...)).
+Metadata from drift correction, returned as second element of tuple.
+Supports warm start via `info.model`.
 
 # Fields
-- `smld::SMLD`: Drift-corrected localization data
 - `model::LegendrePolynomial`: Fitted drift model (intra + inter)
+- `elapsed_ns::UInt64`: Wall time in nanoseconds
+- `backend::Symbol`: Computation backend (`:cpu`)
 - `iterations::Int`: Number of iterations completed (0 for :fft, 1 for :singlepass, N for :iterative)
 - `converged::Bool`: Whether convergence criterion was met (always true for :fft/:singlepass)
 - `entropy::Float64`: Final entropy value after correction
@@ -27,16 +28,20 @@ Supports dispatch for continuation (driftcorrect(result; kw...)).
 
 # Usage
 ```julia
-result = driftcorrect(smld)
-result.smld        # corrected data
-result.converged   # check convergence
-result.entropy     # final value
-plot(result.history)  # diagnostics
+(smld_corrected, info) = driftcorrect(smld)
+info.converged    # check convergence
+info.entropy      # final value
+info.elapsed_ns   # timing
+plot(info.history)  # diagnostics
+
+# Warm start from previous result
+(smld2, info2) = driftcorrect(smld2; warm_start=info.model)
 ```
 """
-mutable struct DriftResult{S<:SMLD, M<:AbstractIntraInter}
-    smld::S
+struct DriftInfo{M<:AbstractIntraInter}
     model::M
+    elapsed_ns::UInt64
+    backend::Symbol
     iterations::Int
     converged::Bool
     entropy::Float64

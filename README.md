@@ -40,11 +40,10 @@ drift_true = DC.LegendrePolynomial(smld_noisy; degree=2, initialize="random", rs
 smld_drifted = DC.applydrift(smld_noisy, drift_true)
 
 # Correct drift
-result = driftcorrect(smld_drifted; verbose=1)
-smld_corrected = result.smld
+(smld_corrected, info) = driftcorrect(smld_drifted; verbose=1)
 
 # Extract drift trajectory for plotting
-traj = drift_trajectory(result.model)
+traj = drift_trajectory(info.model)
 # traj.frames, traj.x, traj.y are ready for plotting
 
 # Compute RMSD between original and corrected
@@ -62,11 +61,10 @@ println("RMSD = $rmsd μm")
 ```julia
 using SMLMDriftCorrection
 
-result = driftcorrect(smld)
-smld_corrected = result.smld
+(smld_corrected, info) = driftcorrect(smld)
 
-# Or destructure directly:
-(; smld, model) = driftcorrect(smld)
+# Access model for trajectory extraction:
+traj = drift_trajectory(info.model)
 ```
 
 ### SMITE Results.mat File
@@ -76,7 +74,7 @@ using SMLMDriftCorrection
 
 smd = SmiteSMD(path, file)   # *_Results.mat file
 smld = load_smite_2d(smd)
-result = driftcorrect(smld; verbose=1)
+(smld_corrected, info) = driftcorrect(smld; verbose=1)
 ```
 
 ### Selecting a ROI to Analyze
@@ -88,7 +86,7 @@ y = [e.y for e in smld.emitters]
 mask = (x .> 64.0) .& (x .< 128.0) .& (y .> 64.0) .& (y .< 128.0)
 smld_roi = filter_emitters(smld, mask)
 
-result = driftcorrect(smld_roi)
+(smld_corrected, info) = driftcorrect(smld_roi)
 ```
 
 ### Continuous Acquisition (Drift Accumulates Across Datasets)
@@ -96,10 +94,21 @@ result = driftcorrect(smld_roi)
 using SMLMDriftCorrection
 
 # For data where drift accumulates across files (one long acquisition)
-result = driftcorrect(smld; dataset_mode=:continuous)
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous)
 
 # With chunking for finer-grained correction
-result = driftcorrect(smld; dataset_mode=:continuous, n_chunks=10)
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous, n_chunks=10)
+```
+
+### Warm Start (Reuse Model from Previous Correction)
+```julia
+using SMLMDriftCorrection
+
+# First dataset
+(smld1_corrected, info1) = driftcorrect(smld1; degree=2)
+
+# Second dataset - use model from first as starting point
+(smld2_corrected, info2) = driftcorrect(smld2; warm_start=info1.model)
 ```
 
 ## Interface
@@ -108,18 +117,24 @@ result = driftcorrect(smld; dataset_mode=:continuous, n_chunks=10)
 
 ```julia
 function driftcorrect(smld::SMLD;
+    quality::Symbol = :singlepass,
     degree::Int = 2,
     dataset_mode::Symbol = :registered,
     chunk_frames::Int = 0,
     n_chunks::Int = 0,
     maxn::Int = 200,
-    verbose::Int = 0) -> (smld, model)
+    warm_start = nothing,
+    verbose::Int = 0) -> (smld_corrected, info)
 ```
 
 ### Input
 - **smld**: SMLD structure containing (X, Y) or (X, Y, Z) localization coordinates (μm)
 
 ### Keyword Arguments
+- **quality**: Quality tier for correction:
+  - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
+  - `:singlepass` (default): Single pass of intra then inter correction
+  - `:iterative`: Full convergence with intra↔inter iteration
 - **degree**: Polynomial degree for intra-dataset drift model (default: 2)
 - **dataset_mode**: Semantic label for multi-dataset handling (algorithm is identical):
   - `:registered` (default): Datasets are independent acquisitions
@@ -127,12 +142,18 @@ function driftcorrect(smld::SMLD;
 - **chunk_frames**: For continuous mode, split each dataset into chunks of this many frames (0 = no chunking)
 - **n_chunks**: Alternative to chunk_frames - specify number of chunks per dataset (0 = no chunking)
 - **maxn**: Maximum number of neighbors for entropy calculation (default: 200)
+- **warm_start**: Previous model (`info.model`) for warm starting optimization (default: nothing)
 - **verbose**: Verbosity level (0=quiet, 1=info, 2=debug)
 
 ### Output
-Returns a `NamedTuple` with:
-- **smld**: Drift-corrected SMLD structure
-- **model**: Fitted `LegendrePolynomial` drift model (use `drift_trajectory(model)` for plotting)
+Returns a tuple `(smld_corrected, info)` where `info::DriftInfo` contains:
+- **model**: Fitted `LegendrePolynomial` drift model (use `drift_trajectory(info.model)` for plotting)
+- **elapsed_ns**: Wall time in nanoseconds
+- **backend**: Computation backend (`:cpu`)
+- **iterations**: Number of iterations completed
+- **converged**: Whether convergence was achieved
+- **entropy**: Final entropy value
+- **history**: Entropy per iteration (for diagnostics)
 
 ## Other Functions
 

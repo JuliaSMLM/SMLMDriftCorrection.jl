@@ -97,14 +97,14 @@ function generate_test_smld(;
     # Set seed for reproducibility
     Random.seed!(seed)
 
-    smld_true, smld_model, smld_noisy = simulate(
+    (smld, sim_info) = simulate(
         params;
         pattern = pattern,
         molecule = GenericFluor(; photons=5000.0, k_on=0.075, k_off=50.0),  # ~3 blinks per emitter in 40s
         camera = IdealCamera(1:256, 1:256, 0.1)  # 100nm pixels, 25.6μm FOV
     )
 
-    return smld_noisy
+    return smld
 end
 
 """
@@ -509,56 +509,56 @@ function save_render_suite(smld_drifted, smld_corrected, scenario::Symbol;
     # 1. Histogram at 10x, color by absolute_frame (time across datasets)
     result = render(smld_drifted; strategy=HistogramRender(), zoom=10,
                     color_by=:absolute_frame, colormap=:turbo, roi_kwargs...)
-    save_image(joinpath(dir, "render_drifted_histogram_10x.png"), result.image)
+    save_image(joinpath(dir, "render_drifted_histogram_10x.png"), result[1])
     println("  Saved: render_drifted_histogram_10x.png")
 
     result = render(smld_corrected; strategy=HistogramRender(), zoom=10,
                     color_by=:absolute_frame, colormap=:turbo, roi_kwargs...)
-    save_image(joinpath(dir, "render_corrected_histogram_10x.png"), result.image)
+    save_image(joinpath(dir, "render_corrected_histogram_10x.png"), result[1])
     println("  Saved: render_corrected_histogram_10x.png")
 
     # 2. Circles at 50x, color by absolute_frame (time)
     result = render(smld_drifted; strategy=CircleRender(), zoom=50,
                     color_by=:absolute_frame, colormap=:turbo, roi_kwargs...)
-    save_image(joinpath(dir, "render_drifted_circles_50x.png"), result.image)
+    save_image(joinpath(dir, "render_drifted_circles_50x.png"), result[1])
     println("  Saved: render_drifted_circles_50x.png")
 
     result = render(smld_corrected; strategy=CircleRender(), zoom=50,
                     color_by=:absolute_frame, colormap=:turbo, roi_kwargs...)
-    save_image(joinpath(dir, "render_corrected_circles_50x.png"), result.image)
+    save_image(joinpath(dir, "render_corrected_circles_50x.png"), result[1])
     println("  Saved: render_corrected_circles_50x.png")
 
     # 3. Gaussian at 20x, intensity colormap
     result = render(smld_drifted; strategy=GaussianRender(), zoom=20,
                     colormap=:inferno, roi_kwargs...)
-    save_image(joinpath(dir, "render_drifted_gaussian_20x.png"), result.image)
+    save_image(joinpath(dir, "render_drifted_gaussian_20x.png"), result[1])
     println("  Saved: render_drifted_gaussian_20x.png")
 
     result = render(smld_corrected; strategy=GaussianRender(), zoom=20,
                     colormap=:inferno, roi_kwargs...)
-    save_image(joinpath(dir, "render_corrected_gaussian_20x.png"), result.image)
+    save_image(joinpath(dir, "render_corrected_gaussian_20x.png"), result[1])
     println("  Saved: render_corrected_gaussian_20x.png")
 
     # 4. Dataset-colored renders (for multi-dataset scenarios)
     if include_dataset_colors
         result = render(smld_drifted; strategy=HistogramRender(), zoom=10,
                         color_by=:dataset, colormap=:tab10, roi_kwargs...)
-        save_image(joinpath(dir, "render_drifted_histogram_dataset.png"), result.image)
+        save_image(joinpath(dir, "render_drifted_histogram_dataset.png"), result[1])
         println("  Saved: render_drifted_histogram_dataset.png")
 
         result = render(smld_corrected; strategy=HistogramRender(), zoom=10,
                         color_by=:dataset, colormap=:tab10, roi_kwargs...)
-        save_image(joinpath(dir, "render_corrected_histogram_dataset.png"), result.image)
+        save_image(joinpath(dir, "render_corrected_histogram_dataset.png"), result[1])
         println("  Saved: render_corrected_histogram_dataset.png")
 
         result = render(smld_drifted; strategy=CircleRender(), zoom=50,
                         color_by=:dataset, colormap=:tab10, roi_kwargs...)
-        save_image(joinpath(dir, "render_drifted_circles_dataset.png"), result.image)
+        save_image(joinpath(dir, "render_drifted_circles_dataset.png"), result[1])
         println("  Saved: render_drifted_circles_dataset.png")
 
         result = render(smld_corrected; strategy=CircleRender(), zoom=50,
                         color_by=:dataset, colormap=:tab10, roi_kwargs...)
-        save_image(joinpath(dir, "render_corrected_circles_dataset.png"), result.image)
+        save_image(joinpath(dir, "render_corrected_circles_dataset.png"), result[1])
         println("  Saved: render_corrected_circles_dataset.png")
     end
 end

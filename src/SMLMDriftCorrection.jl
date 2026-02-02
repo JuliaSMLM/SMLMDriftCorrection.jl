@@ -18,8 +18,7 @@ include("utilities.jl")
 include("interface.jl")
 
 export driftcorrect
-export driftcorrect!
-export DriftResult
+export DriftInfo
 export filter_emitters
 export drift_trajectory
 

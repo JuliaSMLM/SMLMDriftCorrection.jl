@@ -99,7 +99,7 @@ function run_registered_diagnostics(;
 
     for quality in [:fft, :singlepass, :iterative]
         verbose && println("\n  Running :$quality...")
-        result = DC.driftcorrect(smld_drifted;
+        (smld_corr, info) = DC.driftcorrect(smld_drifted;
             degree = degree,
             dataset_mode = :registered,
             quality = quality,
@@ -107,19 +107,20 @@ function run_registered_diagnostics(;
         )
 
         # Compute RMSD for this tier
-        rmsd_tier = compute_rmsd(smld_orig, result.smld)
+        rmsd_tier = compute_rmsd(smld_orig, smld_corr)
         verbose && @printf("    RMSD: %.2f nm (iterations=%d, converged=%s)\n",
-                          rmsd_tier, result.iterations, result.converged)
+                          rmsd_tier, info.iterations, info.converged)
 
         tier_results[quality] = (
-            result = result,
+            smld = smld_corr,
+            info = info,
             rmsd_nm = rmsd_tier
         )
     end
 
     # Use singlepass as the "main" result for detailed analysis
-    smld_corrected = tier_results[:singlepass].result.smld
-    model_recovered = tier_results[:singlepass].result.model
+    smld_corrected = tier_results[:singlepass].smld
+    model_recovered = tier_results[:singlepass].info.model
 
     verbose && println("\n  === Quality Tier Summary ===")
     verbose && @printf("    :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)

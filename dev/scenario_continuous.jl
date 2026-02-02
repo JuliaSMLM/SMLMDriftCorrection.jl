@@ -100,7 +100,7 @@ function run_continuous_diagnostics(;
 
     for quality in [:fft, :singlepass, :iterative]
         verbose && println("\n  Running :$quality...")
-        result = DC.driftcorrect(smld_drifted;
+        (smld_corr, info) = DC.driftcorrect(smld_drifted;
             degree = degree,
             dataset_mode = :continuous,
             quality = quality,
@@ -110,8 +110,8 @@ function run_continuous_diagnostics(;
         # Compute RMSD for this tier (relative, removing global offset)
         x_orig = [e.x for e in smld_orig.emitters]
         y_orig = [e.y for e in smld_orig.emitters]
-        x_corr = [e.x for e in result.smld.emitters]
-        y_corr = [e.y for e in result.smld.emitters]
+        x_corr = [e.x for e in smld_corr.emitters]
+        y_corr = [e.y for e in smld_corr.emitters]
         offset_x_tier = mean(x_corr) - mean(x_orig)
         offset_y_tier = mean(y_corr) - mean(y_orig)
         dx = (x_corr .- offset_x_tier) .- x_orig
@@ -119,17 +119,18 @@ function run_continuous_diagnostics(;
         rmsd_tier = sqrt(mean(dx.^2 .+ dy.^2)) * 1000
 
         verbose && @printf("    RMSD (relative): %.2f nm (iterations=%d, converged=%s)\n",
-                          rmsd_tier, result.iterations, result.converged)
+                          rmsd_tier, info.iterations, info.converged)
 
         tier_results[quality] = (
-            result = result,
+            smld = smld_corr,
+            info = info,
             rmsd_nm = rmsd_tier
         )
     end
 
     # Use singlepass as the "main" result for detailed analysis
-    smld_corrected = tier_results[:singlepass].result.smld
-    model_recovered = tier_results[:singlepass].result.model
+    smld_corrected = tier_results[:singlepass].smld
+    model_recovered = tier_results[:singlepass].info.model
 
     verbose && println("\n  === Quality Tier Summary ===")
     verbose && @printf("    :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)

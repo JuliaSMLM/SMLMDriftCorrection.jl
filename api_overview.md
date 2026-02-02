@@ -6,18 +6,35 @@ AI-parseable API reference for SMLMDriftCorrection.jl. All distance units are in
 
 ### driftcorrect
 ```julia
-driftcorrect(smld::SMLD; degree=2, dataset_mode=:registered, chunk_frames=0, n_chunks=0, maxn=200, verbose=0) -> NamedTuple
+driftcorrect(smld::SMLD; quality=:singlepass, degree=2, dataset_mode=:registered,
+             chunk_frames=0, n_chunks=0, maxn=200, warm_start=nothing, verbose=0) -> Tuple{SMLD, DriftInfo}
 ```
-Main interface for drift correction. Returns `(smld=corrected_smld, model=LegendrePolynomial)`.
+Main interface for drift correction. Returns `(smld_corrected, info)`.
 
 **Parameters:**
 - `smld`: SMLD structure with localization coordinates
+- `quality`: `:fft` (fast), `:singlepass` (default), or `:iterative` (full convergence)
 - `degree`: Polynomial degree for intra-dataset drift (default: 2)
 - `dataset_mode`: `:registered` or `:continuous` (same algorithm, semantic label for plotting)
 - `chunk_frames`: Split datasets into chunks of N frames (0 = no chunking)
 - `n_chunks`: Alternative - specify number of chunks per dataset
 - `maxn`: Max neighbors for entropy calculation (default: 200)
+- `warm_start`: Previous model (`info.model`) for warm starting optimization
 - `verbose`: 0=quiet, 1=info, 2=debug
+
+### DriftInfo
+```julia
+struct DriftInfo{M<:AbstractIntraInter}
+    model::M              # Fitted LegendrePolynomial drift model
+    elapsed_ns::UInt64    # Wall time in nanoseconds
+    backend::Symbol       # Computation backend (:cpu)
+    iterations::Int       # Number of iterations completed
+    converged::Bool       # Whether convergence was achieved
+    entropy::Float64      # Final entropy value
+    history::Vector{Float64}  # Entropy per iteration
+end
+```
+Metadata from drift correction. Use `info.model` for warm starts or trajectory extraction.
 
 ### filter_emitters
 ```julia
