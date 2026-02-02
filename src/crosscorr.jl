@@ -186,6 +186,14 @@ function findshift(smld1::T, smld2::T;
     histbinsize::Real=1.0
 ) where {T<:SMLD}
 
+    # Check for empty datasets
+    if isempty(smld1.emitters)
+        error("findshift: smld1 has no emitters")
+    end
+    if isempty(smld2.emitters)
+        error("findshift: smld2 has no emitters")
+    end
+
     n_dims = nDims(smld1)
 
     # Convert histbinsize to match coordinate type
