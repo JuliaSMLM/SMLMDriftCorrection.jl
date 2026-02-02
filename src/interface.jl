@@ -31,7 +31,7 @@ entropy-based cost function and adaptive KDTree neighbor building.
 # Returns
 Tuple `(corrected_smld, info)` where `info::DriftInfo` contains:
 - `model`: Fitted drift model (LegendrePolynomial)
-- `elapsed_ns`: Wall time in nanoseconds
+- `elapsed_s`: Wall time in seconds
 - `backend`: Computation backend (`:cpu`)
 - `iterations`: Number of iterations completed
 - `converged`: Whether convergence was achieved
@@ -121,11 +121,11 @@ function driftcorrect(smld::SMLD;
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
-    elapsed_ns = time_ns() - t_start
+    elapsed_s = (time_ns() - t_start) / 1e9
 
     info = DriftInfo(
         driftmodel,
-        elapsed_ns,
+        elapsed_s,
         :cpu,
         result.iterations,
         result.converged,
@@ -170,11 +170,11 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
-    elapsed_ns = time_ns() - t_start
+    elapsed_s = (time_ns() - t_start) / 1e9
 
     new_info = DriftInfo(
         model,
-        elapsed_ns,
+        elapsed_s,
         :cpu,
         iter_result.iterations,
         iter_result.converged,

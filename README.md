@@ -148,7 +148,7 @@ function driftcorrect(smld::SMLD;
 ### Output
 Returns a tuple `(smld_corrected, info)` where `info::DriftInfo` contains:
 - **model**: Fitted `LegendrePolynomial` drift model (use `drift_trajectory(info.model)` for plotting)
-- **elapsed_ns**: Wall time in nanoseconds
+- **elapsed_s**: Wall time in seconds
 - **backend**: Computation backend (`:cpu`)
 - **iterations**: Number of iterations completed
 - **converged**: Whether convergence was achieved

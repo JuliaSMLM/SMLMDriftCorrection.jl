@@ -26,7 +26,7 @@ Main interface for drift correction. Returns `(smld_corrected, info)`.
 ```julia
 struct DriftInfo{M<:AbstractIntraInter}
     model::M              # Fitted LegendrePolynomial drift model
-    elapsed_ns::UInt64    # Wall time in nanoseconds
+    elapsed_s::Float64    # Wall time in seconds
     backend::Symbol       # Computation backend (:cpu)
     iterations::Int       # Number of iterations completed
     converged::Bool       # Whether convergence was achieved

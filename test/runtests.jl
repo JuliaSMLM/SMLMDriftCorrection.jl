@@ -124,7 +124,7 @@ using Test
         @test smld_corrected isa DC.SMLD
         @test info isa DC.DriftInfo
         @test info.model isa DC.LegendrePolynomial
-        @test info.elapsed_ns > 0
+        @test info.elapsed_s > 0
         @test info.backend == :cpu
         @test info.iterations >= 1
         @test info.converged == true
@@ -148,7 +148,7 @@ using Test
         @test info_fft isa DC.DriftInfo
         @test info_fft.iterations == 0
         @test info_fft.converged == true
-        @test info_fft.elapsed_ns > 0
+        @test info_fft.elapsed_s > 0
         # FFT is less accurate but should still be reasonable
         smld_DC_x = [e.x for e in smld_fft.emitters]
         smld_DC_y = [e.y for e in smld_fft.emitters]
@@ -166,7 +166,7 @@ using Test
         @test info_iter isa DC.DriftInfo
         @test info_iter.iterations >= 1
         @test length(info_iter.history) >= 1
-        @test info_iter.elapsed_ns > 0
+        @test info_iter.elapsed_s > 0
         smld_DC_x = [e.x for e in smld_iter.emitters]
         smld_DC_y = [e.y for e in smld_iter.emitters]
         rmsd_iter = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
@@ -180,7 +180,7 @@ using Test
         (smld1, info1) = DC.driftcorrect(smld_drift; quality=:singlepass)
         (smld2, info2) = DC.driftcorrect(smld_drift; warm_start=info1.model)
         @test info2 isa DC.DriftInfo
-        @test info2.elapsed_ns > 0
+        @test info2.elapsed_s > 0
         print("Warm start: entropy $(info1.entropy) -> $(info2.entropy)\n")
     end
 
@@ -259,11 +259,11 @@ using Test
         # FFT
         (smld_fft, info_fft) = DC.driftcorrect(smld_drift3; quality=:fft)
         @test info_fft.iterations == 0
-        @test info_fft.elapsed_ns > 0
+        @test info_fft.elapsed_s > 0
 
         # Iterative
         (smld_iter, info_iter) = DC.driftcorrect(smld_drift3; quality=:iterative, max_iterations=2)
         @test info_iter.iterations >= 1
-        @test info_iter.elapsed_ns > 0
+        @test info_iter.elapsed_s > 0
     end
 end
