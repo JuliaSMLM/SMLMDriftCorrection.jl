@@ -2,15 +2,22 @@ using SMLMDriftCorrection
 DC = SMLMDriftCorrection
 using SMLMSim
 using Test
+using Random
 
 @testset "SMLMDriftCorrection.jl" begin
-    # Simulation parameters use physical units
-    # smld structures are in units of pixels and frames
+    # Use fixed seed for reproducible tests
+    Random.seed!(42)
+
+    # Realistic simulation parameters:
+    # - Smaller FOV (64x64 = 6.4 μm) for faster tests
+    # - Higher k_on (0.02) for ~3-5 blinks per molecule
+    # - 3 datasets (enough for inter-dataset testing)
+    # - ~1000+ localizations per dataset for good statistics
     params_2d = StaticSMLMParams(
-        2.0,      # density (ρ): emitters per μm²
+        10.0,     # density (ρ): emitters per μm² (gives ~400 molecules)
         0.13,     # σ_psf: PSF width in μm (130nm)
-        50,       # minphotons: minimum photons for detection
-        10,       # ndatasets: number of independent datasets
+        30,       # minphotons: lower threshold to keep more localizations
+        3,        # ndatasets: 3 datasets for inter testing
         1000,     # nframes: frames per dataset
         50.0,     # framerate: frames per second
         2,        # ndims: 2D
@@ -19,26 +26,26 @@ using Test
     smld_true, smld_model, smld_noisy = simulate(
         params_2d;
         pattern=Nmer2D(n=6, d=0.2),
-        molecule=GenericFluor(; photons=5000.0, k_on=0.001, k_off=50.0),
-        camera=IdealCamera(1:256, 1:256, 0.1)
+        molecule=GenericFluor(; photons=5000.0, k_on=0.02, k_off=50.0),
+        camera=IdealCamera(1:64, 1:64, 0.1)  # 64x64 = 6.4 μm FOV
     )
 
     # make a 3D Nmer dataset
     params_3d = StaticSMLMParams(
-        2.0,      # density (ρ): emitters per μm²
+        10.0,     # density (ρ): emitters per μm²
         0.13,     # σ_psf: PSF width in μm (130nm)
-        50,       # minphotons: minimum photons for detection
-        10,       # ndatasets: number of independent datasets
+        30,       # minphotons
+        3,        # ndatasets
         1000,     # nframes: frames per dataset
         50.0,     # framerate: frames per second
         3,        # ndims: 3D
-        [-1.0, 1.0]  # zrange: z-range for 3D
+        [-0.5, 0.5]  # zrange: ±0.5 μm for 3D
     )
     smld_true3, smld_model3, smld_noisy3 = simulate(
         params_3d;
         pattern=Nmer3D(n=6, d=0.2),
-        molecule=GenericFluor(; photons=5000.0, k_on=0.001, k_off=50.0),
-        camera=IdealCamera(1:256, 1:256, 0.1)
+        molecule=GenericFluor(; photons=5000.0, k_on=0.02, k_off=50.0),
+        camera=IdealCamera(1:64, 1:64, 0.1)
     )
 
     # --- entropy 2D ---
@@ -105,7 +112,10 @@ using Test
 
     # --- Test correctdrift (LegendrePolynomial) ---
     N = length(smld_noisy.emitters)
-    driftmodel = DC.LegendrePolynomial(smld_noisy; degree=2, initialize="random")
+    # Create drift model with inter[1] = 0 (DS1 is reference, no global offset)
+    Random.seed!(123)
+    driftmodel = DC.LegendrePolynomial(smld_noisy; degree=2, initialize="random", rscale=0.1)
+    driftmodel.inter[1].dm .= 0.0  # DS1 has no inter shift (reference)
     smld_drift = DC.applydrift(smld_noisy, driftmodel)
     smld_DC = DC.correctdrift(smld_drift, driftmodel)
 
@@ -139,7 +149,7 @@ using Test
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd 2D (singlepass) = $rmsd\n")
-    @test isapprox(rmsd, 0.0; atol = 5.0)
+    @test isapprox(rmsd, 0.0; atol = 0.050)  # 50 nm tolerance
     @test info.iterations == 1
 
     # --- Test quality=:fft ---
@@ -157,7 +167,7 @@ using Test
         print("rmsd 2D (fft) = $rmsd_fft\n")
         # FFT should at least be in the ballpark (< 15 μm)
         # Note: FFT is less accurate than entropy-based methods
-        @test rmsd_fft < 15.0
+        @test rmsd_fft < 0.500  # 500 nm - FFT is less accurate
     end
 
     # --- Test quality=:iterative ---
@@ -172,7 +182,7 @@ using Test
         rmsd_iter = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                              (smld_DC_y .- smld_noisy_y).^2) ./ N)
         print("rmsd 2D (iterative) = $rmsd_iter\n")
-        @test rmsd_iter < 5.0
+        @test rmsd_iter < 0.050  # 50 nm
     end
 
     # --- Test warm start ---
@@ -200,22 +210,25 @@ using Test
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd 2D (maxn=100) = $rmsd\n")
-    @test isapprox(rmsd, 0.0; atol = 5.0)
+    @test isapprox(rmsd, 0.0; atol = 0.050)  # 50 nm
 
     # --- Test driftcorrect with different degree ---
+    # Note: Using degree=3 on degree=2 drift can overfit, so tolerance is relaxed
     (smld_corrected, info) = DC.driftcorrect(smld_drift; degree=3)
     smld_DC_x = [e.x for e in smld_corrected.emitters]
     smld_DC_y = [e.y for e in smld_corrected.emitters]
     rmsd = sqrt(sum((smld_DC_x .- smld_noisy_x).^2 .+
                     (smld_DC_y .- smld_noisy_y).^2) ./ N)
     print("rmsd 2D (degree=3) = $rmsd\n")
-    @test isapprox(rmsd, 0.0; atol = 5.0)
+    @test rmsd < 1.0  # 1 μm - higher degree can overfit
 
     # ========== 3D ==========
 
     # --- Test correctdrift (LegendrePolynomial) ---
     N = length(smld_noisy3.emitters)
-    driftmodel3 = DC.LegendrePolynomial(smld_noisy3; degree=2, initialize="random")
+    Random.seed!(124)
+    driftmodel3 = DC.LegendrePolynomial(smld_noisy3; degree=2, initialize="random", rscale=0.1)
+    driftmodel3.inter[1].dm .= 0.0  # DS1 has no inter shift (reference)
     smld_drift3 = DC.applydrift(smld_noisy3, driftmodel3)
     smld_DC = DC.correctdrift(smld_drift3, driftmodel3)
 
@@ -241,7 +254,7 @@ using Test
                     (smld_DC_y .- smld_noisy3_y).^2 .+
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
     print("rmsd 3D (default) = $rmsd\n")
-    @test isapprox(rmsd, 0.0; atol = 10.0)
+    @test isapprox(rmsd, 0.0; atol = 0.100)  # 100 nm for 3D
 
     # --- Test driftcorrect with verbose ---
     (smld_corrected, info) = DC.driftcorrect(smld_drift3; maxn=100, verbose=1)
@@ -252,7 +265,7 @@ using Test
                     (smld_DC_y .- smld_noisy3_y).^2 .+
                     (smld_DC_z .- smld_noisy3_z).^2) ./ N)
     print("rmsd 3D (maxn=100) = $rmsd\n")
-    @test isapprox(rmsd, 0.0; atol = 10.0)
+    @test isapprox(rmsd, 0.0; atol = 0.100)  # 100 nm for 3D
 
     # --- Test 3D quality tiers ---
     @testset "3D quality tiers" begin
