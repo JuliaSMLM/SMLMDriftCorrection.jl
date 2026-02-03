@@ -444,12 +444,14 @@ function findshift(smld1::T, smld2::T;
 
     # Refine peak location with subpixel Gaussian fitting
     # This fits a 2D Gaussian (via quadratic in log-space) to improve accuracy
+    # FourierTools.ccorr(A, B) peaks at -δ when B is shifted by +δ relative to A.
+    # So to get the true shift of B relative to A, we compute: center - peak
     if n_dims == 2
         peak_i, peak_j = gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
-        shift = float([peak_i - mid1, peak_j - mid2])
+        shift = float([mid1 - peak_i, mid2 - peak_j])
     elseif n_dims == 3
         peak_i, peak_j, peak_k = gaussian_subpixel_3d(cc, peak_idx; halfwidth=2)
-        shift = float([peak_i - mid1, peak_j - mid2, peak_k - mid3])
+        shift = float([mid1 - peak_i, mid2 - peak_j, mid3 - peak_k])
     end
     # Convert the shift to an (x, y {, z}) coordinate.
     shift = histbinsize .* shift
@@ -551,14 +553,15 @@ function findshift_damped(smld1::T, smld2::T;
     end
 
     # Find maximum of damped cross-correlation with subpixel refinement
+    # FourierTools.ccorr peaks at -δ when B is shifted by +δ, so shift = center - peak
     peak_idx = argmax(cc)
     if n_dims == 2
         peak_i, peak_j = gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
-        shift = float([peak_i - mid1, peak_j - mid2])
+        shift = float([mid1 - peak_i, mid2 - peak_j])
     else
         mid3 = size(cc, 3) ÷ 2 + 1
         peak_i, peak_j, peak_k = gaussian_subpixel_3d(cc, peak_idx; halfwidth=2)
-        shift = float([peak_i - mid1, peak_j - mid2, peak_k - mid3])
+        shift = float([mid1 - peak_i, mid2 - peak_j, mid3 - peak_k])
     end
     shift = histbinsize .* shift
 

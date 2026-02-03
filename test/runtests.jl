@@ -81,11 +81,13 @@ using Random
     shift_imposed = [-4.3, 2.8]
     smldn = deepcopy(smld_noisy)
     for nn = 1:length(smldn.emitters)
-        smldn.emitters[nn].x -= shift_imposed[1]
-        smldn.emitters[nn].y -= shift_imposed[2]
+        # Apply shift: smldn = smld_noisy + shift_imposed
+        smldn.emitters[nn].x += shift_imposed[1]
+        smldn.emitters[nn].y += shift_imposed[2]
         smldn.emitters[nn].x = max.(0, min.(smldn.emitters[nn].x, 256))
         smldn.emitters[nn].y = max.(0, min.(smldn.emitters[nn].y, 256))
     end
+    # findshift(ref, target) returns the shift of target relative to ref
     smldn_shift = DC.findshift(smld_noisy, smldn; histbinsize=0.10)
     @test isapprox(smldn_shift, shift_imposed, atol = 0.10)
 
@@ -98,13 +100,15 @@ using Random
     shift_imposed3 = [-4.3, 2.8, 0.2]
     smldn3 = deepcopy(smld_noisy3)
     for nn = 1:length(smldn3.emitters)
-        smldn3.emitters[nn].x -= shift_imposed3[1]
-        smldn3.emitters[nn].y -= shift_imposed3[2]
-        smldn3.emitters[nn].z -= shift_imposed3[3]
+        # Apply shift: smldn3 = smld_noisy3 + shift_imposed3
+        smldn3.emitters[nn].x += shift_imposed3[1]
+        smldn3.emitters[nn].y += shift_imposed3[2]
+        smldn3.emitters[nn].z += shift_imposed3[3]
         smldn3.emitters[nn].x = max.(0, min.(smldn3.emitters[nn].x, 256))
         smldn3.emitters[nn].y = max.(0, min.(smldn3.emitters[nn].y, 256))
         smldn3.emitters[nn].z = max.(0, min.(smldn3.emitters[nn].z, 256))
     end
+    # findshift(ref, target) returns the shift of target relative to ref
     smldn_shift3 = DC.findshift(smld_noisy3, smldn3; histbinsize=0.10)
     @test isapprox(smldn_shift3, shift_imposed3, atol = 0.10)
 
