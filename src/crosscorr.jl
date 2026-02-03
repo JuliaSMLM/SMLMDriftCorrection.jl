@@ -131,24 +131,41 @@ function histimage3D(x::AbstractMatrix{T}, y::AbstractMatrix{T},
 end
 
 """
-Compute the cross-correlation between two 2D images.
+Compute the cross-correlation between two 2D images with zero-padding.
+
+Zero-padding to 2x size eliminates cyclic wrap-around artifacts that cause
+false peaks at large shifts.
 """
 function crosscorr2D(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
 ) where {T<:Real}
-    # Compute the cross-correlation.
-    cc = FourierTools.ccorr(im1, im2; centered=true)
-    # Return the cross-correlation.
+    # Zero-pad to 2x size to eliminate cyclic artifacts
+    sz1, sz2 = size(im1)
+    im1_pad = zeros(T, 2*sz1, 2*sz2)
+    im2_pad = zeros(T, 2*sz1, 2*sz2)
+    im1_pad[1:sz1, 1:sz2] .= im1
+    im2_pad[1:sz1, 1:sz2] .= im2
+
+    # Compute the cross-correlation
+    cc = FourierTools.ccorr(im1_pad, im2_pad; centered=true)
     return cc
 end
 
 """
-Compute the cross-correlation between two 3D images.
+Compute the cross-correlation between two 3D images with zero-padding.
+
+Zero-padding to 2x size eliminates cyclic wrap-around artifacts.
 """
 function crosscorr3D(im1::AbstractArray{T}, im2::AbstractArray{T}
 ) where {T<:Real}
-    # Compute the cross-correlation.
-    cc = FourierTools.ccorr(im1, im2, [1, 2, 3]; centered=true)
-    # Return the cross-correlation.
+    # Zero-pad to 2x size to eliminate cyclic artifacts
+    sz1, sz2, sz3 = size(im1)
+    im1_pad = zeros(T, 2*sz1, 2*sz2, 2*sz3)
+    im2_pad = zeros(T, 2*sz1, 2*sz2, 2*sz3)
+    im1_pad[1:sz1, 1:sz2, 1:sz3] .= im1
+    im2_pad[1:sz1, 1:sz2, 1:sz3] .= im2
+
+    # Compute the cross-correlation
+    cc = FourierTools.ccorr(im1_pad, im2_pad, [1, 2, 3]; centered=true)
     return cc
 end
 
@@ -241,30 +258,31 @@ function findshift(smld1::T, smld2::T;
         im2 = histimage3D(smld2_x, smld2_y, smld2_z;
                           ROI=ROI, histbinsize=histbinsize)
     end
-    # Calculate the FFT center zero frequency location index (midpoint)
-    # of the histogram images, which are assumed to have the same size.
-    if mod(size(im1, 1), 2) == 0
-        mid1 = size(im1, 1) / 2 + 1
-    else
-        mid1 = (size(im1, 1) + 1) / 2
-    end
-    if mod(size(im1, 2), 2) == 0
-        mid2 = size(im1, 2) / 2 + 1
-    else
-        mid2 = (size(im1, 2) + 1) / 2
-    end
-    if n_dims == 3
-        if mod(size(im1, 3), 2) == 0
-            mid3 = size(im1, 3) / 2 + 1
-        else
-            mid3 = (size(im1, 3) + 1) / 2
-        end
-    end
-    # Compute the cross-correlation.
+    # Compute the cross-correlation (with zero-padding)
     if n_dims == 2
         cc = crosscorr2D(im1, im2)
     elseif n_dims == 3
         cc = crosscorr3D(im1, im2)
+    end
+
+    # Calculate the center of the (padded) cross-correlation output
+    # This is where shift=0 should appear
+    if mod(size(cc, 1), 2) == 0
+        mid1 = size(cc, 1) / 2 + 1
+    else
+        mid1 = (size(cc, 1) + 1) / 2
+    end
+    if mod(size(cc, 2), 2) == 0
+        mid2 = size(cc, 2) / 2 + 1
+    else
+        mid2 = (size(cc, 2) + 1) / 2
+    end
+    if n_dims == 3
+        if mod(size(cc, 3), 2) == 0
+            mid3 = size(cc, 3) / 2 + 1
+        else
+            mid3 = (size(cc, 3) + 1) / 2
+        end
     end
     # Find the maximum location in the cross-correlation, which will
     # correspond to the shift between the two images.
