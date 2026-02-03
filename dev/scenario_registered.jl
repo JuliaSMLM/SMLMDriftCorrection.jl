@@ -325,8 +325,7 @@ function run_registered_diagnostics(;
         model_recovered = model_recovered,
         df_inter = df_inter,
         df_per_ds = df_per_ds,
-        tier_results = tier_results,
-        stats = stats
+        tier_results = tier_results
     )
 end
 

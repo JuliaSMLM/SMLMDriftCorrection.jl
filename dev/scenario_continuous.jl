@@ -93,30 +93,50 @@ function run_continuous_diagnostics(;
     # =========================================================================
     # 3. Run drift correction (all quality tiers)
     # =========================================================================
-    # Note: For continuous mode, only singlepass makes sense (FFT and iterative
-    # don't handle accumulating drift across dataset boundaries properly)
-    verbose && println("\n[3/6] Running drift correction (singlepass only)...")
+    verbose && println("\n[3/6] Running drift correction (all quality tiers)...")
 
-    (smld_corrected, info) = DC.driftcorrect(smld_drifted;
-        degree = degree,
-        dataset_mode = :continuous,
-        quality = :singlepass
-    )
-    model_recovered = info.model
+    # Run all three quality tiers
+    tier_results = Dict{Symbol, NamedTuple}()
 
-    # Compute RMSD (relative, removing global offset)
-    x_orig = [e.x for e in smld_orig.emitters]
-    y_orig = [e.y for e in smld_orig.emitters]
-    x_corr = [e.x for e in smld_corrected.emitters]
-    y_corr = [e.y for e in smld_corrected.emitters]
-    offset_x = mean(x_corr) - mean(x_orig)
-    offset_y = mean(y_corr) - mean(y_orig)
-    dx = (x_corr .- offset_x) .- x_orig
-    dy = (y_corr .- offset_y) .- y_orig
-    rmsd_relative_nm = sqrt(mean(dx.^2 .+ dy.^2)) * 1000
+    for quality in [:fft, :singlepass, :iterative]
+        verbose && println("\n  Running :$quality...")
+        (smld_result, info) = DC.driftcorrect(smld_drifted;
+            degree = degree,
+            dataset_mode = :continuous,
+            quality = quality,
+            max_iterations = 5
+        )
 
-    verbose && @printf("  RMSD (relative): %.2f nm (iterations=%d, converged=%s)\n",
-                      rmsd_relative_nm, info.iterations, info.converged)
+        # Compute RMSD (relative, removing global offset) for this tier
+        x_orig = [e.x for e in smld_orig.emitters]
+        y_orig = [e.y for e in smld_orig.emitters]
+        x_corr = [e.x for e in smld_result.emitters]
+        y_corr = [e.y for e in smld_result.emitters]
+        offset_x = mean(x_corr) - mean(x_orig)
+        offset_y = mean(y_corr) - mean(y_orig)
+        dx = (x_corr .- offset_x) .- x_orig
+        dy = (y_corr .- offset_y) .- y_orig
+        rmsd_tier = sqrt(mean(dx.^2 .+ dy.^2)) * 1000
+
+        verbose && @printf("    RMSD: %.2f nm (iterations=%d, converged=%s)\n",
+                          rmsd_tier, info.iterations, info.converged)
+
+        tier_results[quality] = (
+            smld = smld_result,
+            info = info,
+            rmsd_nm = rmsd_tier
+        )
+    end
+
+    # Use singlepass as the "main" result for detailed analysis
+    smld_corrected = tier_results[:singlepass].smld
+    model_recovered = tier_results[:singlepass].info.model
+    info = tier_results[:singlepass].info
+
+    verbose && println("\n  === Quality Tier Summary ===")
+    verbose && @printf("    :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)
+    verbose && @printf("    :singlepass RMSD: %.2f nm\n", tier_results[:singlepass].rmsd_nm)
+    verbose && @printf("    :iterative  RMSD: %.2f nm\n", tier_results[:iterative].rmsd_nm)
 
     # Show recovered cumulative drift
     verbose && println("  Recovered cumulative drift at dataset boundaries:")
@@ -203,22 +223,33 @@ function run_continuous_diagnostics(;
     # =========================================================================
     verbose && println("\n[5/6] Generating plots...")
 
-    # Trajectory comparison
-    fig_traj = plot_trajectory_comparison(traj; title_suffix=" (Continuous Mode, :singlepass)")
-    save_figure(fig_traj, SCENARIO, "singlepass_trajectory_comparison.png")
+    # Generate trajectory and render outputs for each quality tier
+    for quality in [:fft, :singlepass, :iterative]
+        tier_smld = tier_results[quality].smld
+        tier_model = tier_results[quality].info.model
+        tier_traj = compare_trajectories(model_true, tier_model)
 
-    # Cumulative trajectory (continuous-specific)
-    fig_traj_cumul = plot_trajectory_cumulative(model_recovered;
-        title="Cumulative Drift Trajectory (Recovered, :singlepass)")
-    save_figure(fig_traj_cumul, SCENARIO, "singlepass_trajectory_cumulative.png")
+        # Trajectory comparison with quality in filename
+        fig_traj = plot_trajectory_comparison(tier_traj;
+            title_suffix=" (Continuous Mode, :$quality)")
+        save_figure(fig_traj, SCENARIO, "$(quality)_trajectory_comparison.png")
 
-    # Compare true vs recovered cumulative
-    fig_cumul_compare = plot_cumulative_comparison(model_true, model_recovered)
-    save_figure(fig_cumul_compare, SCENARIO, "singlepass_trajectory_cumulative_comparison.png")
+        # Cumulative trajectory (continuous-specific)
+        fig_traj_cumul = plot_trajectory_cumulative(tier_model;
+            title="Cumulative Drift Trajectory (Recovered, :$quality)")
+        save_figure(fig_traj_cumul, SCENARIO, "$(quality)_trajectory_cumulative.png")
 
-    # Render suite (histogram, circles, gaussian with absolute_frame coloring)
-    save_render_suite(smld_drifted, smld_corrected, SCENARIO; prefix="singlepass_")
+        # Compare true vs recovered cumulative
+        fig_cumul_compare = plot_cumulative_comparison(model_true, tier_model)
+        save_figure(fig_cumul_compare, SCENARIO, "$(quality)_trajectory_cumulative_comparison.png")
 
+        # Render suite with quality prefix
+        save_render_suite(smld_drifted, tier_smld, SCENARIO; prefix="$(quality)_")
+
+        verbose && println("  Saved plots for :$quality")
+    end
+
+    # Detailed metrics plots (using singlepass as main result)
     # Residual histogram
     fig_hist = plot_residuals(residuals)
     save_figure(fig_hist, SCENARIO, "singlepass_residual_histogram.png")
@@ -231,7 +262,7 @@ function run_continuous_diagnostics(;
     fig_rmsd = plot_rmsd_vs_frame(per_frame)
     save_figure(fig_rmsd, SCENARIO, "singlepass_rmsd_vs_frame.png")
 
-    # Boundary analysis (continuous-specific)
+    # Boundary analysis (continuous-specific, using singlepass)
     fig_boundary = plot_boundary_analysis(model_true, model_recovered)
     save_figure(fig_boundary, SCENARIO, "singlepass_boundary_analysis.png")
 
@@ -273,23 +304,21 @@ function run_continuous_diagnostics(;
 
     save_stats_md(stats, SCENARIO; filename="stats_singlepass.md")
 
-    # Save stats_all.md (only singlepass for continuous mode)
+    # Save stats_all.md (all quality tiers)
     dir = ensure_output_dir(SCENARIO; clean=false)
     open(joinpath(dir, "stats_all.md"), "w") do io
         println(io, "# Quality Tier Comparison: CONTINUOUS")
         println(io)
-        println(io, "## Applicable Methods")
+        println(io, "## RMSD Comparison")
         println(io)
-        println(io, "For continuous mode (drift accumulates across datasets), only **singlepass** is applicable:")
-        println(io, "- **FFT**: Does not handle accumulating drift across dataset boundaries")
-        println(io, "- **iterative**: Inter↔intra convergence assumes independent dataset offsets, not cumulative drift")
-        println(io)
-        println(io, "## Results")
-        println(io)
-        println(io, "| Quality Tier | RMSD (nm) | RMSD Relative (nm) | Iterations | Converged |")
-        println(io, "|--------------|-----------|-------------------|------------|-----------|")
-        @printf(io, "| **singlepass** | %.2f | %.2f | %d | %s |\n",
-                rmsd_nm, rmsd_relative_nm, info.iterations, info.converged)
+        println(io, "| Quality Tier | RMSD (nm) | Iterations | Converged |")
+        println(io, "|--------------|-----------|------------|-----------|")
+        @printf(io, "| **fft** | %.2f | %d | %s |\n",
+                tier_results[:fft].rmsd_nm, tier_results[:fft].info.iterations, tier_results[:fft].info.converged)
+        @printf(io, "| **singlepass** | %.2f | %d | %s |\n",
+                tier_results[:singlepass].rmsd_nm, tier_results[:singlepass].info.iterations, tier_results[:singlepass].info.converged)
+        @printf(io, "| **iterative** | %.2f | %d | %s |\n",
+                tier_results[:iterative].rmsd_nm, tier_results[:iterative].info.iterations, tier_results[:iterative].info.converged)
         println(io)
         println(io, "## Parameters")
         println(io)
@@ -301,12 +330,20 @@ function run_continuous_diagnostics(;
         println(io, "- Drift scale: $drift_scale μm")
         println(io, "- Total drift: $(round(total_drift, digits=4)) μm")
         println(io, "- Seed: $seed")
+        println(io)
+        println(io, "## Notes")
+        println(io)
+        println(io, "For continuous mode, FFT only aligns inter-dataset shifts without intra correction,")
+        println(io, "and doesn't account for cumulative drift across boundaries.")
     end
     verbose && println("  Saved: stats_all.md")
 
     verbose && println("\n" * "=" ^ 60)
     verbose && println("CONTINUOUS MODE DIAGNOSTICS COMPLETE")
-    verbose && @printf("  RMSD (relative): %.2f nm\n", rmsd_relative_nm)
+    verbose && println("Quality Tier Results:")
+    verbose && @printf("  :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)
+    verbose && @printf("  :singlepass RMSD: %.2f nm\n", tier_results[:singlepass].rmsd_nm)
+    verbose && @printf("  :iterative  RMSD: %.2f nm\n", tier_results[:iterative].rmsd_nm)
     verbose && println("=" ^ 60)
 
     return (
@@ -317,7 +354,8 @@ function run_continuous_diagnostics(;
         model_recovered = model_recovered,
         boundary_errors = boundary_errors,
         df_per_chunk = df_per_chunk,
-        stats = stats
+        stats = stats,
+        tier_results = tier_results
     )
 end
 
