@@ -289,12 +289,12 @@ function findshift(smld1::T, smld2::T;
     peak = argmax(cc)
     # Since the FFT has been centered, the shift is relative to the
     # center of the transformed histogram images.
-    # NOTE: Cross-correlation ccorr(A, B) peaks at -δ when B is shifted by +δ
-    # relative to A. We want the shift of B relative to A, so we negate.
+    # FourierTools.ccorr(A, B; centered=true) peaks at +δ when B is shifted by +δ
+    # relative to A, so shift = peak - center.
     if n_dims == 2
-        shift = float([mid1 - peak[1], mid2 - peak[2]])  # negated: center - peak
+        shift = float([peak[1] - mid1, peak[2] - mid2])
     elseif n_dims == 3
-        shift = float([mid1 - peak[1], mid2 - peak[2], mid3 - peak[3]])
+        shift = float([peak[1] - mid1, peak[2] - mid2, peak[3] - mid3])
     end
     # Convert the shift to an (x, y {, z}) coordinate.
     shift = histbinsize .* shift
@@ -396,13 +396,13 @@ function findshift_damped(smld1::T, smld2::T;
     end
 
     # Find maximum of damped cross-correlation
-    # NOTE: Cross-correlation peaks at -δ when B is shifted by +δ, so we negate
+    # FourierTools.ccorr peaks at +δ when B is shifted by +δ, so shift = peak - center
     peak = argmax(cc)
     if n_dims == 2
-        shift = float([mid1 - peak[1], mid2 - peak[2]])  # negated: center - peak
+        shift = float([peak[1] - mid1, peak[2] - mid2])
     else
         mid3 = size(cc, 3) ÷ 2 + 1
-        shift = float([mid1 - peak[1], mid2 - peak[2], mid3 - peak[3]])
+        shift = float([peak[1] - mid1, peak[2] - mid2, peak[3] - mid3])
     end
     shift = histbinsize .* shift
 
