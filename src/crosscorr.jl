@@ -1,5 +1,159 @@
 using FourierTools
 using SMLMData
+using LinearAlgebra
+
+"""
+    gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
+
+Refine peak location using 2D Gaussian fit via quadratic surface fitting.
+Fits a 2D quadratic to log(intensity) around the peak, which is equivalent
+to fitting a 2D Gaussian. Returns subpixel (row, col) coordinates.
+
+Falls back to integer peak if fit fails or window is too small.
+"""
+function gaussian_subpixel_2d(cc::AbstractMatrix, peak_idx::CartesianIndex; halfwidth::Int=3)
+    pi, pj = peak_idx[1], peak_idx[2]
+    nr, nc = size(cc)
+
+    # Check bounds - need at least 1 pixel margin for fitting
+    if pi <= halfwidth || pi > nr - halfwidth || pj <= halfwidth || pj > nc - halfwidth
+        return float(pi), float(pj)
+    end
+
+    # Extract window around peak
+    i_range = (pi - halfwidth):(pi + halfwidth)
+    j_range = (pj - halfwidth):(pj + halfwidth)
+    window = cc[i_range, j_range]
+
+    # Shift to ensure positive values for log
+    min_val = minimum(window)
+    window_shifted = window .- min_val .+ 1.0
+
+    # Take log for Gaussian -> quadratic transformation
+    log_window = log.(window_shifted)
+
+    # Build design matrix for 2D quadratic: z = a + b*x + c*y + d*x^2 + e*y^2 + f*x*y
+    # where x, y are relative to center of window
+    n = 2 * halfwidth + 1
+    npts = n * n
+    A = zeros(npts, 6)
+    z = zeros(npts)
+
+    idx = 1
+    for di in -halfwidth:halfwidth
+        for dj in -halfwidth:halfwidth
+            A[idx, 1] = 1.0
+            A[idx, 2] = di
+            A[idx, 3] = dj
+            A[idx, 4] = di^2
+            A[idx, 5] = dj^2
+            A[idx, 6] = di * dj
+            z[idx] = log_window[di + halfwidth + 1, dj + halfwidth + 1]
+            idx += 1
+        end
+    end
+
+    # Solve least squares: A * coeffs = z
+    coeffs = try
+        A \ z
+    catch
+        return float(pi), float(pj)
+    end
+
+    # Check for NaN in coefficients
+    if any(isnan, coeffs) || any(isinf, coeffs)
+        return float(pi), float(pj)
+    end
+
+    # coeffs = [a, b, c, d, e, f]
+    # For quadratic z = a + b*x + c*y + d*x^2 + e*y^2 + f*x*y
+    # Maximum is at: dz/dx = b + 2*d*x + f*y = 0
+    #                dz/dy = c + 2*e*y + f*x = 0
+    # Solving: [2d  f ] [x]   [-b]
+    #          [f   2e] [y] = [-c]
+
+    d, e, f = coeffs[4], coeffs[5], coeffs[6]
+    b, c = coeffs[2], coeffs[3]
+
+    # Check that we have a maximum (d < 0 and e < 0 for concave down)
+    if d >= 0 || e >= 0
+        return float(pi), float(pj)
+    end
+
+    # Solve 2x2 system
+    det = 4 * d * e - f^2
+    if abs(det) < 1e-10
+        return float(pi), float(pj)
+    end
+
+    x_offset = (f * c - 2 * e * b) / det
+    y_offset = (f * b - 2 * d * c) / det
+
+    # Sanity check: offset should be within halfwidth and not NaN
+    if isnan(x_offset) || isnan(y_offset) || abs(x_offset) > halfwidth || abs(y_offset) > halfwidth
+        return float(pi), float(pj)
+    end
+
+    return float(pi) + x_offset, float(pj) + y_offset
+end
+
+"""
+    gaussian_subpixel_3d(cc, peak_idx; halfwidth=3)
+
+Refine peak location using 3D Gaussian fit via quadratic surface fitting.
+Returns subpixel (i, j, k) coordinates.
+"""
+function gaussian_subpixel_3d(cc::AbstractArray{T,3}, peak_idx::CartesianIndex; halfwidth::Int=2) where T
+    pi, pj, pk = peak_idx[1], peak_idx[2], peak_idx[3]
+    ni, nj, nk = size(cc)
+
+    # Check bounds
+    if pi <= halfwidth || pi > ni - halfwidth ||
+       pj <= halfwidth || pj > nj - halfwidth ||
+       pk <= halfwidth || pk > nk - halfwidth
+        return float(pi), float(pj), float(pk)
+    end
+
+    # For 3D, use simpler center-of-mass approach with Gaussian weighting
+    # (full 3D quadratic fit has 10 parameters and can be unstable)
+    i_range = (pi - halfwidth):(pi + halfwidth)
+    j_range = (pj - halfwidth):(pj + halfwidth)
+    k_range = (pk - halfwidth):(pk + halfwidth)
+    window = cc[i_range, j_range, k_range]
+
+    # Subtract background and threshold
+    bg = minimum(window)
+    window_bg = max.(window .- bg, 0.0)
+    total = sum(window_bg)
+
+    if total < 1e-10
+        return float(pi), float(pj), float(pk)
+    end
+
+    # Compute center of mass
+    ci, cj, ck = 0.0, 0.0, 0.0
+    for di in -halfwidth:halfwidth
+        for dj in -halfwidth:halfwidth
+            for dk in -halfwidth:halfwidth
+                w = window_bg[di + halfwidth + 1, dj + halfwidth + 1, dk + halfwidth + 1]
+                ci += di * w
+                cj += dj * w
+                ck += dk * w
+            end
+        end
+    end
+
+    ci /= total
+    cj /= total
+    ck /= total
+
+    # Sanity check
+    if abs(ci) > halfwidth || abs(cj) > halfwidth || abs(ck) > halfwidth
+        return float(pi), float(pj), float(pk)
+    end
+
+    return float(pi) + ci, float(pj) + cj, float(pk) + ck
+end
 
 """
 Produce a histogram image from the localization coordinates x and y.
@@ -286,15 +440,16 @@ function findshift(smld1::T, smld2::T;
     end
     # Find the maximum location in the cross-correlation, which will
     # correspond to the shift between the two images.
-    peak = argmax(cc)
-    # Since the FFT has been centered, the shift is relative to the
-    # center of the transformed histogram images.
-    # FourierTools.ccorr(A, B; centered=true) peaks at +δ when B is shifted by +δ
-    # relative to A, so shift = peak - center.
+    peak_idx = argmax(cc)
+
+    # Refine peak location with subpixel Gaussian fitting
+    # This fits a 2D Gaussian (via quadratic in log-space) to improve accuracy
     if n_dims == 2
-        shift = float([peak[1] - mid1, peak[2] - mid2])
+        peak_i, peak_j = gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
+        shift = float([peak_i - mid1, peak_j - mid2])
     elseif n_dims == 3
-        shift = float([peak[1] - mid1, peak[2] - mid2, peak[3] - mid3])
+        peak_i, peak_j, peak_k = gaussian_subpixel_3d(cc, peak_idx; halfwidth=2)
+        shift = float([peak_i - mid1, peak_j - mid2, peak_k - mid3])
     end
     # Convert the shift to an (x, y {, z}) coordinate.
     shift = histbinsize .* shift
@@ -395,14 +550,15 @@ function findshift_damped(smld1::T, smld2::T;
         end
     end
 
-    # Find maximum of damped cross-correlation
-    # FourierTools.ccorr peaks at +δ when B is shifted by +δ, so shift = peak - center
-    peak = argmax(cc)
+    # Find maximum of damped cross-correlation with subpixel refinement
+    peak_idx = argmax(cc)
     if n_dims == 2
-        shift = float([peak[1] - mid1, peak[2] - mid2])
+        peak_i, peak_j = gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
+        shift = float([peak_i - mid1, peak_j - mid2])
     else
         mid3 = size(cc, 3) ÷ 2 + 1
-        shift = float([peak[1] - mid1, peak[2] - mid2, peak[3] - mid3])
+        peak_i, peak_j, peak_k = gaussian_subpixel_3d(cc, peak_idx; halfwidth=2)
+        shift = float([peak_i - mid1, peak_j - mid2, peak_k - mid3])
     end
     shift = histbinsize .* shift
 
