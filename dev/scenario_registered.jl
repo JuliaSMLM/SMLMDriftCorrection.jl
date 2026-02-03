@@ -99,7 +99,7 @@ function run_registered_diagnostics(;
 
     for quality in [:fft, :singlepass, :iterative]
         verbose && println("\n  Running :$quality...")
-        (smld_corr, info) = DC.driftcorrect(smld_drifted;
+        (smld_result, info) = DC.driftcorrect(smld_drifted;
             degree = degree,
             dataset_mode = :registered,
             quality = quality,
@@ -107,12 +107,12 @@ function run_registered_diagnostics(;
         )
 
         # Compute RMSD for this tier
-        rmsd_tier = compute_rmsd(smld_orig, smld_corr)
+        rmsd_tier = compute_rmsd(smld_orig, smld_result)
         verbose && @printf("    RMSD: %.2f nm (iterations=%d, converged=%s)\n",
                           rmsd_tier, info.iterations, info.converged)
 
         tier_results[quality] = (
-            smld = smld_corr,
+            smld = smld_result,
             info = info,
             rmsd_nm = rmsd_tier
         )
@@ -196,32 +196,44 @@ function run_registered_diagnostics(;
     end
 
     # =========================================================================
-    # 5. Generate plots
+    # 5. Generate plots (for each quality tier)
     # =========================================================================
     verbose && println("\n[5/6] Generating plots...")
 
-    # Trajectory comparison
-    fig_traj = plot_trajectory_comparison(traj; title_suffix=" (Registered Mode)")
-    save_figure(fig_traj, SCENARIO, "trajectory_comparison.png")
+    # Generate trajectory and render outputs for each quality tier
+    for quality in [:fft, :singlepass, :iterative]
+        tier_smld = tier_results[quality].smld
+        tier_model = tier_results[quality].info.model
+        tier_traj = compare_trajectories(model_true, tier_model)
 
-    # Render suite with dataset colors (histogram, circles, gaussian + dataset overlays)
-    save_render_suite(smld_drifted, smld_corrected, SCENARIO; include_dataset_colors=true)
+        # Trajectory comparison with quality in filename
+        fig_traj = plot_trajectory_comparison(tier_traj;
+            title_suffix=" (Registered Mode, :$quality)")
+        save_figure(fig_traj, SCENARIO, "trajectory_comparison_$(quality).png")
 
+        # Render suite with quality prefix
+        save_render_suite(smld_drifted, tier_smld, SCENARIO;
+            include_dataset_colors=true, prefix="$(quality)_")
+
+        verbose && println("  Saved plots for :$quality")
+    end
+
+    # Detailed metrics plots (using singlepass as main result)
     # Residual histogram
     fig_hist = plot_residuals(residuals)
-    save_figure(fig_hist, SCENARIO, "residual_histogram.png")
+    save_figure(fig_hist, SCENARIO, "residual_histogram_singlepass.png")
 
     # Residual scatter
     fig_scatter = plot_residual_scatter(residuals)
-    save_figure(fig_scatter, SCENARIO, "residual_scatter.png")
+    save_figure(fig_scatter, SCENARIO, "residual_scatter_singlepass.png")
 
     # RMSD vs frame
     fig_rmsd = plot_rmsd_vs_frame(per_frame)
-    save_figure(fig_rmsd, SCENARIO, "rmsd_vs_frame.png")
+    save_figure(fig_rmsd, SCENARIO, "rmsd_vs_frame_singlepass.png")
 
     # Inter-shift comparison (registered-specific)
     fig_inter = plot_inter_shift_comparison(df_inter)
-    save_figure(fig_inter, SCENARIO, "inter_shift_comparison.png")
+    save_figure(fig_inter, SCENARIO, "inter_shift_comparison_singlepass.png")
 
     # Per-dataset table (combined intra and inter errors)
     df_per_ds = DataFrame(
@@ -233,34 +245,55 @@ function run_registered_diagnostics(;
     )
 
     # =========================================================================
-    # 6. Save statistics
+    # 6. Save statistics (per quality tier)
     # =========================================================================
     verbose && println("\n[6/6] Saving statistics...")
 
+    # Save stats for each quality tier
+    for quality in [:fft, :singlepass, :iterative]
+        tier_smld = tier_results[quality].smld
+        tier_info = tier_results[quality].info
+
+        # Compute tier-specific metrics
+        tier_rmsd = compute_rmsd(smld_orig, tier_smld)
+        tier_residuals = compute_position_residuals(smld_orig, tier_smld)
+        tier_entropy = compute_entropy_metrics(tier_smld)
+
+        tier_stats = Dict(
+            "quality_tier" => string(quality),
+            "rmsd_nm" => tier_rmsd,
+            "mean_error_nm" => mean(tier_residuals.total_nm),
+            "max_error_nm" => maximum(tier_residuals.total_nm),
+            "entropy_before" => entropy_before.ub_entropy,
+            "entropy_after" => tier_entropy.ub_entropy,
+            "entropy_reduction_pct" => (entropy_before.ub_entropy - tier_entropy.ub_entropy) / entropy_before.ub_entropy * 100,
+            "iterations" => tier_info.iterations,
+            "converged" => tier_info.converged,
+            "n_emitters" => length(smld_orig.emitters),
+            "n_datasets" => n_datasets,
+            "n_frames" => n_frames,
+            "degree" => degree,
+            "drift_scale_um" => drift_scale,
+            "inter_scale_um" => inter_scale,
+            "seed" => seed,
+        )
+
+        save_stats_md(tier_stats, SCENARIO; filename="stats_$(quality).md")
+        verbose && println("  Saved: stats_$(quality).md")
+    end
+
+    # Also save combined summary (for backward compatibility)
     stats = Dict(
-        "rmsd_nm" => rmsd_nm,
         "rmsd_fft_nm" => tier_results[:fft].rmsd_nm,
         "rmsd_singlepass_nm" => tier_results[:singlepass].rmsd_nm,
         "rmsd_iterative_nm" => tier_results[:iterative].rmsd_nm,
-        "mean_error_nm" => mean_error,
-        "max_error_nm" => max_error,
-        "entropy_before" => entropy_before.ub_entropy,
-        "entropy_after" => entropy_after.ub_entropy,
-        "entropy_reduction_pct" => entropy_reduction,
         "n_emitters" => length(smld_orig.emitters),
         "n_datasets" => n_datasets,
         "n_frames" => n_frames,
         "degree" => degree,
-        "drift_scale_um" => drift_scale,
-        "inter_scale_um" => inter_scale,
-        "mean_inter_error_nm" => mean(df_inter.error_total_nm),
-        "max_inter_error_nm" => maximum(df_inter.error_total_nm),
-        "mean_intra_error_nm" => mean(df_intra.mean_intra_error_nm),
-        "max_intra_error_nm" => maximum(df_intra.max_intra_error_nm),
         "seed" => seed,
     )
-
-    save_stats_md(stats, SCENARIO)
+    save_stats_md(stats, SCENARIO; filename="stats_summary.md")
 
     verbose && println("\n" * "=" ^ 60)
     verbose && println("REGISTERED MODE DIAGNOSTICS COMPLETE")
@@ -300,9 +333,9 @@ function create_dataset_overlay(smld, n_datasets::Int; zoom::Int=20)
     colors = [:red, :green, :blue, :orange, :purple, :cyan, :magenta, :yellow]
 
     # Render overlay
-    img = render(smld_list,
-                 colors = colors[1:min(n_datasets, length(colors))],
-                 zoom = zoom)
+    img, _ = render(smld_list,
+                    colors = colors[1:min(n_datasets, length(colors))],
+                    zoom = zoom)
 
     fig = Figure(size=(800, 800))
     ax = Axis(fig[1, 1], aspect=DataAspect(),

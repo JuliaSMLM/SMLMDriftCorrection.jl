@@ -68,9 +68,8 @@ function run_single_diagnostics(;
     # =========================================================================
     verbose && println("\n[3/6] Running drift correction...")
 
-    (; smld, model) = DC.driftcorrect(smld_drifted; degree=degree)
-    smld_corrected = smld
-    model_recovered = model
+    (smld_corrected, info) = DC.driftcorrect(smld_drifted; degree=degree)
+    model_recovered = info.model
 
     verbose && println("  Correction complete")
 

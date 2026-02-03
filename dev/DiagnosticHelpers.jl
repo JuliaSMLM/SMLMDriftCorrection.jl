@@ -376,8 +376,9 @@ function plot_drift_comparison(traj; title::String="Drift Comparison: Ground Tru
         ylabel = "X drift (μm)",
         title = "X Drift vs Frame")
 
-    lines!(ax1, traj.frames, traj.true_x, color=:blue, linewidth=2, label="Ground Truth")
-    lines!(ax1, traj.frames, traj.recovered_x, color=:red, linewidth=2, linestyle=:dash, label="Recovered")
+    # Plot true first (thin), recovered second (thick) so recovered visible on top
+    lines!(ax1, traj.frames, traj.true_x, color=:blue, linewidth=1.5, label="Ground Truth")
+    lines!(ax1, traj.frames, traj.recovered_x, color=:red, linewidth=3, linestyle=:dash, label="Recovered")
     axislegend(ax1, position=:lt)
 
     # Panel 2: Y vs Frame
@@ -386,8 +387,8 @@ function plot_drift_comparison(traj; title::String="Drift Comparison: Ground Tru
         ylabel = "Y drift (μm)",
         title = "Y Drift vs Frame")
 
-    lines!(ax2, traj.frames, traj.true_y, color=:blue, linewidth=2, label="Ground Truth")
-    lines!(ax2, traj.frames, traj.recovered_y, color=:red, linewidth=2, linestyle=:dash, label="Recovered")
+    lines!(ax2, traj.frames, traj.true_y, color=:blue, linewidth=1.5, label="Ground Truth")
+    lines!(ax2, traj.frames, traj.recovered_y, color=:red, linewidth=3, linestyle=:dash, label="Recovered")
     axislegend(ax2, position=:lt)
 
     # Panel 3: X vs Y (2D trajectory)
@@ -397,8 +398,8 @@ function plot_drift_comparison(traj; title::String="Drift Comparison: Ground Tru
         title = "Drift Trajectory (X vs Y)",
         aspect = DataAspect())
 
-    lines!(ax3, traj.true_x, traj.true_y, color=:blue, linewidth=2, label="Ground Truth")
-    lines!(ax3, traj.recovered_x, traj.recovered_y, color=:red, linewidth=2, linestyle=:dash, label="Recovered")
+    lines!(ax3, traj.true_x, traj.true_y, color=:blue, linewidth=1.5, label="Ground Truth")
+    lines!(ax3, traj.recovered_x, traj.recovered_y, color=:red, linewidth=3, linestyle=:dash, label="Recovered")
 
     # Mark start/end points
     scatter!(ax3, [traj.true_x[1]], [traj.true_y[1]], color=:blue, markersize=12, marker=:circle, label="Start (GT)")
@@ -435,15 +436,22 @@ function plot_trajectory_comparison(traj; title_suffix::String="")
     datasets = unique(traj.dataset)
     colors = Makie.wong_colors()
 
+    # Plot true first (thinner), then recovered second (thicker) so recovered is visible on top
     for (i, ds) in enumerate(datasets)
         mask = traj.dataset .== ds
         c = colors[mod1(i, length(colors))]
 
-        lines!(ax1, traj.frames[mask], traj.true_x[mask], color=c, linestyle=:solid, linewidth=2, label= i==1 ? "True" : "")
-        lines!(ax1, traj.frames[mask], traj.recovered_x[mask], color=c, linestyle=:dash, linewidth=2, label= i==1 ? "Recovered" : "")
+        # True: thin solid line
+        lines!(ax1, traj.frames[mask], traj.true_x[mask], color=c, linestyle=:solid, linewidth=1.5, label= i==1 ? "True" : "")
+        lines!(ax2, traj.frames[mask], traj.true_y[mask], color=c, linestyle=:solid, linewidth=1.5)
+    end
+    for (i, ds) in enumerate(datasets)
+        mask = traj.dataset .== ds
+        c = colors[mod1(i, length(colors))]
 
-        lines!(ax2, traj.frames[mask], traj.true_y[mask], color=c, linestyle=:solid, linewidth=2)
-        lines!(ax2, traj.frames[mask], traj.recovered_y[mask], color=c, linestyle=:dash, linewidth=2)
+        # Recovered: thick dashed line (plotted second so visible on top)
+        lines!(ax1, traj.frames[mask], traj.recovered_x[mask], color=c, linestyle=:dash, linewidth=3, label= i==1 ? "Recovered" : "")
+        lines!(ax2, traj.frames[mask], traj.recovered_y[mask], color=c, linestyle=:dash, linewidth=3)
     end
 
     axislegend(ax1, position=:lt)
@@ -466,9 +474,9 @@ function plot_render_comparison(smld_orig, smld_drifted, smld_corrected;
         render_kwargs = (render_kwargs..., roi=roi)
     end
 
-    result_orig = render(smld_orig; render_kwargs...)
-    result_drifted = render(smld_drifted; render_kwargs...)
-    result_corrected = render(smld_corrected; render_kwargs...)
+    img_orig, _ = render(smld_orig; render_kwargs...)
+    img_drifted, _ = render(smld_drifted; render_kwargs...)
+    img_corrected, _ = render(smld_corrected; render_kwargs...)
 
     # Create figure
     fig = Figure(size=(1800, 600))
@@ -477,9 +485,9 @@ function plot_render_comparison(smld_orig, smld_drifted, smld_corrected;
     ax2 = Axis(fig[1, 2], aspect=DataAspect(), title="Drifted")
     ax3 = Axis(fig[1, 3], aspect=DataAspect(), title="Corrected")
 
-    image!(ax1, rotr90(result_orig.image))
-    image!(ax2, rotr90(result_drifted.image))
-    image!(ax3, rotr90(result_corrected.image))
+    image!(ax1, rotr90(img_orig))
+    image!(ax2, rotr90(img_drifted))
+    image!(ax3, rotr90(img_corrected))
 
     hidedecorations!(ax1)
     hidedecorations!(ax2)
@@ -500,7 +508,7 @@ If `include_dataset_colors=true` (for multi-dataset scenarios), also saves:
 - Histogram and circles colored by dataset (to visualize alignment)
 """
 function save_render_suite(smld_drifted, smld_corrected, scenario::Symbol;
-                           roi=nothing, include_dataset_colors::Bool=false)
+                           roi=nothing, include_dataset_colors::Bool=false, prefix::String="")
     dir = ensure_output_dir(scenario; clean=false)
 
     # Common ROI kwargs
@@ -509,57 +517,67 @@ function save_render_suite(smld_drifted, smld_corrected, scenario::Symbol;
     # 1. Histogram at 10x, color by absolute_frame (time across datasets)
     result = render(smld_drifted; strategy=HistogramRender(), zoom=10,
                     color_by=:absolute_frame, colormap=:turbo, roi_kwargs...)
-    save_image(joinpath(dir, "render_drifted_histogram_10x.png"), result[1])
-    println("  Saved: render_drifted_histogram_10x.png")
+    fname = "$(prefix)render_drifted_histogram_10x.png"
+    save_image(joinpath(dir, fname), result[1])
+    println("  Saved: $fname")
 
     result = render(smld_corrected; strategy=HistogramRender(), zoom=10,
                     color_by=:absolute_frame, colormap=:turbo, roi_kwargs...)
-    save_image(joinpath(dir, "render_corrected_histogram_10x.png"), result[1])
-    println("  Saved: render_corrected_histogram_10x.png")
+    fname = "$(prefix)render_corrected_histogram_10x.png"
+    save_image(joinpath(dir, fname), result[1])
+    println("  Saved: $fname")
 
     # 2. Circles at 50x, color by absolute_frame (time)
     result = render(smld_drifted; strategy=CircleRender(), zoom=50,
                     color_by=:absolute_frame, colormap=:turbo, roi_kwargs...)
-    save_image(joinpath(dir, "render_drifted_circles_50x.png"), result[1])
-    println("  Saved: render_drifted_circles_50x.png")
+    fname = "$(prefix)render_drifted_circles_50x.png"
+    save_image(joinpath(dir, fname), result[1])
+    println("  Saved: $fname")
 
     result = render(smld_corrected; strategy=CircleRender(), zoom=50,
                     color_by=:absolute_frame, colormap=:turbo, roi_kwargs...)
-    save_image(joinpath(dir, "render_corrected_circles_50x.png"), result[1])
-    println("  Saved: render_corrected_circles_50x.png")
+    fname = "$(prefix)render_corrected_circles_50x.png"
+    save_image(joinpath(dir, fname), result[1])
+    println("  Saved: $fname")
 
     # 3. Gaussian at 20x, intensity colormap
     result = render(smld_drifted; strategy=GaussianRender(), zoom=20,
                     colormap=:inferno, roi_kwargs...)
-    save_image(joinpath(dir, "render_drifted_gaussian_20x.png"), result[1])
-    println("  Saved: render_drifted_gaussian_20x.png")
+    fname = "$(prefix)render_drifted_gaussian_20x.png"
+    save_image(joinpath(dir, fname), result[1])
+    println("  Saved: $fname")
 
     result = render(smld_corrected; strategy=GaussianRender(), zoom=20,
                     colormap=:inferno, roi_kwargs...)
-    save_image(joinpath(dir, "render_corrected_gaussian_20x.png"), result[1])
-    println("  Saved: render_corrected_gaussian_20x.png")
+    fname = "$(prefix)render_corrected_gaussian_20x.png"
+    save_image(joinpath(dir, fname), result[1])
+    println("  Saved: $fname")
 
     # 4. Dataset-colored renders (for multi-dataset scenarios)
     if include_dataset_colors
         result = render(smld_drifted; strategy=HistogramRender(), zoom=10,
                         color_by=:dataset, colormap=:tab10, roi_kwargs...)
-        save_image(joinpath(dir, "render_drifted_histogram_dataset.png"), result[1])
-        println("  Saved: render_drifted_histogram_dataset.png")
+        fname = "$(prefix)render_drifted_histogram_dataset.png"
+        save_image(joinpath(dir, fname), result[1])
+        println("  Saved: $fname")
 
         result = render(smld_corrected; strategy=HistogramRender(), zoom=10,
                         color_by=:dataset, colormap=:tab10, roi_kwargs...)
-        save_image(joinpath(dir, "render_corrected_histogram_dataset.png"), result[1])
-        println("  Saved: render_corrected_histogram_dataset.png")
+        fname = "$(prefix)render_corrected_histogram_dataset.png"
+        save_image(joinpath(dir, fname), result[1])
+        println("  Saved: $fname")
 
         result = render(smld_drifted; strategy=CircleRender(), zoom=50,
                         color_by=:dataset, colormap=:tab10, roi_kwargs...)
-        save_image(joinpath(dir, "render_drifted_circles_dataset.png"), result[1])
-        println("  Saved: render_drifted_circles_dataset.png")
+        fname = "$(prefix)render_drifted_circles_dataset.png"
+        save_image(joinpath(dir, fname), result[1])
+        println("  Saved: $fname")
 
         result = render(smld_corrected; strategy=CircleRender(), zoom=50,
                         color_by=:dataset, colormap=:tab10, roi_kwargs...)
-        save_image(joinpath(dir, "render_corrected_circles_dataset.png"), result[1])
-        println("  Saved: render_corrected_circles_dataset.png")
+        fname = "$(prefix)render_corrected_circles_dataset.png"
+        save_image(joinpath(dir, fname), result[1])
+        println("  Saved: $fname")
     end
 end
 
@@ -627,9 +645,9 @@ function plot_overlay_comparison(smld_drifted, smld_corrected;
     end
 
     # Use render_overlay with red=drifted, green=corrected
-    img = render([smld_drifted, smld_corrected],
-                 colors=[:red, :green];
-                 render_kwargs...)
+    img, _ = render([smld_drifted, smld_corrected],
+                    colors=[:red, :green];
+                    render_kwargs...)
 
     fig = Figure(size=(800, 800))
     ax = Axis(fig[1, 1], aspect=DataAspect(),
@@ -935,9 +953,9 @@ end
 
 Save statistics to markdown file with nice formatting.
 """
-function save_stats_md(stats::Dict, scenario::Symbol; notes::String="")
+function save_stats_md(stats::Dict, scenario::Symbol; notes::String="", filename::String="stats.md")
     dir = ensure_output_dir(scenario; clean=false)  # Don't clean when saving
-    path = joinpath(dir, "stats.md")
+    path = joinpath(dir, filename)
 
     open(path, "w") do io
         println(io, "# Drift Correction Diagnostics: $(uppercase(string(scenario)))")

@@ -93,49 +93,30 @@ function run_continuous_diagnostics(;
     # =========================================================================
     # 3. Run drift correction (all quality tiers)
     # =========================================================================
-    verbose && println("\n[3/6] Running drift correction (all quality tiers)...")
+    # Note: For continuous mode, only singlepass makes sense (FFT and iterative
+    # don't handle accumulating drift across dataset boundaries properly)
+    verbose && println("\n[3/6] Running drift correction (singlepass only)...")
 
-    # Run all three quality tiers
-    tier_results = Dict{Symbol, NamedTuple}()
+    (smld_corrected, info) = DC.driftcorrect(smld_drifted;
+        degree = degree,
+        dataset_mode = :continuous,
+        quality = :singlepass
+    )
+    model_recovered = info.model
 
-    for quality in [:fft, :singlepass, :iterative]
-        verbose && println("\n  Running :$quality...")
-        (smld_corr, info) = DC.driftcorrect(smld_drifted;
-            degree = degree,
-            dataset_mode = :continuous,
-            quality = quality,
-            max_iterations = 5
-        )
+    # Compute RMSD (relative, removing global offset)
+    x_orig = [e.x for e in smld_orig.emitters]
+    y_orig = [e.y for e in smld_orig.emitters]
+    x_corr = [e.x for e in smld_corrected.emitters]
+    y_corr = [e.y for e in smld_corrected.emitters]
+    offset_x = mean(x_corr) - mean(x_orig)
+    offset_y = mean(y_corr) - mean(y_orig)
+    dx = (x_corr .- offset_x) .- x_orig
+    dy = (y_corr .- offset_y) .- y_orig
+    rmsd_relative_nm = sqrt(mean(dx.^2 .+ dy.^2)) * 1000
 
-        # Compute RMSD for this tier (relative, removing global offset)
-        x_orig = [e.x for e in smld_orig.emitters]
-        y_orig = [e.y for e in smld_orig.emitters]
-        x_corr = [e.x for e in smld_corr.emitters]
-        y_corr = [e.y for e in smld_corr.emitters]
-        offset_x_tier = mean(x_corr) - mean(x_orig)
-        offset_y_tier = mean(y_corr) - mean(y_orig)
-        dx = (x_corr .- offset_x_tier) .- x_orig
-        dy = (y_corr .- offset_y_tier) .- y_orig
-        rmsd_tier = sqrt(mean(dx.^2 .+ dy.^2)) * 1000
-
-        verbose && @printf("    RMSD (relative): %.2f nm (iterations=%d, converged=%s)\n",
-                          rmsd_tier, info.iterations, info.converged)
-
-        tier_results[quality] = (
-            smld = smld_corr,
-            info = info,
-            rmsd_nm = rmsd_tier
-        )
-    end
-
-    # Use singlepass as the "main" result for detailed analysis
-    smld_corrected = tier_results[:singlepass].smld
-    model_recovered = tier_results[:singlepass].info.model
-
-    verbose && println("\n  === Quality Tier Summary ===")
-    verbose && @printf("    :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)
-    verbose && @printf("    :singlepass RMSD: %.2f nm\n", tier_results[:singlepass].rmsd_nm)
-    verbose && @printf("    :iterative  RMSD: %.2f nm\n", tier_results[:iterative].rmsd_nm)
+    verbose && @printf("  RMSD (relative): %.2f nm (iterations=%d, converged=%s)\n",
+                      rmsd_relative_nm, info.iterations, info.converged)
 
     # Show recovered cumulative drift
     verbose && println("  Recovered cumulative drift at dataset boundaries:")
@@ -218,41 +199,41 @@ function run_continuous_diagnostics(;
     end
 
     # =========================================================================
-    # 5. Generate plots
+    # 5. Generate plots (singlepass only for continuous mode)
     # =========================================================================
     verbose && println("\n[5/6] Generating plots...")
 
     # Trajectory comparison
-    fig_traj = plot_trajectory_comparison(traj; title_suffix=" (Continuous Mode)")
-    save_figure(fig_traj, SCENARIO, "trajectory_comparison.png")
+    fig_traj = plot_trajectory_comparison(traj; title_suffix=" (Continuous Mode, :singlepass)")
+    save_figure(fig_traj, SCENARIO, "singlepass_trajectory_comparison.png")
 
     # Cumulative trajectory (continuous-specific)
     fig_traj_cumul = plot_trajectory_cumulative(model_recovered;
-        title="Cumulative Drift Trajectory (Recovered)")
-    save_figure(fig_traj_cumul, SCENARIO, "trajectory_cumulative.png")
+        title="Cumulative Drift Trajectory (Recovered, :singlepass)")
+    save_figure(fig_traj_cumul, SCENARIO, "singlepass_trajectory_cumulative.png")
 
     # Compare true vs recovered cumulative
     fig_cumul_compare = plot_cumulative_comparison(model_true, model_recovered)
-    save_figure(fig_cumul_compare, SCENARIO, "trajectory_cumulative_comparison.png")
+    save_figure(fig_cumul_compare, SCENARIO, "singlepass_trajectory_cumulative_comparison.png")
 
     # Render suite (histogram, circles, gaussian with absolute_frame coloring)
-    save_render_suite(smld_drifted, smld_corrected, SCENARIO)
+    save_render_suite(smld_drifted, smld_corrected, SCENARIO; prefix="singlepass_")
 
     # Residual histogram
     fig_hist = plot_residuals(residuals)
-    save_figure(fig_hist, SCENARIO, "residual_histogram.png")
+    save_figure(fig_hist, SCENARIO, "singlepass_residual_histogram.png")
 
     # Residual scatter
     fig_scatter = plot_residual_scatter(residuals)
-    save_figure(fig_scatter, SCENARIO, "residual_scatter.png")
+    save_figure(fig_scatter, SCENARIO, "singlepass_residual_scatter.png")
 
     # RMSD vs frame
     fig_rmsd = plot_rmsd_vs_frame(per_frame)
-    save_figure(fig_rmsd, SCENARIO, "rmsd_vs_frame.png")
+    save_figure(fig_rmsd, SCENARIO, "singlepass_rmsd_vs_frame.png")
 
     # Boundary analysis (continuous-specific)
     fig_boundary = plot_boundary_analysis(model_true, model_recovered)
-    save_figure(fig_boundary, SCENARIO, "boundary_analysis.png")
+    save_figure(fig_boundary, SCENARIO, "singlepass_boundary_analysis.png")
 
     # Per-chunk table
     df_per_chunk = DataFrame(
@@ -269,9 +250,6 @@ function run_continuous_diagnostics(;
     stats = Dict(
         "rmsd_nm" => rmsd_nm,
         "rmsd_relative_nm" => rmsd_relative_nm,
-        "rmsd_fft_nm" => tier_results[:fft].rmsd_nm,
-        "rmsd_singlepass_nm" => tier_results[:singlepass].rmsd_nm,
-        "rmsd_iterative_nm" => tier_results[:iterative].rmsd_nm,
         "mean_error_nm" => mean_error,
         "max_error_nm" => max_error,
         "entropy_before" => entropy_before.ub_entropy,
@@ -293,14 +271,11 @@ function run_continuous_diagnostics(;
         "seed" => seed,
     )
 
-    save_stats_md(stats, SCENARIO)
+    save_stats_md(stats, SCENARIO; filename="stats_singlepass.md")
 
     verbose && println("\n" * "=" ^ 60)
     verbose && println("CONTINUOUS MODE DIAGNOSTICS COMPLETE")
-    verbose && println("Quality Tier Results (relative RMSD):")
-    verbose && @printf("  :fft        RMSD: %.2f nm\n", tier_results[:fft].rmsd_nm)
-    verbose && @printf("  :singlepass RMSD: %.2f nm\n", tier_results[:singlepass].rmsd_nm)
-    verbose && @printf("  :iterative  RMSD: %.2f nm\n", tier_results[:iterative].rmsd_nm)
+    verbose && @printf("  RMSD (relative): %.2f nm\n", rmsd_relative_nm)
     verbose && println("=" ^ 60)
 
     return (
@@ -311,7 +286,6 @@ function run_continuous_diagnostics(;
         model_recovered = model_recovered,
         boundary_errors = boundary_errors,
         df_per_chunk = df_per_chunk,
-        tier_results = tier_results,
         stats = stats
     )
 end
@@ -371,19 +345,24 @@ function plot_cumulative_comparison(model_true, model_recovered)
     datasets = unique(traj_true.dataset)
     colors = Makie.wong_colors()
 
+    # Plot true first (thin), then recovered second (thick) so recovered visible on top
     for (i, ds) in enumerate(datasets)
         mask = traj_true.dataset .== ds
         c = colors[mod1(i, length(colors))]
 
         lines!(ax1, traj_true.frames[mask], traj_true.x[mask],
-               color=c, linestyle=:solid, linewidth=2, label = i==1 ? "True" : "")
-        lines!(ax1, traj_rec.frames[mask], traj_rec.x[mask],
-               color=c, linestyle=:dash, linewidth=2, label = i==1 ? "Recovered" : "")
-
+               color=c, linestyle=:solid, linewidth=1.5, label = i==1 ? "True" : "")
         lines!(ax2, traj_true.frames[mask], traj_true.y[mask],
-               color=c, linestyle=:solid, linewidth=2)
+               color=c, linestyle=:solid, linewidth=1.5)
+    end
+    for (i, ds) in enumerate(datasets)
+        mask = traj_true.dataset .== ds
+        c = colors[mod1(i, length(colors))]
+
+        lines!(ax1, traj_rec.frames[mask], traj_rec.x[mask],
+               color=c, linestyle=:dash, linewidth=3, label = i==1 ? "Recovered" : "")
         lines!(ax2, traj_rec.frames[mask], traj_rec.y[mask],
-               color=c, linestyle=:dash, linewidth=2)
+               color=c, linestyle=:dash, linewidth=3)
     end
 
     axislegend(ax1, position=:lt)

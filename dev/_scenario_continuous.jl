@@ -85,12 +85,11 @@ function run_continuous_diagnostics(;
     # =========================================================================
     verbose && println("\n[3/6] Running drift correction...")
 
-    (; smld, model) = DC.driftcorrect(smld_drifted;
+    (smld_corrected, info) = DC.driftcorrect(smld_drifted;
         degree = degree,
         dataset_mode = :continuous
     )
-    smld_corrected = smld
-    model_recovered = model
+    model_recovered = info.model
 
     verbose && println("  Correction complete")
 
@@ -313,19 +312,24 @@ function _plot_cumulative_comparison(model_true, model_recovered)
     datasets = unique(traj_true.dataset)
     colors = Makie.wong_colors()
 
+    # Plot true first (thin), then recovered second (thick) so recovered visible on top
     for (i, ds) in enumerate(datasets)
         mask = traj_true.dataset .== ds
         c = colors[mod1(i, length(colors))]
 
         lines!(ax1, traj_true.frames[mask], traj_true.x[mask],
-               color=c, linestyle=:solid, linewidth=2, label = i==1 ? "True" : "")
-        lines!(ax1, traj_rec.frames[mask], traj_rec.x[mask],
-               color=c, linestyle=:dash, linewidth=2, label = i==1 ? "Recovered" : "")
-
+               color=c, linestyle=:solid, linewidth=1.5, label = i==1 ? "True" : "")
         lines!(ax2, traj_true.frames[mask], traj_true.y[mask],
-               color=c, linestyle=:solid, linewidth=2)
+               color=c, linestyle=:solid, linewidth=1.5)
+    end
+    for (i, ds) in enumerate(datasets)
+        mask = traj_true.dataset .== ds
+        c = colors[mod1(i, length(colors))]
+
+        lines!(ax1, traj_rec.frames[mask], traj_rec.x[mask],
+               color=c, linestyle=:dash, linewidth=3, label = i==1 ? "Recovered" : "")
         lines!(ax2, traj_rec.frames[mask], traj_rec.y[mask],
-               color=c, linestyle=:dash, linewidth=2)
+               color=c, linestyle=:dash, linewidth=3)
     end
 
     axislegend(ax1, position=:lt)

@@ -82,12 +82,11 @@ function run_registered_diagnostics(;
     # =========================================================================
     verbose && println("\n[3/6] Running drift correction...")
 
-    (; smld, model) = DC.driftcorrect(smld_drifted;
+    (smld_corrected, info) = DC.driftcorrect(smld_drifted;
         degree = degree,
         dataset_mode = :registered
     )
-    smld_corrected = smld
-    model_recovered = model
+    model_recovered = info.model
 
     verbose && println("  Correction complete")
 
@@ -266,9 +265,9 @@ function _create_dataset_overlay_reg(smld, n_datasets::Int; zoom::Int=20)
     colors = [:red, :green, :blue, :orange, :purple, :cyan, :magenta, :yellow]
 
     # Render overlay
-    img = render(smld_list,
-                 colors = colors[1:min(n_datasets, length(colors))],
-                 zoom = zoom)
+    img, _ = render(smld_list,
+                    colors = colors[1:min(n_datasets, length(colors))],
+                    zoom = zoom)
 
     fig = Figure(size=(800, 800))
     ax = Axis(fig[1, 1], aspect=DataAspect(),

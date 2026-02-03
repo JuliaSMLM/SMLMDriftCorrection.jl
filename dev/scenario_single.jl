@@ -122,14 +122,20 @@ function run_single_diagnostics(;
     verbose && println("  Degree: $degree")
 
     # =========================================================================
-    # 3. Run drift correction
+    # 3. Run drift correction (singlepass only)
     # =========================================================================
-    verbose && println("\n[3/6] Running drift correction...")
+    # Note: For single-dataset correction, only :singlepass is applicable.
+    # - :fft requires multiple datasets for inter-dataset alignment
+    # - :iterative is for inter↔intra convergence across datasets
+    # Single-dataset only has intra-drift, so singlepass entropy optimization
+    # is the appropriate method.
+    verbose && println("\n[3/6] Running drift correction (singlepass only)...")
 
-    (smld_corrected, info) = DC.driftcorrect(smld_drifted; degree=degree)
+    (smld_corrected, info) = DC.driftcorrect(smld_drifted; degree=degree, quality=:singlepass)
     model_recovered = info.model
 
-    verbose && println("  Correction complete")
+    verbose && @printf("  RMSD: %.2f nm (iterations=%d, converged=%s)\n",
+                      compute_rmsd(smld_orig, smld_corrected), info.iterations, info.converged)
 
     # =========================================================================
     # 4. Compute metrics
@@ -182,36 +188,36 @@ function run_single_diagnostics(;
     traj = compare_trajectories(model_true, model_recovered)
 
     # =========================================================================
-    # 5. Generate plots
+    # 5. Generate plots (singlepass only for single-dataset)
     # =========================================================================
     verbose && println("\n[5/6] Generating plots...")
 
     # KEY DIAGNOSTIC: Drift comparison (GT vs Recovered in X, Y, and X-Y plane)
     fig_drift = plot_drift_comparison(traj)
-    save_figure(fig_drift, SCENARIO, "drift_comparison.png")
+    save_figure(fig_drift, SCENARIO, "singlepass_drift_comparison.png")
 
     # Trajectory comparison (alternative view)
-    fig_traj = plot_trajectory_comparison(traj; title_suffix=" (Single Dataset)")
-    save_figure(fig_traj, SCENARIO, "trajectory_comparison.png")
+    fig_traj = plot_trajectory_comparison(traj; title_suffix=" (Single Dataset, :singlepass)")
+    save_figure(fig_traj, SCENARIO, "singlepass_trajectory_comparison.png")
 
     # Render suite: 6 images (histogram, circles, gaussian for drifted and corrected)
-    save_render_suite(smld_drifted, smld_corrected, SCENARIO)
+    save_render_suite(smld_drifted, smld_corrected, SCENARIO; prefix="singlepass_")
 
     # Residual histogram
     fig_hist = plot_residuals(residuals)
-    save_figure(fig_hist, SCENARIO, "residual_histogram.png")
+    save_figure(fig_hist, SCENARIO, "singlepass_residual_histogram.png")
 
     # Residual scatter
     fig_scatter = plot_residual_scatter(residuals)
-    save_figure(fig_scatter, SCENARIO, "residual_scatter.png")
+    save_figure(fig_scatter, SCENARIO, "singlepass_residual_scatter.png")
 
     # RMSD vs frame
     fig_rmsd = plot_rmsd_vs_frame(per_frame)
-    save_figure(fig_rmsd, SCENARIO, "rmsd_vs_frame.png")
+    save_figure(fig_rmsd, SCENARIO, "singlepass_rmsd_vs_frame.png")
 
     # Coefficient comparison (single-dataset specific)
     fig_coeff = plot_coefficient_comparison(model_true, model_recovered)
-    save_figure(fig_coeff, SCENARIO, "coefficient_comparison.png")
+    save_figure(fig_coeff, SCENARIO, "singlepass_coefficient_comparison.png")
 
     # =========================================================================
     # 6. Save statistics
@@ -264,7 +270,7 @@ there's insufficient constraint to uniquely determine the drift polynomial.
 - Use lower polynomial degree
 """
 
-    save_stats_md(stats, SCENARIO; notes=notes)
+    save_stats_md(stats, SCENARIO; notes=notes, filename="stats_singlepass.md")
 
     verbose && println("\n" * "=" ^ 60)
     verbose && println("SINGLE DATASET DIAGNOSTICS COMPLETE")
