@@ -286,13 +286,15 @@ function findshift(smld1::T, smld2::T;
     end
     # Find the maximum location in the cross-correlation, which will
     # correspond to the shift between the two images.
-    shift = argmax(cc)
+    peak = argmax(cc)
     # Since the FFT has been centered, the shift is relative to the
     # center of the transformed histogram images.
+    # NOTE: Cross-correlation ccorr(A, B) peaks at -δ when B is shifted by +δ
+    # relative to A. We want the shift of B relative to A, so we negate.
     if n_dims == 2
-        shift = float([shift[1] - mid1, shift[2] - mid2])
+        shift = float([mid1 - peak[1], mid2 - peak[2]])  # negated: center - peak
     elseif n_dims == 3
-        shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
+        shift = float([mid1 - peak[1], mid2 - peak[2], mid3 - peak[3]])
     end
     # Convert the shift to an (x, y {, z}) coordinate.
     shift = histbinsize .* shift
@@ -394,11 +396,13 @@ function findshift_damped(smld1::T, smld2::T;
     end
 
     # Find maximum of damped cross-correlation
-    shift = argmax(cc)
+    # NOTE: Cross-correlation peaks at -δ when B is shifted by +δ, so we negate
+    peak = argmax(cc)
     if n_dims == 2
-        shift = float([shift[1] - mid1, shift[2] - mid2])
+        shift = float([mid1 - peak[1], mid2 - peak[2]])  # negated: center - peak
     else
-        shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
+        mid3 = size(cc, 3) ÷ 2 + 1
+        shift = float([mid1 - peak[1], mid2 - peak[2], mid3 - peak[3]])
     end
     shift = histbinsize .* shift
 
