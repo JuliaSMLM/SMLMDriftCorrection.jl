@@ -210,12 +210,15 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     end
 
     # Pass 1: Align each dataset to dataset 1 (rough alignment)
+    # findshift(A, B) returns the shift of B relative to A
+    # To correct B back to A's frame, correctdrift does: x - inter.dm
+    # So inter.dm should equal the shift (positive)
     smld_ref = filter_by_dataset(smld, 1)
     for nn = 2:n_datasets
         smld_n = filter_by_dataset(smld, nn)
         cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05)
         for dim in 1:n_dims
-            model.inter[nn].dm[dim] = -cc_shift[dim]
+            model.inter[nn].dm[dim] = cc_shift[dim]
         end
     end
 
@@ -255,7 +258,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
 
         cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05)
         for dim in 1:n_dims
-            model.inter[nn].dm[dim] = -cc_shift[dim]
+            model.inter[nn].dm[dim] = cc_shift[dim]
         end
     end
 
@@ -295,7 +298,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                         prior_shift=median_dm,
                         prior_sigma=prior_sigma)
                     for dim in 1:n_dims
-                        model.inter[nn].dm[dim] = -cc_shift[dim]
+                        model.inter[nn].dm[dim] = cc_shift[dim]
                     end
                     if verbose > 0
                         new_mag = sqrt(sum(model.inter[nn].dm.^2)) * 1000
@@ -315,7 +318,8 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
 end
 
 """
-Singlepass quality tier - current algorithm with all-to-all inter refinement.
+Singlepass quality tier - entropy-based intra and inter correction.
+Matches original algorithm: intra first, then inter vs DS1, then inter vs earlier.
 """
 function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
                                     dataset_mode::Symbol, maxn::Int, verbose::Int)
@@ -323,7 +327,7 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         @info("SMLMDriftCorrection: singlepass mode")
     end
 
-    # Intra-dataset correction (parallel over datasets)
+    # Step 1: Intra-dataset correction (parallel over datasets)
     if model.intra[1].dm[1].degree > 0
         if verbose > 0
             @info("SMLMDriftCorrection: starting intra-dataset correction")
@@ -337,40 +341,21 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         end
     end
 
-    # For continuous mode: compute warm start targets and use regularization
-    # This prevents entropy optimization from diverging while still allowing refinement
-    warm_start_targets = nothing
-    regularization_lambda = 0.0
-
-    if dataset_mode == :continuous && smld.n_datasets > 1
-        _warmstart_inter_continuous!(model, smld, verbose)
-        # Store warm start targets for regularization
-        warm_start_targets = [copy(model.inter[nn].dm) for nn in 1:smld.n_datasets]
-        # High λ for continuous mode: shifts should be close to polynomial predictions
-        # λ in units of (entropy per μm²), typical entropy ~1e5, so λ~1e6 means 1μm deviation costs ~1e6
-        regularization_lambda = 1e6
-
-        if verbose > 0
-            @info("SMLMDriftCorrection: continuous mode with regularization (λ=$regularization_lambda)")
-        end
-    end
-
-    # Inter-dataset correction: align each to dataset 1 first
-    for nn = 2:smld.n_datasets
-        target = warm_start_targets !== nothing ? warm_start_targets[nn] : nothing
-        findinter!(model, smld, nn, [1], maxn;
-                   regularization_target=target, regularization_lambda=regularization_lambda)
-    end
-
-    # Refine: align each dataset to ALL others (not just previous)
+    # Step 2: Inter-dataset correction vs DS1 first
     if verbose > 0
-        @info("SMLMDriftCorrection: refining inter-dataset alignment (all-to-all)")
+        @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
     end
     for nn = 2:smld.n_datasets
-        others = collect(setdiff(1:smld.n_datasets, nn))
-        target = warm_start_targets !== nothing ? warm_start_targets[nn] : nothing
-        findinter!(model, smld, nn, others, maxn;
-                   regularization_target=target, regularization_lambda=regularization_lambda)
+        findinter!(model, smld, nn, [1], maxn)
+    end
+
+    # Step 3: Refine inter vs all earlier datasets
+    if verbose > 0
+        @info("SMLMDriftCorrection: refining inter-dataset alignment (vs earlier)")
+    end
+    for nn = 2:smld.n_datasets
+        ref_datasets = collect(1:(nn-1))
+        findinter!(model, smld, nn, ref_datasets, maxn)
     end
 
     # Normalize for continuous mode
