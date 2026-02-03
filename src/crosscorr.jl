@@ -299,3 +299,108 @@ function findshift(smld1::T, smld2::T;
     # Return the shift.
     return shift
 end
+
+"""
+    findshift_damped(smld1, smld2; histbinsize, prior_shift, prior_sigma)
+
+Find shift with Gaussian damping centered at prior_shift.
+Used to refine outlier shifts by searching near expected location.
+"""
+function findshift_damped(smld1::T, smld2::T;
+    histbinsize::Real=1.0,
+    prior_shift::Vector{<:Real}=[0.0, 0.0],
+    prior_sigma::Real=1.0
+) where {T<:SMLD}
+
+    # Check for empty datasets
+    if isempty(smld1.emitters)
+        error("findshift_damped: smld1 has no emitters")
+    end
+    if isempty(smld2.emitters)
+        error("findshift_damped: smld2 has no emitters")
+    end
+
+    n_dims = nDims(smld1)
+
+    # Convert histbinsize to match coordinate type
+    coord_type = typeof(smld1.emitters[1].x)
+    histbinsize = coord_type(histbinsize)
+
+    # Build histogram images (same as findshift)
+    if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
+       smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
+       smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
+       smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
+        error("Images must have the same size.")
+    end
+
+    if n_dims == 2
+        ROI = float([smld1.camera.pixel_edges_x[1],
+                     smld1.camera.pixel_edges_x[end],
+                     smld1.camera.pixel_edges_y[1],
+                     smld1.camera.pixel_edges_y[end]])
+    elseif n_dims == 3
+        smld1_z = [e.z for e in smld1.emitters]
+        ROI = float([smld1.camera.pixel_edges_x[1],
+                     smld1.camera.pixel_edges_x[end],
+                     smld1.camera.pixel_edges_y[1],
+                     smld1.camera.pixel_edges_y[end],
+                     round(minimum(smld1_z)),
+                     round(maximum(smld1_z))])
+    end
+
+    smld1_x = [e.x for e in smld1.emitters]
+    smld1_y = [e.y for e in smld1.emitters]
+    smld2_x = [e.x for e in smld2.emitters]
+    smld2_y = [e.y for e in smld2.emitters]
+
+    if n_dims == 2
+        im1 = histimage2D(smld1_x, smld1_y; ROI=ROI, histbinsize=histbinsize)
+        im2 = histimage2D(smld2_x, smld2_y; ROI=ROI, histbinsize=histbinsize)
+        cc = crosscorr2D(im1, im2)
+    elseif n_dims == 3
+        smld1_z = [e.z for e in smld1.emitters]
+        smld2_z = [e.z for e in smld2.emitters]
+        im1 = histimage3D(smld1_x, smld1_y, smld1_z; ROI=ROI, histbinsize=histbinsize)
+        im2 = histimage3D(smld2_x, smld2_y, smld2_z; ROI=ROI, histbinsize=histbinsize)
+        cc = crosscorr3D(im1, im2)
+    end
+
+    # Calculate center of cross-correlation
+    mid1 = size(cc, 1) ÷ 2 + 1
+    mid2 = size(cc, 2) ÷ 2 + 1
+
+    # Convert prior_shift to pixel coordinates
+    prior_px = prior_shift ./ histbinsize
+
+    # Apply Gaussian damping centered at prior_shift
+    σ_px = prior_sigma / histbinsize
+    if n_dims == 2
+        for j in 1:size(cc, 2), i in 1:size(cc, 1)
+            di = (i - mid1) - prior_px[1]
+            dj = (j - mid2) - prior_px[2]
+            weight = exp(-(di^2 + dj^2) / (2 * σ_px^2))
+            cc[i, j] *= weight
+        end
+    else  # 3D
+        mid3 = size(cc, 3) ÷ 2 + 1
+        for k in 1:size(cc, 3), j in 1:size(cc, 2), i in 1:size(cc, 1)
+            di = (i - mid1) - prior_px[1]
+            dj = (j - mid2) - prior_px[2]
+            dk = (k - mid3) - (length(prior_shift) > 2 ? prior_px[3] : 0.0)
+            weight = exp(-(di^2 + dj^2 + dk^2) / (2 * σ_px^2))
+            cc[i, j, k] *= weight
+        end
+    end
+
+    # Find maximum of damped cross-correlation
+    shift = argmax(cc)
+    if n_dims == 2
+        shift = float([shift[1] - mid1, shift[2] - mid2])
+    else
+        shift = float([shift[1] - mid1, shift[2] - mid2, shift[3] - mid3])
+    end
+    shift = histbinsize .* shift
+
+    return shift
+end

@@ -263,6 +263,49 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
         @info("SMLMDriftCorrection: FFT pass 2 complete (each vs all others)")
     end
 
+    # Pass 3: Detect and fix outliers using Gaussian-damped re-alignment
+    shifts = [sqrt(sum(model.inter[nn].dm.^2)) for nn in 2:n_datasets]
+    if length(shifts) >= 3
+        median_shift = median(shifts)
+        mad_shift = median(abs.(shifts .- median_shift))  # median absolute deviation
+        threshold = median_shift + 5 * max(mad_shift, 0.1)  # at least 100nm MAD
+
+        outliers = Int[]
+        for nn = 2:n_datasets
+            if sqrt(sum(model.inter[nn].dm.^2)) > threshold
+                push!(outliers, nn)
+            end
+        end
+
+        if !isempty(outliers)
+            if verbose > 0
+                @info("SMLMDriftCorrection: FFT detected $(length(outliers)) outliers, re-aligning with Gaussian prior")
+            end
+
+            # Compute median shift vector from non-outliers
+            good_datasets = setdiff(2:n_datasets, outliers)
+            if !isempty(good_datasets)
+                median_dm = [median([model.inter[nn].dm[d] for nn in good_datasets]) for d in 1:n_dims]
+                prior_sigma = max(median_shift, 0.5)  # at least 500nm sigma
+
+                for nn in outliers
+                    smld_n = filter_by_dataset(smld, nn)
+                    cc_shift = findshift_damped(smld_ref, smld_n;
+                        histbinsize=0.05,
+                        prior_shift=median_dm,
+                        prior_sigma=prior_sigma)
+                    for dim in 1:n_dims
+                        model.inter[nn].dm[dim] = -cc_shift[dim]
+                    end
+                    if verbose > 0
+                        new_mag = sqrt(sum(model.inter[nn].dm.^2)) * 1000
+                        @info("SMLMDriftCorrection: DS$nn re-aligned: $(round(new_mag, digits=1)) nm")
+                    end
+                end
+            end
+        end
+    end
+
     # Normalize for continuous mode (drift at DS1, frame 1 = 0)
     if dataset_mode == :continuous
         # Nothing special needed for FFT mode (no intra correction)
