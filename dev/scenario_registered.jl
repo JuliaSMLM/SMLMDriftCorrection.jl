@@ -282,18 +282,32 @@ function run_registered_diagnostics(;
         verbose && println("  Saved: stats_$(quality).md")
     end
 
-    # Also save combined summary (for backward compatibility)
-    stats = Dict(
-        "rmsd_fft_nm" => tier_results[:fft].rmsd_nm,
-        "rmsd_singlepass_nm" => tier_results[:singlepass].rmsd_nm,
-        "rmsd_iterative_nm" => tier_results[:iterative].rmsd_nm,
-        "n_emitters" => length(smld_orig.emitters),
-        "n_datasets" => n_datasets,
-        "n_frames" => n_frames,
-        "degree" => degree,
-        "seed" => seed,
-    )
-    save_stats_md(stats, SCENARIO; filename="stats_summary.md")
+    # Save comparison table (stats_all.md)
+    dir = ensure_output_dir(SCENARIO; clean=false)
+    open(joinpath(dir, "stats_all.md"), "w") do io
+        println(io, "# Quality Tier Comparison: REGISTERED")
+        println(io)
+        println(io, "## RMSD Comparison")
+        println(io)
+        println(io, "| Quality Tier | RMSD (nm) | Iterations | Converged |")
+        println(io, "|--------------|-----------|------------|-----------|")
+        for quality in [:fft, :singlepass, :iterative]
+            tr = tier_results[quality]
+            @printf(io, "| **%s** | %.2f | %d | %s |\n",
+                    quality, tr.rmsd_nm, tr.info.iterations, tr.info.converged)
+        end
+        println(io)
+        println(io, "## Parameters")
+        println(io)
+        println(io, "- Emitters: $(length(smld_orig.emitters))")
+        println(io, "- Datasets: $n_datasets")
+        println(io, "- Frames/dataset: $n_frames")
+        println(io, "- Degree: $degree")
+        println(io, "- Drift scale: $drift_scale μm")
+        println(io, "- Inter scale: $inter_scale μm")
+        println(io, "- Seed: $seed")
+    end
+    verbose && println("  Saved: stats_all.md")
 
     verbose && println("\n" * "=" ^ 60)
     verbose && println("REGISTERED MODE DIAGNOSTICS COMPLETE")

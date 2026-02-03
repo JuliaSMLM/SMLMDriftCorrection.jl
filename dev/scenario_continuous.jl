@@ -273,6 +273,37 @@ function run_continuous_diagnostics(;
 
     save_stats_md(stats, SCENARIO; filename="stats_singlepass.md")
 
+    # Save stats_all.md (only singlepass for continuous mode)
+    dir = ensure_output_dir(SCENARIO; clean=false)
+    open(joinpath(dir, "stats_all.md"), "w") do io
+        println(io, "# Quality Tier Comparison: CONTINUOUS")
+        println(io)
+        println(io, "## Applicable Methods")
+        println(io)
+        println(io, "For continuous mode (drift accumulates across datasets), only **singlepass** is applicable:")
+        println(io, "- **FFT**: Does not handle accumulating drift across dataset boundaries")
+        println(io, "- **iterative**: Inter↔intra convergence assumes independent dataset offsets, not cumulative drift")
+        println(io)
+        println(io, "## Results")
+        println(io)
+        println(io, "| Quality Tier | RMSD (nm) | RMSD Relative (nm) | Iterations | Converged |")
+        println(io, "|--------------|-----------|-------------------|------------|-----------|")
+        @printf(io, "| **singlepass** | %.2f | %.2f | %d | %s |\n",
+                rmsd_nm, rmsd_relative_nm, info.iterations, info.converged)
+        println(io)
+        println(io, "## Parameters")
+        println(io)
+        println(io, "- Emitters: $(length(smld_orig.emitters))")
+        println(io, "- Datasets: $n_datasets")
+        println(io, "- Frames/dataset: $n_frames")
+        println(io, "- Total frames: $(n_datasets * n_frames)")
+        println(io, "- Degree: $degree")
+        println(io, "- Drift scale: $drift_scale μm")
+        println(io, "- Total drift: $(round(total_drift, digits=4)) μm")
+        println(io, "- Seed: $seed")
+    end
+    verbose && println("  Saved: stats_all.md")
+
     verbose && println("\n" * "=" ^ 60)
     verbose && println("CONTINUOUS MODE DIAGNOSTICS COMPLETE")
     verbose && @printf("  RMSD (relative): %.2f nm\n", rmsd_relative_nm)

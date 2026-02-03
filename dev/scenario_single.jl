@@ -272,6 +272,35 @@ there's insufficient constraint to uniquely determine the drift polynomial.
 
     save_stats_md(stats, SCENARIO; notes=notes, filename="stats_singlepass.md")
 
+    # Save stats_all.md (only singlepass for single-dataset)
+    dir = ensure_output_dir(SCENARIO; clean=false)
+    open(joinpath(dir, "stats_all.md"), "w") do io
+        println(io, "# Quality Tier Comparison: SINGLE")
+        println(io)
+        println(io, "## Applicable Methods")
+        println(io)
+        println(io, "For single-dataset correction, only **singlepass** is applicable:")
+        println(io, "- **FFT**: Requires multiple datasets for inter-dataset alignment")
+        println(io, "- **iterative**: Requires multiple datasets for inter↔intra convergence")
+        println(io)
+        println(io, "## Results")
+        println(io)
+        println(io, "| Quality Tier | RMSD (nm) | Iterations | Converged |")
+        println(io, "|--------------|-----------|------------|-----------|")
+        @printf(io, "| **singlepass** | %.2f | %d | %s |\n",
+                rmsd_nm, info.iterations, info.converged)
+        println(io)
+        println(io, "## Parameters")
+        println(io)
+        println(io, "- Emitters: $n_emitters")
+        println(io, "- Frames: $n_frames")
+        println(io, "- Locs/frame: $(round(locs_per_frame, digits=1))")
+        println(io, "- Degree: $degree")
+        println(io, "- Drift scale: $drift_scale μm")
+        println(io, "- Seed: $seed")
+    end
+    verbose && println("  Saved: stats_all.md")
+
     verbose && println("\n" * "=" ^ 60)
     verbose && println("SINGLE DATASET DIAGNOSTICS COMPLETE")
     verbose && @printf("Final RMSD: %.2f nm\n", rmsd_nm)
