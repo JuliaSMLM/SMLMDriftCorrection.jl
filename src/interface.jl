@@ -362,13 +362,24 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         @info("SMLMDriftCorrection: singlepass mode")
     end
 
-    # Step 1: Intra-dataset correction (parallel over datasets)
+    # Step 1: Intra-dataset correction
     if model.intra[1].dm[1].degree > 0
         if verbose > 0
             @info("SMLMDriftCorrection: starting intra-dataset correction")
         end
-        Threads.@threads for nn = 1:smld.n_datasets
-            findintra!(model.intra[nn], smld, nn, maxn)
+
+        if dataset_mode == :continuous && smld.n_datasets > 1
+            # Continuous mode: sequential with warmstart from previous chunk
+            findintra!(model.intra[1], smld, 1, maxn)
+            for nn = 2:smld.n_datasets
+                initialize_from_endpoint!(model.intra[nn], model.intra[nn-1], smld.n_frames)
+                findintra!(model.intra[nn], smld, nn, maxn; skip_init=true)
+            end
+        else
+            # Registered mode (or single dataset): parallel processing
+            Threads.@threads for nn = 1:smld.n_datasets
+                findintra!(model.intra[nn], smld, nn, maxn)
+            end
         end
     else
         if verbose > 0
@@ -377,29 +388,30 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     end
 
     # Step 2: Inter-dataset alignment
-    # For continuous mode: chain polynomial endpoints (chunks are temporally adjacent, no spatial overlap)
-    # For registered mode: entropy optimization (datasets share spatial overlap)
+    # Both modes use entropy optimization - datasets image the same FOV/structures
     if dataset_mode == :continuous
-        # Continuous mode: warmstart chains polynomials exactly - this IS the solution
-        # Skip entropy optimization since chunks have no spatial overlap
+        # Continuous mode: initialize inter-shifts from polynomial endpoints, then optimize
         _warmstart_inter_continuous!(model, smld, verbose)
-        _normalize_continuous!(model)
-    else
-        # Registered mode: entropy-based alignment (datasets have spatial overlap)
-        if verbose > 0
-            @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
-        end
-        for nn = 2:smld.n_datasets
-            findinter!(model, smld, nn, [1], maxn)
-        end
+    end
 
-        if verbose > 0
-            @info("SMLMDriftCorrection: refining inter-dataset alignment (vs earlier)")
-        end
-        for nn = 2:smld.n_datasets
-            ref_datasets = collect(1:(nn-1))
-            findinter!(model, smld, nn, ref_datasets, maxn)
-        end
+    if verbose > 0
+        @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
+    end
+    for nn = 2:smld.n_datasets
+        findinter!(model, smld, nn, [1], maxn)
+    end
+
+    if verbose > 0
+        @info("SMLMDriftCorrection: refining inter-dataset alignment (vs earlier)")
+    end
+    for nn = 2:smld.n_datasets
+        ref_datasets = collect(1:(nn-1))
+        findinter!(model, smld, nn, ref_datasets, maxn)
+    end
+
+    # Normalize continuous mode so drift at (DS=1, frame=1) = 0
+    if dataset_mode == :continuous
+        _normalize_continuous!(model)
     end
 
     return (iterations=1, converged=true, history=Float64[])
@@ -456,21 +468,36 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
 
         # Re-run intra with inter applied (shifted coordinates)
         smld_shifted = apply_inter_only(smld, model)
-        Threads.@threads for nn = 1:n_datasets
-            findintra!(model.intra[nn], smld_shifted, nn, maxn)
+        if dataset_mode == :continuous && n_datasets > 1
+            # Continuous mode: sequential with warmstart from previous chunk
+            findintra!(model.intra[1], smld_shifted, 1, maxn)
+            for nn = 2:n_datasets
+                initialize_from_endpoint!(model.intra[nn], model.intra[nn-1], smld.n_frames)
+                findintra!(model.intra[nn], smld_shifted, nn, maxn; skip_init=true)
+            end
+        else
+            # Registered mode (or single dataset): parallel processing
+            Threads.@threads for nn = 1:n_datasets
+                findintra!(model.intra[nn], smld_shifted, nn, maxn)
+            end
         end
 
-        # Update inter-shifts based on mode
+        # Update inter-shifts
+        # Both modes use entropy optimization - datasets image the same FOV/structures
         if dataset_mode == :continuous
-            # Continuous mode: re-chain polynomial endpoints (no entropy optimization)
+            # Continuous mode: initialize from polynomial endpoints before optimization
             _warmstart_inter_continuous!(model, smld, verbose > 1 ? verbose : 0)
+        end
+
+        # Entropy-based all-to-all alignment
+        for nn = 2:n_datasets
+            others = collect(setdiff(1:n_datasets, nn))
+            findinter!(model, smld, nn, others, maxn)
+        end
+
+        # Normalize continuous mode
+        if dataset_mode == :continuous
             _normalize_continuous!(model)
-        else
-            # Registered mode: entropy-based all-to-all alignment
-            for nn = 2:n_datasets
-                others = collect(setdiff(1:n_datasets, nn))
-                findinter!(model, smld, nn, others, maxn)
-            end
         end
 
         # Compute entropy for this iteration

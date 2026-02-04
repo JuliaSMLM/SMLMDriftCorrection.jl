@@ -120,6 +120,33 @@ function initialize_random!(p::IntraLegendre, rscale::Real, nframes::Int)
 end
 
 """
+    initialize_from_endpoint!(intra_new, intra_prev, n_frames_prev)
+
+Initialize intra polynomial for continuous mode warmstart.
+Sets intra_new's coefficients so its startpoint (frame 1) equals
+intra_prev's endpoint (frame n_frames_prev).
+
+Copies polynomial shape from previous chunk, then shifts so endpoints connect.
+This is initialization only - optimizer finds its own solution.
+"""
+function initialize_from_endpoint!(intra_new::IntraLegendre, intra_prev::IntraLegendre, n_frames_prev::Int)
+    for dim in 1:intra_new.ndims
+        # Copy coefficients (preserves polynomial shape)
+        intra_new.dm[dim].coefficients .= intra_prev.dm[dim].coefficients
+
+        # Compute offset: we want startpoint_new = endpoint_prev
+        # Currently: startpoint_new = startpoint_prev (same coefficients)
+        startpoint = evaluate_at_frame(intra_prev.dm[dim], 1)
+        endpoint = evaluate_at_frame(intra_prev.dm[dim], n_frames_prev)
+        offset = endpoint - startpoint
+
+        # Shift polynomial at t=-1 by adjusting c1
+        # P_1(-1) = -1, so adding 'offset' to value requires: c1 -= offset
+        intra_new.dm[dim].coefficients[1] -= offset
+    end
+end
+
+"""
     LegendrePolynomial
 
 Combined intra + inter Legendre drift model.

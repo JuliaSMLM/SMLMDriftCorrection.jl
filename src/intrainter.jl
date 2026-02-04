@@ -92,18 +92,22 @@ function correctdrift!(smld::SMLD, shift::Vector{Float64})
 end
 
 """
-    findintra!(intra, smld, dataset, maxn)
+    findintra!(intra, smld, dataset, maxn; skip_init=false)
 
 Find and correct intra-dataset drift using entropy minimization with
 adaptive KDTree neighbor rebuilding.
 
 Uses KL divergence entropy cost function with adaptive neighbor tracking.
 Only rebuilds neighbors when drift changes by more than 0.5 μm.
+
+# Keyword Arguments
+- `skip_init=false`: If true, skip random initialization (use when warmstarted externally)
 """
 function findintra!(intra::AbstractIntraDrift,
     smld::SMLD,
     dataset::Int,
-    maxn::Int)
+    maxn::Int;
+    skip_init::Bool = false)
 
     idx = [e.dataset for e in smld.emitters] .== dataset
     emitters = smld.emitters[idx]
@@ -121,9 +125,11 @@ function findintra!(intra::AbstractIntraDrift,
         σ_z = Float64[e.σ_z for e in emitters]
     end
 
-    # Initialize with small random values
+    # Initialize with small random values (unless warmstarted externally)
     nframes = smld.n_frames
-    initialize_random!(intra, 0.01, nframes)
+    if !skip_init
+        initialize_random!(intra, 0.01, nframes)
+    end
 
     # Convert to parameter vector for optimization
     θ0 = Float64.(intra2theta(intra))

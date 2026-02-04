@@ -47,7 +47,7 @@ AbstractIntraDrift1D (1D polynomial components)
 │
 InterShift (per-dataset constant shift)
 │
-DriftInfo (output struct with model, timing, convergence info)
+DriftInfo (output struct with model, timing, convergence, roi_indices)
 ```
 
 ### Key Data Flow
@@ -67,11 +67,12 @@ DriftInfo (output struct with model, timing, convergence info)
 - `cost_entropy.jl`: Entropy calculations (KL divergence, `entropy_HD`, `ub_entropy`)
 - `utilities.jl`: `filter_emitters()`, `chunk_smld()`, `drift_trajectory()`
 - `crosscorr.jl`: Cross-correlation helpers (`findshift`, `histimage2D`, `crosscorr2D`)
+- `roi_selection.jl`: Auto-ROI subsampling (`calculate_n_locs_required`, `find_dense_roi`)
 - `typedefs.jl`: Abstract types, `InterShift`, `DriftInfo`
 
 ### Adaptive Neighbor Optimization (Intra-dataset)
 
-The `NeighborState` struct tracks KDTree neighbors and rebuilds only when drift changes significantly (threshold: 0.5 μm). This avoids O(N log N) tree rebuilds on every optimizer iteration.
+The `NeighborState` struct tracks KDTree neighbors and rebuilds only when drift changes significantly (threshold: 100 nm). This avoids O(N log N) tree rebuilds on every optimizer iteration.
 
 ### Inter-dataset Alignment (Merged Cloud Entropy)
 
@@ -90,14 +91,24 @@ This properly incorporates localization uncertainties (σ) and works well for re
 
 ### Dataset Modes
 
-Both modes use the same entropy-based alignment algorithm. The difference is semantic:
+- `:registered` (default): Datasets are independent acquisitions with spatial overlap. Uses entropy-based inter-dataset alignment via `findinter!()`.
+- `:continuous`: One long acquisition split into files. Uses polynomial endpoint chaining (warmstart) for inter-dataset alignment since chunks have temporal but not spatial overlap.
 
-- `:registered` (default): Datasets are independent acquisitions. Use default trajectory plotting.
-- `:continuous`: One long acquisition split into files. Use `drift_trajectory(model; cumulative=true)` for plotting.
-
-For continuous mode, optional chunking splits datasets for finer-grained correction:
+**Chunking guidance for continuous mode**: Consider chunking when acquisitions exceed ~4000 frames, using `chunk_frames=4000` as a reasonable maximum. Shorter acquisitions can use a single polynomial with moderate degree. The warmstart mechanism initializes each chunk's polynomial from the previous chunk's endpoint for smooth transitions.
 ```julia
-(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous, n_chunks=10)
+# Short acquisition (<4000 frames) - single polynomial
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous, degree=3)
+
+# Long acquisition - chunk into ~4000 frame segments
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous, chunk_frames=4000)
+
+# Multi-file data - datasets already separate, no explicit chunking needed
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous)
+```
+
+For trajectory plotting in continuous mode:
+```julia
+traj = drift_trajectory(info.model; cumulative=true)
 ```
 
 ## Usage Patterns
@@ -156,6 +167,15 @@ smld_roi = filter_emitters(smld, mask)
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start=nothing`: Previous model for warm starting optimization
 - `verbose=0`: 0=quiet, 1=info, 2=debug
+
+### Auto-ROI Parameters
+
+- `auto_roi=false`: Automatically select dense ROI for faster estimation
+- `σ_loc=0.010`: Typical localization precision (μm) for ROI sizing
+- `σ_target=0.001`: Target drift precision (μm) for ROI sizing
+- `roi_safety_factor=2.0`: Safety multiplier for required localizations
+
+Dense ROI selection can improve both speed and accuracy by focusing on regions where localizations have more informative neighbors (same underlying molecules).
 
 ## Units
 

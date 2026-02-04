@@ -158,7 +158,7 @@ function chunk_smld(smld::SMLD; chunk_frames::Int=0, n_chunks::Int=0)
     chunked_smld = typeof(smld)(
         new_emitters,
         smld.camera,
-        frames_per_chunk,  # Use standard chunk size (last chunk handled internally)
+        last_chunk_frames,  # Use last chunk size (>= standard) so all frames normalize to [-1,1]
         new_n_datasets,
         copy(smld.metadata)
     )
