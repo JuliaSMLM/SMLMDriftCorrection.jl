@@ -25,14 +25,16 @@ Supports warm start via `info.model`.
 - `converged::Bool`: Whether convergence criterion was met (always true for :fft/:singlepass)
 - `entropy::Float64`: Final entropy value after correction
 - `history::Vector{Float64}`: Entropy per iteration (empty for :fft)
+- `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subsampling (nothing if not used)
 
 # Usage
 ```julia
 (smld_corrected, info) = driftcorrect(smld)
 info.converged    # check convergence
 info.entropy      # final value
-info.elapsed_ns   # timing
+info.elapsed_s    # timing
 plot(info.history)  # diagnostics
+info.roi_indices  # ROI used for estimation (nothing if auto_roi=false)
 
 # Warm start from previous result
 (smld2, info2) = driftcorrect(smld2; warm_start=info.model)
@@ -46,4 +48,5 @@ struct DriftInfo{M<:AbstractIntraInter}
     converged::Bool
     entropy::Float64
     history::Vector{Float64}
+    roi_indices::Union{Nothing, Vector{Int}}
 end

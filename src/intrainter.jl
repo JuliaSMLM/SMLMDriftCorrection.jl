@@ -134,7 +134,7 @@ function findintra!(intra::AbstractIntraDrift,
 
     # Adaptive entropy cost function
     k = min(maxn, N - 1)
-    rebuild_threshold = 0.5  # μm - entropy is robust, rebuild rarely
+    rebuild_threshold = 0.1  # μm (100nm) - rebuild when drift changes significantly
     state = NeighborState(N, k, rebuild_threshold)
 
     if intra.ndims == 2
@@ -280,7 +280,7 @@ function findinter!(dm::AbstractIntraInter,
 
     # Adaptive neighbor state - only rebuild KDTree when shift changes significantly
     k = min(maxn, N_n + N_ref - 1)
-    rebuild_threshold = 0.5  # μm - same as intra-dataset
+    rebuild_threshold = 0.1  # μm (100nm) - same as intra-dataset
 
     # Build cost function with optional regularization
     if n_dims == 2

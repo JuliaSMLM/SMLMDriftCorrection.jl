@@ -22,7 +22,7 @@ entropy-based cost function and adaptive KDTree neighbor building.
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start=nothing`: Previous model for warm starting optimization
 - `verbose=0`: Verbosity level (0=quiet, 1=info, 2=debug)
-- `auto_roi=true`: Automatically select dense ROI for faster estimation
+- `auto_roi=true`: Automatically select dense ROI for faster and more accurate estimation
 - `σ_loc=0.010`: Typical localization precision (μm) for ROI sizing
 - `σ_target=0.001`: Target drift precision (μm) for ROI sizing
 - `roi_safety_factor=2.0`: Safety multiplier for required localizations
@@ -105,7 +105,7 @@ function driftcorrect(smld::SMLD;
 
     # Handle automatic ROI subsampling for faster estimation
     smld_estimation = smld_work
-    roi_applied = false
+    roi_indices = nothing  # Track which indices were used (nothing if not subsampled)
 
     if auto_roi
         n_locs_total = length(smld_work.emitters)
@@ -117,7 +117,6 @@ function driftcorrect(smld::SMLD;
         if n_locs_total > 2 * n_locs_required
             roi_indices = find_dense_roi(smld_work, n_locs_required)
             smld_estimation = filter_emitters(smld_work, roi_indices)
-            roi_applied = true
             if verbose > 0
                 @info("SMLMDriftCorrection: auto_roi selected $(length(roi_indices)) of $n_locs_total locs for estimation")
             end
@@ -162,7 +161,8 @@ function driftcorrect(smld::SMLD;
         result.iterations,
         result.converged,
         final_entropy,
-        result.history
+        result.history,
+        roi_indices
     )
 
     return (smld_corrected, info)
@@ -174,12 +174,14 @@ end
 Continue drift correction from a previous result using the model from info.
 
 # Keyword Arguments
+- `dataset_mode=:registered`: Dataset mode (`:registered` or `:continuous`)
 - `max_iterations=10`: Additional iterations to run
 - `convergence_tol=0.001`: Convergence tolerance (μm)
 - `maxn=200`: Maximum neighbors for entropy calculation
 - `verbose=0`: Verbosity level
 """
 function driftcorrect(smld::SMLD, info::DriftInfo;
+    dataset_mode::Symbol = :registered,
     max_iterations::Int = 10,
     convergence_tol::Float64 = 0.001,
     maxn::Int = 200,
@@ -192,7 +194,7 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
     model = deepcopy(info.model)
 
     # Continue with iterative refinement
-    iter_result = _driftcorrect_iterate!(model, smld_work, maxn, max_iterations,
+    iter_result = _driftcorrect_iterate!(model, smld_work, dataset_mode, maxn, max_iterations,
                                           convergence_tol, verbose,
                                           info.iterations, copy(info.history))
 
@@ -211,7 +213,8 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
         iter_result.iterations,
         iter_result.converged,
         final_entropy,
-        iter_result.history
+        iter_result.history,
+        info.roi_indices  # Preserve ROI from original call
     )
 
     return (smld_corrected, new_info)
@@ -373,33 +376,30 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         end
     end
 
-    # Step 2: Initialize inter-shifts
-    # For continuous mode: chain polynomial endpoints (chunks are temporally adjacent)
-    # For registered mode: use cross-correlation (datasets share spatial overlap)
+    # Step 2: Inter-dataset alignment
+    # For continuous mode: chain polynomial endpoints (chunks are temporally adjacent, no spatial overlap)
+    # For registered mode: entropy optimization (datasets share spatial overlap)
     if dataset_mode == :continuous
+        # Continuous mode: warmstart chains polynomials exactly - this IS the solution
+        # Skip entropy optimization since chunks have no spatial overlap
         _warmstart_inter_continuous!(model, smld, verbose)
-    end
-
-    # Step 3: Inter-dataset correction vs DS1 first
-    if verbose > 0
-        @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
-    end
-    for nn = 2:smld.n_datasets
-        findinter!(model, smld, nn, [1], maxn)
-    end
-
-    # Step 4: Refine inter vs all earlier datasets
-    if verbose > 0
-        @info("SMLMDriftCorrection: refining inter-dataset alignment (vs earlier)")
-    end
-    for nn = 2:smld.n_datasets
-        ref_datasets = collect(1:(nn-1))
-        findinter!(model, smld, nn, ref_datasets, maxn)
-    end
-
-    # Normalize for continuous mode
-    if dataset_mode == :continuous
         _normalize_continuous!(model)
+    else
+        # Registered mode: entropy-based alignment (datasets have spatial overlap)
+        if verbose > 0
+            @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
+        end
+        for nn = 2:smld.n_datasets
+            findinter!(model, smld, nn, [1], maxn)
+        end
+
+        if verbose > 0
+            @info("SMLMDriftCorrection: refining inter-dataset alignment (vs earlier)")
+        end
+        for nn = 2:smld.n_datasets
+            ref_datasets = collect(1:(nn-1))
+            findinter!(model, smld, nn, ref_datasets, maxn)
+        end
     end
 
     return (iterations=1, converged=true, history=Float64[])
@@ -429,7 +429,7 @@ function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
     end
 
     # Continue with iterative refinement
-    result = _driftcorrect_iterate!(model, smld, maxn, max_iterations - 1,
+    result = _driftcorrect_iterate!(model, smld, dataset_mode, maxn, max_iterations - 1,
                                      convergence_tol, verbose, 1, history)
 
     return result
@@ -439,7 +439,7 @@ end
 Core iterative refinement loop - used by both :iterative and continuation.
 """
 function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
-                                 maxn::Int, max_iterations::Int,
+                                 dataset_mode::Symbol, maxn::Int, max_iterations::Int,
                                  convergence_tol::Float64, verbose::Int,
                                  starting_iteration::Int, history::Vector{Float64})
 
@@ -460,10 +460,17 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
             findintra!(model.intra[nn], smld_shifted, nn, maxn)
         end
 
-        # All-to-all inter: align each dataset to all others
-        for nn = 2:n_datasets
-            others = collect(setdiff(1:n_datasets, nn))
-            findinter!(model, smld, nn, others, maxn)
+        # Update inter-shifts based on mode
+        if dataset_mode == :continuous
+            # Continuous mode: re-chain polynomial endpoints (no entropy optimization)
+            _warmstart_inter_continuous!(model, smld, verbose > 1 ? verbose : 0)
+            _normalize_continuous!(model)
+        else
+            # Registered mode: entropy-based all-to-all alignment
+            for nn = 2:n_datasets
+                others = collect(setdiff(1:n_datasets, nn))
+                findinter!(model, smld, nn, others, maxn)
+            end
         end
 
         # Compute entropy for this iteration
