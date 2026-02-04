@@ -83,7 +83,7 @@ function generate_test_smld(;
         pattern = Nmer2D(n=6, d=0.2),  # hexamer, 200nm diameter (matches examples)
         seed::Int = DEFAULT_PARAMS.seed)
 
-    params = StaticSMLMParams(
+    params = StaticSMLMConfig(
         Float64(density),  # ρ: emitters per μm²
         0.13,              # σ_psf: PSF width in μm (130nm)
         50,                # minphotons: minimum photons for detection

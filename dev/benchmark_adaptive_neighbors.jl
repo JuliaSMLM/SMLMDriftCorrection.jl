@@ -30,7 +30,7 @@ println("=" ^ 70)
 =============================================================================#
 
 function generate_test_data(; n_datasets=5, n_frames=500, pattern_density=5.0)
-    params = StaticSMLMParams(
+    params = StaticSMLMConfig(
         pattern_density,
         0.13,             # σ_psf
         50,               # minphotons

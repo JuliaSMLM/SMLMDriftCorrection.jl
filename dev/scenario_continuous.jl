@@ -104,7 +104,8 @@ function run_continuous_diagnostics(;
             degree = degree,
             dataset_mode = :continuous,
             quality = quality,
-            max_iterations = 5
+            max_iterations = 5,
+            auto_roi = false
         )
 
         # Compute RMSD (relative, removing global offset) for this tier

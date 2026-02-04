@@ -362,24 +362,13 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         @info("SMLMDriftCorrection: singlepass mode")
     end
 
-    # Step 1: Intra-dataset correction
+    # Step 1: Intra-dataset correction (same path for both modes)
     if model.intra[1].dm[1].degree > 0
         if verbose > 0
             @info("SMLMDriftCorrection: starting intra-dataset correction")
         end
-
-        if dataset_mode == :continuous && smld.n_datasets > 1
-            # Continuous mode: sequential with warmstart from previous chunk
-            findintra!(model.intra[1], smld, 1, maxn)
-            for nn = 2:smld.n_datasets
-                initialize_from_endpoint!(model.intra[nn], model.intra[nn-1], smld.n_frames)
-                findintra!(model.intra[nn], smld, nn, maxn; skip_init=true)
-            end
-        else
-            # Registered mode (or single dataset): parallel processing
-            Threads.@threads for nn = 1:smld.n_datasets
-                findintra!(model.intra[nn], smld, nn, maxn)
-            end
+        Threads.@threads for nn = 1:smld.n_datasets
+            findintra!(model.intra[nn], smld, nn, maxn)
         end
     else
         if verbose > 0
@@ -468,18 +457,8 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
 
         # Re-run intra with inter applied (shifted coordinates)
         smld_shifted = apply_inter_only(smld, model)
-        if dataset_mode == :continuous && n_datasets > 1
-            # Continuous mode: sequential with warmstart from previous chunk
-            findintra!(model.intra[1], smld_shifted, 1, maxn)
-            for nn = 2:n_datasets
-                initialize_from_endpoint!(model.intra[nn], model.intra[nn-1], smld.n_frames)
-                findintra!(model.intra[nn], smld_shifted, nn, maxn; skip_init=true)
-            end
-        else
-            # Registered mode (or single dataset): parallel processing
-            Threads.@threads for nn = 1:n_datasets
-                findintra!(model.intra[nn], smld_shifted, nn, maxn)
-            end
+        Threads.@threads for nn = 1:n_datasets
+            findintra!(model.intra[nn], smld_shifted, nn, maxn)
         end
 
         # Update inter-shifts
