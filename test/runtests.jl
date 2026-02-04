@@ -283,4 +283,79 @@ using Random
         @test info_iter.iterations >= 1
         @test info_iter.elapsed_s > 0
     end
+
+    # ========== ROI Selection ==========
+    @testset "ROI selection functions" begin
+        # Test calculate_n_locs_required scaling
+        @testset "calculate_n_locs_required" begin
+            # Default parameters
+            n_req = DC.calculate_n_locs_required(1000)
+            @test n_req > 0
+            @test n_req isa Int
+
+            # Higher degree needs more data
+            n_req_d2 = DC.calculate_n_locs_required(1000; degree=2)
+            n_req_d3 = DC.calculate_n_locs_required(1000; degree=3)
+            @test n_req_d3 > n_req_d2
+
+            # Tighter target needs more data
+            n_req_tight = DC.calculate_n_locs_required(1000; σ_target=0.0005)
+            n_req_loose = DC.calculate_n_locs_required(1000; σ_target=0.002)
+            @test n_req_tight > n_req_loose
+
+            # More frames with same density needs more locs (lower λ_window)
+            n_req_1k = DC.calculate_n_locs_required(1000)
+            n_req_5k = DC.calculate_n_locs_required(5000)
+            @test n_req_5k > n_req_1k
+        end
+
+        # Test find_dense_roi
+        @testset "find_dense_roi" begin
+            n_target = 500
+            indices = DC.find_dense_roi(smld_noisy, n_target; k=5)
+            @test length(indices) == n_target
+            @test all(1 .<= indices .<= length(smld_noisy.emitters))
+            @test length(unique(indices)) == n_target  # no duplicates
+
+            # Test edge case: request more than available
+            n_total = length(smld_noisy.emitters)
+            indices_all = DC.find_dense_roi(smld_noisy, n_total + 100)
+            @test length(indices_all) == n_total
+
+            # Test 3D
+            indices_3d = DC.find_dense_roi(smld_noisy3, n_target; k=5)
+            @test length(indices_3d) == n_target
+        end
+    end
+
+    # ========== Auto ROI Integration ==========
+    @testset "Auto ROI integration" begin
+        # Test that auto_roi=true produces reasonable results
+        # Use smaller tolerance since we have more localizations than needed
+        (smld_roi, info_roi) = DC.driftcorrect(smld_drift; auto_roi=true, verbose=1)
+        @test info_roi isa DC.DriftInfo
+        @test info_roi.elapsed_s > 0
+
+        # Compare with auto_roi=false (should be similar accuracy, different speed)
+        (smld_no_roi, info_no_roi) = DC.driftcorrect(smld_drift; auto_roi=false)
+
+        # Both should correct drift reasonably well
+        smld_roi_x = [e.x for e in smld_roi.emitters]
+        smld_roi_y = [e.y for e in smld_roi.emitters]
+        smld_noisy_x = [e.x for e in smld_noisy.emitters]
+        smld_noisy_y = [e.y for e in smld_noisy.emitters]
+        rmsd_roi = sqrt(sum((smld_roi_x .- smld_noisy_x).^2 .+
+                            (smld_roi_y .- smld_noisy_y).^2) ./ length(smld_noisy.emitters))
+        print("rmsd 2D (auto_roi=true) = $rmsd_roi\n")
+        @test rmsd_roi < 0.100  # 100 nm tolerance
+
+        # Test with custom ROI parameters
+        (smld_custom, info_custom) = DC.driftcorrect(smld_drift;
+            auto_roi=true, σ_loc=0.015, σ_target=0.002, roi_safety_factor=1.5)
+        @test info_custom isa DC.DriftInfo
+
+        # Test auto_roi with 3D data
+        (smld_roi3, info_roi3) = DC.driftcorrect(smld_drift3; auto_roi=true)
+        @test info_roi3 isa DC.DriftInfo
+    end
 end

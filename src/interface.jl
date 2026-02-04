@@ -22,6 +22,10 @@ entropy-based cost function and adaptive KDTree neighbor building.
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start=nothing`: Previous model for warm starting optimization
 - `verbose=0`: Verbosity level (0=quiet, 1=info, 2=debug)
+- `auto_roi=true`: Automatically select dense ROI for faster estimation
+- `σ_loc=0.010`: Typical localization precision (μm) for ROI sizing
+- `σ_target=0.001`: Target drift precision (μm) for ROI sizing
+- `roi_safety_factor=2.0`: Safety multiplier for required localizations
 
 # Quality Tiers
 - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
@@ -67,7 +71,11 @@ function driftcorrect(smld::SMLD;
     max_iterations::Int = 10,
     convergence_tol::Float64 = 0.001,
     warm_start::Union{Nothing, AbstractIntraInter} = nothing,
-    verbose::Int = 0)
+    verbose::Int = 0,
+    auto_roi::Bool = true,
+    σ_loc::Float64 = 0.010,
+    σ_target::Float64 = 0.001,
+    roi_safety_factor::Float64 = 2.0)
 
     t_start = time_ns()
 
@@ -95,7 +103,31 @@ function driftcorrect(smld::SMLD;
         end
     end
 
+    # Handle automatic ROI subsampling for faster estimation
+    smld_estimation = smld_work
+    roi_applied = false
+
+    if auto_roi
+        n_locs_total = length(smld_work.emitters)
+        n_locs_required = calculate_n_locs_required(smld_work.n_frames;
+            degree=degree, σ_loc=σ_loc, σ_target=σ_target,
+            safety_factor=roi_safety_factor)
+
+        # Only subsample if we have significantly more data than needed (2x threshold)
+        if n_locs_total > 2 * n_locs_required
+            roi_indices = find_dense_roi(smld_work, n_locs_required)
+            smld_estimation = filter_emitters(smld_work, roi_indices)
+            roi_applied = true
+            if verbose > 0
+                @info("SMLMDriftCorrection: auto_roi selected $(length(roi_indices)) of $n_locs_total locs for estimation")
+            end
+        elseif verbose > 1
+            @info("SMLMDriftCorrection: auto_roi not applied (have $n_locs_total, need $n_locs_required)")
+        end
+    end
+
     # Create drift model (or use warm start)
+    # Model is always created from full smld_work to preserve dataset structure
     if warm_start !== nothing
         driftmodel = deepcopy(warm_start)
         if verbose > 0
@@ -105,13 +137,13 @@ function driftcorrect(smld::SMLD;
         driftmodel = LegendrePolynomial(smld_work; degree=degree)
     end
 
-    # Dispatch to appropriate quality tier
+    # Dispatch to appropriate quality tier (using ROI-subsampled data for estimation)
     if quality == :fft
-        result = _driftcorrect_fft!(driftmodel, smld_work, dataset_mode, verbose)
+        result = _driftcorrect_fft!(driftmodel, smld_estimation, dataset_mode, verbose)
     elseif quality == :singlepass
-        result = _driftcorrect_singlepass!(driftmodel, smld_work, dataset_mode, maxn, verbose)
+        result = _driftcorrect_singlepass!(driftmodel, smld_estimation, dataset_mode, maxn, verbose)
     else  # :iterative
-        result = _driftcorrect_iterative!(driftmodel, smld_work, dataset_mode, maxn,
+        result = _driftcorrect_iterative!(driftmodel, smld_estimation, dataset_mode, maxn,
                                           max_iterations, convergence_tol, verbose)
     end
 
@@ -341,7 +373,14 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         end
     end
 
-    # Step 2: Inter-dataset correction vs DS1 first
+    # Step 2: Initialize inter-shifts
+    # For continuous mode: chain polynomial endpoints (chunks are temporally adjacent)
+    # For registered mode: use cross-correlation (datasets share spatial overlap)
+    if dataset_mode == :continuous
+        _warmstart_inter_continuous!(model, smld, verbose)
+    end
+
+    # Step 3: Inter-dataset correction vs DS1 first
     if verbose > 0
         @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
     end
@@ -349,7 +388,7 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         findinter!(model, smld, nn, [1], maxn)
     end
 
-    # Step 3: Refine inter vs all earlier datasets
+    # Step 4: Refine inter vs all earlier datasets
     if verbose > 0
         @info("SMLMDriftCorrection: refining inter-dataset alignment (vs earlier)")
     end

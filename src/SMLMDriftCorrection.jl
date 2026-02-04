@@ -15,6 +15,7 @@ include("crosscorr.jl")
 include("legendre.jl")
 include("intrainter.jl")
 include("utilities.jl")
+include("roi_selection.jl")
 include("interface.jl")
 
 export driftcorrect
