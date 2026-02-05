@@ -22,7 +22,7 @@ entropy-based cost function and adaptive KDTree neighbor building.
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start=nothing`: Previous model for warm starting optimization
 - `verbose=0`: Verbosity level (0=quiet, 1=info, 2=debug)
-- `auto_roi=true`: Automatically select dense ROI for faster and more accurate estimation
+- `auto_roi=false`: Set to `true` for faster (but slightly less accurate) estimation using a dense ROI subset
 - `σ_loc=0.010`: Typical localization precision (μm) for ROI sizing
 - `σ_target=0.001`: Target drift precision (μm) for ROI sizing
 - `roi_safety_factor=4.0`: Safety multiplier for required localizations
@@ -72,7 +72,7 @@ function driftcorrect(smld::SMLD;
     convergence_tol::Float64 = 0.001,
     warm_start::Union{Nothing, AbstractIntraInter} = nothing,
     verbose::Int = 0,
-    auto_roi::Bool = true,
+    auto_roi::Bool = false,
     σ_loc::Float64 = 0.010,
     σ_target::Float64 = 0.001,
     roi_safety_factor::Float64 = 4.0)
