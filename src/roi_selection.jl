@@ -49,24 +49,28 @@ function calculate_n_locs_required(n_frames::Int;
 end
 
 """
-    find_dense_roi(smld, n_locs_target; k=10) -> indices
+    find_dense_roi(smld, n_locs_target; bin_size=1.0) -> indices
 
-Find indices of the `n_locs_target` densest localizations using k-NN density estimation.
+Find indices of localizations within a dense contiguous rectangular region.
 
-Uses inverse mean k-nearest-neighbor distance as a density proxy.
-Returns indices sorted by density (highest first), truncated to n_locs_target.
+Selects a rectangular ROI containing at least `n_locs_target` localizations,
+chosen from the densest part of the field of view. Returns ALL localizations
+within the selected region (not scattered points).
+
+This ensures that multiple blinks from the same emitter are included together,
+which is essential for entropy-based drift correction.
 
 # Arguments
 - `smld`: SMLD structure with localization data
-- `n_locs_target`: Number of localizations to select
+- `n_locs_target`: Minimum number of localizations needed
 
 # Keyword Arguments
-- `k=10`: Number of neighbors for density estimation
+- `bin_size=1.0`: Bin size in μm for density estimation grid
 
 # Returns
-Vector of integer indices into smld.emitters for the densest localizations.
+Vector of integer indices into smld.emitters for all localizations in the ROI.
 """
-function find_dense_roi(smld::SMLD, n_locs_target::Int; k::Int = 10)
+function find_dense_roi(smld::SMLD, n_locs_target::Int; bin_size::Float64 = 1.0)
     n_locs = length(smld.emitters)
 
     # Edge case: if target >= total, return all
@@ -74,42 +78,91 @@ function find_dense_roi(smld::SMLD, n_locs_target::Int; k::Int = 10)
         return collect(1:n_locs)
     end
 
-    # Build coordinate matrix
-    is_3d = nDims(smld) == 3
-    if is_3d
-        coords = Matrix{Float64}(undef, 3, n_locs)
-        for (i, e) in enumerate(smld.emitters)
-            coords[1, i] = e.x
-            coords[2, i] = e.y
-            coords[3, i] = e.z
-        end
-    else
-        coords = Matrix{Float64}(undef, 2, n_locs)
-        for (i, e) in enumerate(smld.emitters)
-            coords[1, i] = e.x
-            coords[2, i] = e.y
-        end
-    end
+    # Extract coordinates
+    x = [e.x for e in smld.emitters]
+    y = [e.y for e in smld.emitters]
 
-    # Build KDTree and query k+1 neighbors (includes self)
-    tree = KDTree(coords)
-    k_query = min(k + 1, n_locs)
-    _, dists = knn(tree, coords, k_query)
+    x_min, x_max = extrema(x)
+    y_min, y_max = extrema(y)
 
-    # Compute density as inverse of mean k-NN distance (excluding self at dist=0)
-    density = Vector{Float64}(undef, n_locs)
+    # Build density grid
+    nx = max(1, ceil(Int, (x_max - x_min) / bin_size))
+    ny = max(1, ceil(Int, (y_max - y_min) / bin_size))
+
+    # Count localizations per bin
+    counts = zeros(Int, nx, ny)
     for i in 1:n_locs
-        # Skip self (first neighbor at distance ~0)
-        d = dists[i]
-        if length(d) > 1
-            mean_dist = sum(d[2:end]) / (length(d) - 1)
-            density[i] = 1.0 / max(mean_dist, 1e-10)
-        else
-            density[i] = 0.0
+        ix = clamp(floor(Int, (x[i] - x_min) / bin_size) + 1, 1, nx)
+        iy = clamp(floor(Int, (y[i] - y_min) / bin_size) + 1, 1, ny)
+        counts[ix, iy] += 1
+    end
+
+    # Find smallest rectangular window containing >= n_locs_target
+    # Use sliding window approach, starting small and growing
+    best_roi = nothing
+    best_count = 0
+
+    # Precompute cumulative sum for fast window queries
+    cumsum_counts = zeros(Int, nx + 1, ny + 1)
+    for i in 1:nx, j in 1:ny
+        cumsum_counts[i+1, j+1] = counts[i, j] + cumsum_counts[i, j+1] +
+                                   cumsum_counts[i+1, j] - cumsum_counts[i, j]
+    end
+
+    # Helper to get count in rectangle [i1:i2, j1:j2]
+    function window_count(i1, i2, j1, j2)
+        return cumsum_counts[i2+1, j2+1] - cumsum_counts[i1, j2+1] -
+               cumsum_counts[i2+1, j1] + cumsum_counts[i1, j1]
+    end
+
+    # Search for smallest window with enough localizations
+    # Start with small windows, grow until we find one with enough
+    found = false
+    for window_size in 1:max(nx, ny)
+        if found
+            break
+        end
+        for wx in 1:min(window_size, nx)
+            wy = window_size - wx + 1
+            if wy < 1 || wy > ny
+                continue
+            end
+            for i1 in 1:(nx - wx + 1)
+                for j1 in 1:(ny - wy + 1)
+                    i2 = i1 + wx - 1
+                    j2 = j1 + wy - 1
+                    cnt = window_count(i1, i2, j1, j2)
+                    if cnt >= n_locs_target
+                        if best_roi === nothing || cnt < best_count
+                            best_roi = (i1, i2, j1, j2)
+                            best_count = cnt
+                            found = true
+                        end
+                    end
+                end
+            end
         end
     end
 
-    # Sort by density (descending) and return top n_locs_target indices
-    sorted_indices = sortperm(density, rev=true)
-    return sorted_indices[1:n_locs_target]
+    # If no window found (shouldn't happen), return all
+    if best_roi === nothing
+        return collect(1:n_locs)
+    end
+
+    # Convert bin indices to spatial coordinates
+    i1, i2, j1, j2 = best_roi
+    roi_x_min = x_min + (i1 - 1) * bin_size
+    roi_x_max = x_min + i2 * bin_size
+    roi_y_min = y_min + (j1 - 1) * bin_size
+    roi_y_max = y_min + j2 * bin_size
+
+    # Return indices of ALL localizations within the ROI
+    indices = Int[]
+    for i in 1:n_locs
+        if roi_x_min <= x[i] <= roi_x_max && roi_y_min <= y[i] <= roi_y_max
+            push!(indices, i)
+        end
+    end
+
+    return indices
 end
