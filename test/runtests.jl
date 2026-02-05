@@ -309,13 +309,13 @@ using Random
             @test n_req_5k > n_req_1k
         end
 
-        # Test find_dense_roi
+        # Test find_dense_roi (returns contiguous region with >= n_target locs)
         @testset "find_dense_roi" begin
             n_target = 500
-            indices = DC.find_dense_roi(smld_noisy, n_target; k=5)
-            @test length(indices) == n_target
+            indices = DC.find_dense_roi(smld_noisy, n_target)
+            @test length(indices) >= n_target  # at least n_target
             @test all(1 .<= indices .<= length(smld_noisy.emitters))
-            @test length(unique(indices)) == n_target  # no duplicates
+            @test length(unique(indices)) == length(indices)  # no duplicates
 
             # Test edge case: request more than available
             n_total = length(smld_noisy.emitters)
@@ -323,8 +323,8 @@ using Random
             @test length(indices_all) == n_total
 
             # Test 3D
-            indices_3d = DC.find_dense_roi(smld_noisy3, n_target; k=5)
-            @test length(indices_3d) == n_target
+            indices_3d = DC.find_dense_roi(smld_noisy3, n_target)
+            @test length(indices_3d) >= n_target
         end
     end
 
