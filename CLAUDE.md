@@ -170,12 +170,12 @@ smld_roi = filter_emitters(smld, mask)
 
 ### Auto-ROI Parameters
 
-- `auto_roi=false`: Automatically select dense ROI for faster estimation
+- `auto_roi=false`: Set to `true` for faster processing using a dense spatial subset (~15% of data). Trades some accuracy (~1.4nm vs ~0.5nm RMSD) for speed.
 - `σ_loc=0.010`: Typical localization precision (μm) for ROI sizing
 - `σ_target=0.001`: Target drift precision (μm) for ROI sizing
-- `roi_safety_factor=2.0`: Safety multiplier for required localizations
+- `roi_safety_factor=4.0`: Safety multiplier for required localizations
 
-Dense ROI selection can improve both speed and accuracy by focusing on regions where localizations have more informative neighbors (same underlying molecules).
+When `auto_roi=true`, selects a contiguous rectangular region from the densest part of the FOV. This preserves blink pairs from the same emitters which is essential for entropy-based optimization.
 
 ## Units
 
