@@ -25,7 +25,7 @@ entropy-based cost function and adaptive KDTree neighbor building.
 - `auto_roi=true`: Automatically select dense ROI for faster and more accurate estimation
 - `σ_loc=0.010`: Typical localization precision (μm) for ROI sizing
 - `σ_target=0.001`: Target drift precision (μm) for ROI sizing
-- `roi_safety_factor=2.0`: Safety multiplier for required localizations
+- `roi_safety_factor=4.0`: Safety multiplier for required localizations
 
 # Quality Tiers
 - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
@@ -75,7 +75,7 @@ function driftcorrect(smld::SMLD;
     auto_roi::Bool = true,
     σ_loc::Float64 = 0.010,
     σ_target::Float64 = 0.001,
-    roi_safety_factor::Float64 = 2.0)
+    roi_safety_factor::Float64 = 4.0)
 
     t_start = time_ns()
 
