@@ -2,12 +2,14 @@
 
 """
     driftcorrect(smld; kwargs...) -> (corrected_smld, info)
+    driftcorrect(smld, config::DriftConfig) -> (corrected_smld, info)
 
 Main interface for drift correction. Uses Legendre polynomial model with
 entropy-based cost function and adaptive KDTree neighbor building.
 
 # Arguments
 - `smld`: SMLD structure containing (X, Y) or (X, Y, Z) localization coordinates (μm)
+- `config`: Optional `DriftConfig` struct (alternative to keyword arguments)
 
 # Keyword Arguments
 - `quality=:singlepass`: Quality tier (`:fft`, `:singlepass`, `:iterative`)
@@ -47,11 +49,12 @@ Tuple `(corrected_smld, info)` where `info::DriftInfo` contains:
 # Basic usage
 (smld_corrected, info) = driftcorrect(smld)
 
+# Using DriftConfig
+config = DriftConfig(; quality=:iterative, degree=3, verbose=1)
+(smld_corrected, info) = driftcorrect(smld, config)
+
 # Fast FFT-only mode
 (smld_corrected, info) = driftcorrect(smld; quality=:fft)
-
-# Full iterative convergence
-(smld_corrected, info) = driftcorrect(smld; quality=:iterative)
 
 # Warm start from previous result
 (smld1, info1) = driftcorrect(smld1; degree=2)
@@ -76,6 +79,17 @@ function driftcorrect(smld::SMLD;
     σ_loc::Float64 = 0.010,
     σ_target::Float64 = 0.001,
     roi_safety_factor::Float64 = 4.0)
+
+    config = DriftConfig(; quality, degree, dataset_mode, chunk_frames, n_chunks,
+        maxn, max_iterations, convergence_tol, warm_start, verbose,
+        auto_roi, σ_loc, σ_target, roi_safety_factor)
+    return driftcorrect(smld, config)
+end
+
+function driftcorrect(smld::SMLD, config::DriftConfig)
+    (; quality, degree, dataset_mode, chunk_frames, n_chunks,
+       maxn, max_iterations, convergence_tol, warm_start, verbose,
+       auto_roi, σ_loc, σ_target, roi_safety_factor) = config
 
     t_start = time_ns()
 

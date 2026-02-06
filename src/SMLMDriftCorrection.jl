@@ -19,6 +19,7 @@ include("roi_selection.jl")
 include("interface.jl")
 
 export driftcorrect
+export DriftConfig
 export DriftInfo
 export filter_emitters
 export drift_trajectory
