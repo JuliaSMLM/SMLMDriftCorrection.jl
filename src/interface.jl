@@ -378,16 +378,23 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
 
     # Step 2: Inter-dataset alignment
     # Both modes use entropy optimization - datasets image the same FOV/structures
+    reg_lambda = 0.0
+    warmstart_values = Vector{Vector{Float64}}()
     if dataset_mode == :continuous
         # Continuous mode: initialize inter-shifts from polynomial endpoints, then optimize
         _warmstart_inter_continuous!(model, smld, verbose)
+        # Estimate endpoint uncertainty and regularize around warmstart
+        reg_lambda = _estimate_continuous_lambda(model, smld.n_frames, verbose)
+        warmstart_values = [copy(model.inter[nn].dm) for nn in 1:smld.n_datasets]
     end
 
     if verbose > 0
         @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
     end
     for nn = 2:smld.n_datasets
-        findinter!(model, smld, nn, [1], maxn)
+        findinter!(model, smld, nn, [1], maxn;
+            regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
+            regularization_lambda = reg_lambda)
     end
 
     if verbose > 0
@@ -395,7 +402,9 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     end
     for nn = 2:smld.n_datasets
         ref_datasets = collect(1:(nn-1))
-        findinter!(model, smld, nn, ref_datasets, maxn)
+        findinter!(model, smld, nn, ref_datasets, maxn;
+            regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
+            regularization_lambda = reg_lambda)
     end
 
     # Normalize continuous mode so drift at (DS=1, frame=1) = 0
@@ -463,15 +472,21 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
 
         # Update inter-shifts
         # Both modes use entropy optimization - datasets image the same FOV/structures
+        reg_lambda = 0.0
+        warmstart_values = Vector{Vector{Float64}}()
         if dataset_mode == :continuous
             # Continuous mode: initialize from polynomial endpoints before optimization
             _warmstart_inter_continuous!(model, smld, verbose > 1 ? verbose : 0)
+            reg_lambda = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
+            warmstart_values = [copy(model.inter[nn].dm) for nn in 1:n_datasets]
         end
 
         # Entropy-based all-to-all alignment
         for nn = 2:n_datasets
             others = collect(setdiff(1:n_datasets, nn))
-            findinter!(model, smld, nn, others, maxn)
+            findinter!(model, smld, nn, others, maxn;
+                regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
+                regularization_lambda = reg_lambda)
         end
 
         # Normalize continuous mode
@@ -557,6 +572,47 @@ function _warmstart_inter_continuous!(model::LegendrePolynomial, smld::SMLD, ver
     if verbose > 0
         @info("SMLMDriftCorrection: initialized inter-shifts from polynomial endpoints")
     end
+end
+
+"""
+Estimate endpoint uncertainty from boundary gaps between adjacent chunks.
+
+After intra-dataset fits, the discontinuity at each boundary measures
+how uncertain the polynomial endpoints are. Each gap has contributions
+from both sides, so σ_endpoint ≈ mean(|gap|) / sqrt(2).
+
+Returns regularization lambda = 1 / σ² for use with findinter!.
+"""
+function _estimate_continuous_lambda(model::LegendrePolynomial, n_frames::Int, verbose::Int)
+    ndims = model.intra[1].ndims
+    n_datasets = model.ndatasets
+
+    if n_datasets < 2
+        return 0.0
+    end
+
+    # Collect boundary gap magnitudes across all dimensions and boundaries
+    gaps = Float64[]
+    for nn = 2:n_datasets
+        ep = endpoint_drift(model.intra[nn-1], n_frames)
+        sp = startpoint_drift(model.intra[nn])
+        for dim in 1:ndims
+            push!(gaps, abs(ep[dim] - sp[dim]))
+        end
+    end
+
+    σ_endpoint = mean(gaps) / sqrt(2)
+
+    # Floor to prevent extreme lambda from tiny gaps
+    σ_endpoint = max(σ_endpoint, 0.001)  # at least 1nm
+
+    λ = 1.0 / σ_endpoint^2
+
+    if verbose > 0
+        @info("SMLMDriftCorrection: continuous regularization σ_endpoint=$(round(σ_endpoint*1000, digits=1))nm, λ=$(round(λ, digits=1))")
+    end
+
+    return λ
 end
 
 """
