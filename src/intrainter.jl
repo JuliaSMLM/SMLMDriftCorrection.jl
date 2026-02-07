@@ -194,6 +194,8 @@ then refines with entropy optimization.
 - `maxn`: maximum neighbors for entropy calculation
 
 # Keyword Arguments
+- `precomputed_corrected`: pre-corrected SMLD (skips `correctdrift` call). Use when
+  calling from threaded loops where `correctdrift` can be computed once outside the loop.
 - `regularization_target`: target shift to regularize towards (default: nothing)
 - `regularization_lambda`: regularization strength (default: 0.0)
   Cost becomes: entropy + λ*||shift - target||²
@@ -203,6 +205,7 @@ function findinter!(dm::AbstractIntraInter,
     dataset_n::Int,
     ref_datasets::Vector{Int},
     maxn::Int;
+    precomputed_corrected::Union{Nothing, SMLD} = nothing,
     regularization_target::Union{Nothing, Vector{Float64}} = nothing,
     regularization_lambda::Float64 = 0.0)
 
@@ -224,7 +227,7 @@ function findinter!(dm::AbstractIntraInter,
     end
 
     # Correct reference datasets fully (intra + inter) for comparison
-    smld_corrected = correctdrift(smld_uncorrected, dm)
+    smld_corrected = precomputed_corrected !== nothing ? precomputed_corrected : correctdrift(smld_uncorrected, dm)
 
     # Extract CORRECTED coords from reference datasets
     idx_ref = [e.dataset in ref_datasets for e in smld_corrected.emitters]

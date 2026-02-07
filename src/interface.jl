@@ -405,8 +405,11 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     if verbose > 0
         @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
     end
-    for nn = 2:smld.n_datasets
+    # Precompute corrected SMLD once (inter[1]=0, so this is just intra correction for DS1)
+    precomputed = correctdrift(smld, model)
+    Threads.@threads for nn = 2:smld.n_datasets
         findinter!(model, smld, nn, [1], maxn;
+            precomputed_corrected = precomputed,
             regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
             regularization_lambda = reg_lambda)
     end
@@ -495,10 +498,12 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
             warmstart_values = [copy(model.inter[nn].dm) for nn in 1:n_datasets]
         end
 
-        # Entropy-based all-to-all alignment
-        for nn = 2:n_datasets
+        # Entropy-based all-to-all alignment (Jacobi: snapshot before parallel loop)
+        precomputed = correctdrift(smld, model)
+        Threads.@threads for nn = 2:n_datasets
             others = collect(setdiff(1:n_datasets, nn))
             findinter!(model, smld, nn, others, maxn;
+                precomputed_corrected = precomputed,
                 regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
                 regularization_lambda = reg_lambda)
         end
