@@ -46,17 +46,19 @@ AbstractIntraDrift1D (1D polynomial components)
 └── LegendrePoly1D (normalized to [-1, 1] time domain)
 │
 InterShift (per-dataset constant shift)
-│
-DriftInfo (output struct with model, timing, convergence, roi_indices)
+
+DriftConfig <: AbstractSMLMConfig (input config, @kwdef)
+DriftInfo{M} <: AbstractSMLMInfo (output struct with model, timing, convergence, roi_indices)
 ```
 
 ### Key Data Flow
 
-1. `driftcorrect(smld)` creates a `LegendrePolynomial` model
+1. `driftcorrect(smld)` or `driftcorrect(smld, config::DriftConfig)` creates a `LegendrePolynomial` model
 2. `findintra!()` optimizes intra-dataset drift per dataset (parallelized with `Threads.@threads`)
-3. `findinter!()` sequentially aligns datasets
+3. `findinter!()` aligns datasets (threaded all-vs-DS1, then sequential refinement vs earlier)
 4. `correctdrift(smld, model)` applies the final corrections
 5. Returns tuple `(smld_corrected, info::DriftInfo)`
+6. Optional continuation: `driftcorrect(smld, info::DriftInfo)` refines from previous result
 
 ### Source Files
 
@@ -70,9 +72,13 @@ DriftInfo (output struct with model, timing, convergence, roi_indices)
 - `roi_selection.jl`: Auto-ROI subsampling (`calculate_n_locs_required`, `find_dense_roi`)
 - `typedefs.jl`: Abstract types, `InterShift`, `DriftInfo`
 
+### Threading
+
+Intra-dataset correction is parallelized with `Threads.@threads` (each dataset independent). The first inter-dataset pass (all vs DS1) is also threaded using a precomputed snapshot of corrected coordinates. The refinement pass (each vs all earlier) is sequential.
+
 ### Adaptive Neighbor Optimization (Intra-dataset)
 
-The `NeighborState` struct tracks KDTree neighbors and rebuilds only when drift changes significantly (threshold: 100 nm). This avoids O(N log N) tree rebuilds on every optimizer iteration.
+The `NeighborState` / `InterNeighborState` structs track KDTree neighbors and rebuild only when drift changes significantly (threshold: 100 nm). This avoids O(N log N) tree rebuilds on every optimizer iteration.
 
 ### Inter-dataset Alignment (Merged Cloud Entropy)
 
@@ -181,10 +187,18 @@ When `auto_roi=true`, selects a contiguous rectangular region from the densest p
 
 All distance units are in **micrometers (μm)**.
 
+### SMLMData Compatibility
+
+The package supports both SMLMData 0.5 and 0.6+ via `_HAS_SIGMA_XY` (compile-time `const`). The `_make_emitter_2d` / `_make_emitter_3d` helpers in `utilities.jl` dispatch to positional (0.5) or keyword (0.6+) constructors. Current compat: SMLMData 0.7.
+
+### Continuous Mode Internals
+
+For continuous mode, inter-shifts are warmstarted from polynomial endpoint chaining (`_warmstart_inter_continuous!`) and regularized using boundary gap estimates (`_estimate_continuous_lambda`). Key functions: `endpoint_drift()`, `startpoint_drift()`, `evaluate_drift()` in `legendre.jl`.
+
 ## Key Dependencies
 
-- **SMLMData.jl**: SMLD, Emitter types
+- **SMLMData.jl**: SMLD, Emitter types (compat: 0.7)
 - **NearestNeighbors.jl**: KDTree for efficient spatial queries
-- **Optim.jl**: Optimization backend (10000 iterations, convergence tolerances)
-- **LegendrePolynomials.jl**: Orthogonal polynomial basis
-- **SMLMSim.jl**: Test data generation
+- **Optim.jl**: BFGS for inter-dataset, Nelder-Mead for intra-dataset (10000 iterations)
+- **LegendrePolynomials.jl**: Orthogonal polynomial basis (`Pl`)
+- **SMLMSim.jl**: Test data generation (compat: 0.3-0.6)
