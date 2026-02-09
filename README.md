@@ -88,41 +88,6 @@ config = DriftConfig(quality=:iterative, degree=3, verbose=1)
 
 The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
 
-## Example
-
-```julia
-using SMLMSim
-using SMLMDriftCorrection
-DC = SMLMDriftCorrection
-
-# Simulate localization data
-params = StaticSMLMConfig(10.0, 0.13, 30, 3, 1000, 50.0, 2, [0.0, 1.0])
-(smld_noisy, _) = simulate(params;
-    pattern=Nmer2D(n=6, d=0.2),
-    molecule=GenericFluor(; photons=5000.0, k_on=0.02, k_off=50.0),
-    camera=IdealCamera(1:64, 1:64, 0.1)
-)
-
-# Create and apply synthetic drift for testing
-drift_true = DC.LegendrePolynomial(smld_noisy; degree=2, initialize="random", rscale=0.1)
-smld_drifted = DC.applydrift(smld_noisy, drift_true)
-
-# Correct drift
-config = DriftConfig(verbose=1)
-(smld_corrected, info) = driftcorrect(smld_drifted, config)
-
-# Extract trajectory for plotting
-traj = drift_trajectory(info.model)
-
-# Compute RMSD
-N = length(smld_noisy.emitters)
-rmsd = sqrt(sum(
-    ([e.x for e in smld_corrected.emitters] .- [e.x for e in smld_noisy.emitters]).^2 .+
-    ([e.y for e in smld_corrected.emitters] .- [e.y for e in smld_noisy.emitters]).^2
-) / N)
-println("RMSD = $(round(rmsd * 1000, digits=1)) nm")
-```
-
 ## Utility Functions
 
 ### drift_trajectory
@@ -154,7 +119,7 @@ config = DriftConfig(warm_start=info1.model)
 
 > Wester, M.J., Schodt, D.J., Mazloom-Farsibaf, H., Fazel, M., Pallikkuth, S. and Lidke, K.A. "Robust, fiducial-free drift correction for super-resolution imaging." *Scientific Reports*, 11, 23672, 2021. [DOI: 10.1038/s41598-021-02850-7](https://doi.org/10.1038/s41598-021-02850-7)
 
-> Schodt, D.J.\*, Wester, M.J.\*, et al. "SMITE: Single Molecule Imaging Toolbox Extraordinaire (MATLAB)." *Journal of Open Source Software*, 8(90), 5563, 2023. [DOI: 10.21105/joss.05563](https://doi.org/10.21105/joss.05563)
+> Schodt, D.J.\*, Wester, M.J.\*, et al. "SMITE: Single Molecule Imaging Toolbox Extraordinaire (MATLAB)." *Journal of Open Source Software*, 8(90), 5563, 2023. [DOI: 10.21105/joss.05563](https://doi.org/10.21105/joss.05563) — MATLAB implementation of this algorithm
 
 ## Related Packages
 
