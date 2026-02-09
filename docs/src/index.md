@@ -31,11 +31,11 @@ using SMLMRender
 DC = SMLMDriftCorrection
 using Random; Random.seed!(42)  # hide
 
-# Simulate dense blinking data (hexamers, 2 datasets)
-params = StaticSMLMConfig(15.0, 0.13, 50, 2, 1000, 50.0, 2, [0.0, 1.0])
+# Simulate blinking data (hexamers, 2 datasets)
+params = StaticSMLMConfig(7.5, 0.13, 50, 2, 1000, 50.0, 2, [0.0, 1.0])
 (smld_noisy, _) = simulate(params;
     pattern=Nmer2D(n=6, d=0.2),
-    molecule=GenericFluor(; photons=5000.0, k_on=0.3, k_off=50.0),
+    molecule=GenericFluor(; photons=35000.0, k_on=0.25, k_off=50.0),
     camera=IdealCamera(1:32, 1:32, 0.1)
 )
 
