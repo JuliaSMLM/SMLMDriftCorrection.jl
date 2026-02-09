@@ -1,8 +1,25 @@
 """
-Select the emitters indexed in `keep` from the SMLD structure.
-`keep` may be a single positive integer, a range or a vector of positive
-integers.
+    filter_emitters(smld, keep) -> smld
 
+Select the emitters indexed by `keep` from the SMLD structure, returning a new
+SMLD with only those emitters. `keep` may be a single positive integer, a range,
+a vector of integers, or a `BitVector` mask.
+
+# Example
+```jldoctest
+julia> cam = IdealCamera(1:64, 1:64, 0.1);
+
+julia> e1 = Emitter2DFit(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 0.0, 50.0, 5.0, 1, 1, 1, 1);
+
+julia> e2 = Emitter2DFit(3.0, 4.0, 1200.0, 12.0, 0.01, 0.01, 0.0, 60.0, 6.0, 2, 1, 1, 2);
+
+julia> smld = BasicSMLD([e1, e2], cam, 100, 1);
+
+julia> smld_sub = filter_emitters(smld, [1]);
+
+julia> length(smld_sub.emitters)
+1
+```
 """
 function filter_emitters(smld::SMLD, keep::Union{AbstractVector,AbstractRange})
     return typeof(smld)(

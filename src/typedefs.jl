@@ -14,28 +14,40 @@ end
 """
     DriftConfig <: AbstractSMLMConfig
 
-Configuration for drift correction, holding all algorithm parameters.
+Configuration for drift correction, holding all algorithm parameters. Constructed with keyword
+arguments; all fields have sensible defaults.
 
 # Fields
-- `quality::Symbol`: Quality tier (`:fft`, `:singlepass`, `:iterative`)
-- `degree::Int`: Polynomial degree for intra-dataset drift model
-- `dataset_mode::Symbol`: Multi-dataset handling (`:registered` or `:continuous`)
-- `chunk_frames::Int`: For continuous mode, split each dataset into chunks of this many frames
-- `n_chunks::Int`: Alternative to chunk_frames - specify number of chunks per dataset
-- `maxn::Int`: Maximum number of neighbors for entropy calculation
-- `max_iterations::Int`: Maximum iterations for `:iterative` mode
-- `convergence_tol::Float64`: Convergence tolerance (μm) for `:iterative` mode
-- `warm_start::Union{Nothing, AbstractIntraInter}`: Previous model for warm starting
-- `verbose::Int`: Verbosity level (0=quiet, 1=info, 2=debug)
-- `auto_roi::Bool`: Use dense ROI subset for faster estimation
-- `σ_loc::Float64`: Typical localization precision (μm) for ROI sizing
-- `σ_target::Float64`: Target drift precision (μm) for ROI sizing
-- `roi_safety_factor::Float64`: Safety multiplier for required localizations
+
+| Field | Default | Description |
+|:------|:--------|:------------|
+| `quality` | `:singlepass` | Quality tier: `:fft`, `:singlepass`, or `:iterative` |
+| `degree` | `2` | Legendre polynomial degree for intra-dataset drift |
+| `dataset_mode` | `:registered` | Multi-dataset handling: `:registered` or `:continuous` |
+| `chunk_frames` | `0` | Split datasets into chunks of N frames (0 = no chunking) |
+| `n_chunks` | `0` | Alternative: number of chunks per dataset (0 = use chunk_frames) |
+| `maxn` | `200` | Maximum neighbors for entropy calculation |
+| `max_iterations` | `10` | Maximum iterations for `:iterative` mode |
+| `convergence_tol` | `0.001` | Convergence tolerance in μm for `:iterative` mode |
+| `warm_start` | `nothing` | Previous `info.model` for warm starting optimization |
+| `verbose` | `0` | Verbosity level: 0=quiet, 1=info, 2=debug |
+| `auto_roi` | `false` | Use dense ROI subset for faster estimation |
+| `σ_loc` | `0.010` | Typical localization precision (μm) for ROI sizing |
+| `σ_target` | `0.001` | Target drift precision (μm) for ROI sizing |
+| `roi_safety_factor` | `4.0` | Safety multiplier for required localizations |
 
 # Example
-```julia
-config = DriftConfig(; quality=:iterative, degree=3, verbose=1)
-(smld_corrected, info) = driftcorrect(smld, config)
+```jldoctest
+julia> config = DriftConfig(quality=:iterative, degree=3);
+
+julia> config.quality
+:iterative
+
+julia> config.degree
+3
+
+julia> config.convergence_tol
+0.001
 ```
 """
 @kwdef struct DriftConfig <: AbstractSMLMConfig
