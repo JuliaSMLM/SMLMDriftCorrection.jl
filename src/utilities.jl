@@ -26,11 +26,12 @@ function filter_emitters(smld::SMLD, keep::Integer)
 end
 
 """
-Determines from the type of the input smld if the data is 2D or 3D.
+Determines if the data is 2D or 3D by dispatching on the emitter type parameter.
+Falls back to `hasfield` check for external emitter types (e.g. GaussMLE.Emitter2DFitSigma).
 """
-function nDims(smld::SMLD)
-    return occursin("2D", string(typeof(smld))) ? 2 : 3
-end
+nDims(::BasicSMLD{T, E}) where {T, E<:Union{Emitter2D,Emitter2DFit}} = 2
+nDims(::BasicSMLD{T, E}) where {T, E<:Union{Emitter3D,Emitter3DFit}} = 3
+nDims(smld::SMLD) = hasfield(typeof(first(smld.emitters)), :z) ? 3 : 2
 
 """
     compute_chunk_params(n_frames; chunk_frames=0, n_chunks=0)
