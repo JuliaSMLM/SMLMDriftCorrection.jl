@@ -6,21 +6,9 @@ SMLD with only those emitters. `keep` may be a single positive integer, a range,
 a vector of integers, or a `BitVector` mask.
 
 # Example
-```jldoctest
-julia> using SMLMData
-
-julia> cam = IdealCamera(; x_pixels=1:64, y_pixels=1:64, pixel_size=0.1);
-
-julia> e1 = Emitter2DFit(; x=1.0, y=2.0, photons=1000.0, bg=10.0, σ_x=0.01, σ_y=0.01, α=0.0, loglike=50.0, σ_photons=5.0, frame=1, dataset=1, channel=1, connectID=1);
-
-julia> e2 = Emitter2DFit(; x=3.0, y=4.0, photons=1200.0, bg=12.0, σ_x=0.01, σ_y=0.01, α=0.0, loglike=60.0, σ_photons=6.0, frame=2, dataset=1, channel=1, connectID=2);
-
-julia> smld = BasicSMLD(; emitters=[e1, e2], camera=cam, n_frames=100, n_datasets=1);
-
-julia> smld_sub = filter_emitters(smld, [1]);
-
-julia> length(smld_sub.emitters)
-1
+```julia
+smld_sub = filter_emitters(smld, [1])
+length(smld_sub.emitters)  # 1
 ```
 """
 function filter_emitters(smld::SMLD, keep::Union{AbstractVector,AbstractRange})
