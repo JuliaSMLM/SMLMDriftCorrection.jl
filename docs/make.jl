@@ -1,12 +1,15 @@
 using SMLMDriftCorrection
+using SMLMSim
+using SMLMData
+using SMLMRender
 using Documenter
 
-DocMeta.setdocmeta!(SMLMDriftCorrection, :DocTestSetup, :(using SMLMDriftCorrection); recursive=true)
+DocMeta.setdocmeta!(SMLMDriftCorrection, :DocTestSetup, :(using SMLMDriftCorrection, SMLMData); recursive=true)
 
 makedocs(;
     modules=[SMLMDriftCorrection],
     authors="klidke@unm.edu",
-    repo="https://github.com/JuliaSMLM/SMLMDriftCorrection.jl/blob/{commit}{path}#{line}",
+    repo=Documenter.Remotes.GitHub("JuliaSMLM", "SMLMDriftCorrection.jl"),
     sitename="SMLMDriftCorrection.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
@@ -15,7 +18,11 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Configuration" => "configuration.md",
+        "Theory & Workflow" => "theory_workflow.md",
+        "API" => "api.md",
     ],
+    warnonly=[:missing_docs],
 )
 
 deploydocs(;

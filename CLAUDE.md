@@ -4,219 +4,201 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Package Overview
 
-SMLMDriftCorrection.jl is a Julia package for drift correction in Single Molecule Localization Microscopy (SMLM). It implements fiducial-free drift correction algorithms that work on both 2D and 3D localization data. The package is part of the JuliaSMLM ecosystem and depends on SMLMData.jl for core data structures.
+SMLMDriftCorrection.jl is a Julia package for fiducial-free drift correction in Single Molecule Localization Microscopy (SMLM). It works on both 2D and 3D localization data and is part of the JuliaSMLM ecosystem (depends on SMLMData.jl for core data structures).
 
 ## Development Commands
 
-### Testing
 ```bash
 # Run all tests
 julia --project -e 'using Pkg; Pkg.test()'
 
-# Run tests from REPL
-julia --project
-using Pkg
-Pkg.test()
-```
-
-### Documentation
-```bash
-# Build documentation locally
+# Build documentation
 julia --project=docs docs/make.jl
 ```
 
-### Development Environment
-The package includes several project environments:
-- Root `Project.toml`: Main package dependencies
+### Project Environments
+- Root `Project.toml`: Main package
 - `dev/Project.toml`: Development experiments
-- `dev/loc_entropy/Project.toml`: Entropy-specific development
 - `examples/Project.toml`: Example scripts
-- `docs/Project.toml`: Documentation dependencies
-
-Activate the appropriate environment:
-```julia
-using Pkg
-Pkg.activate(".")  # or "dev", "examples", "docs"
-```
+- `docs/Project.toml`: Documentation
 
 ## Code Architecture
 
-### Core Algorithm Structure
+### Algorithm Overview
 
-The drift correction algorithm has two phases:
-1. **Intra-dataset correction**: Corrects drift within each dataset (collection of movie frames) using polynomial models
-2. **Inter-dataset correction**: Aligns datasets to each other, typically to dataset 1 as reference
+The drift correction has two phases:
+1. **Intra-dataset correction**: Corrects drift within each dataset using Legendre polynomial models (optimized via entropy minimization)
+2. **Inter-dataset correction**: Aligns datasets to each other using constant shifts
+
+The algorithm uses **entropy minimization** as the cost function with **adaptive KDTree neighbor rebuilding** for efficiency.
 
 ### Type Hierarchy
 
 ```
 AbstractDriftModel
 ├── AbstractIntraInter (combined intra+inter models)
-│   ├── Polynomial (polynomial drift model)
-│   └── LegendrePolynomial (Legendre polynomial model)
+│   └── LegendrePolynomial (main model used by driftcorrect)
 │
-AbstractIntraDrift (intra-dataset models)
-├── IntraPolynomial
-└── IntraLegendrePolynomial (if implemented)
+AbstractIntraDrift (per-dataset models)
+└── IntraLegendre (wraps LegendrePoly1D per dimension)
 │
-AbstractIntraDrift1D (1D drift components)
-├── Polynomial1D
-└── LegendrePoly1D (if implemented)
+AbstractIntraDrift1D (1D polynomial components)
+└── LegendrePoly1D (normalized to [-1, 1] time domain)
 │
-InterShift (inter-dataset shift)
+InterShift (per-dataset constant shift)
+
+DriftConfig <: AbstractSMLMConfig (input config, @kwdef)
+DriftInfo{M} <: AbstractSMLMInfo (output struct with model, timing, convergence, roi_indices)
 ```
 
-### Key Data Structures
+### Key Data Flow
 
-- **SMLD**: From SMLMData.jl - contains localization coordinates with fields:
-  - `emitters`: Vector of Emitter2DFit or Emitter3DFit
-  - `n_datasets`: Number of datasets
-  - `n_frames`: Number of frames per dataset
+1. `driftcorrect(smld)` or `driftcorrect(smld, config::DriftConfig)` creates a `LegendrePolynomial` model
+2. `findintra!()` optimizes intra-dataset drift per dataset (parallelized with `Threads.@threads`)
+3. `findinter!()` aligns datasets (threaded all-vs-DS1, then sequential refinement vs earlier)
+4. `correctdrift(smld, model)` applies the final corrections
+5. Returns tuple `(smld_corrected, info::DriftInfo)`
+6. Optional continuation: `driftcorrect(smld, info::DriftInfo)` refines from previous result
 
-- **Polynomial**: Main drift model combining intra and inter corrections
-  - `intra`: Vector of IntraPolynomial (one per dataset)
-  - `inter`: Vector of InterShift (one per dataset)
+### Source Files
 
-- **IntraPolynomial**: Per-dataset polynomial drift
-  - `ndims`: Number of spatial dimensions (2 or 3)
-  - `dm`: Vector of Polynomial1D (one per dimension)
-
-### Source File Organization
-
-- `src/SMLMDriftCorrection.jl`: Main module, exports `driftcorrect` and `filter_emitters`
-- `src/interface.jl`: Main user-facing `driftcorrect()` function
-- `src/intrainter.jl`: Core drift application/correction and `findintra!`/`findinter!` optimizers
-- `src/polynomial.jl`: Polynomial drift model definitions and conversion functions
-- `src/typedefs.jl`: Abstract types and InterShift structure
-- `src/costfuns.jl`: Cost functions for optimization (Kdtree and Entropy methods)
-- `src/cost_entropy.jl`: Entropy-based cost calculations
-- `src/crosscorr.jl`: Cross-correlation drift correction (histbinsize > 0)
-- `src/utilities.jl`: Helper functions
-
-### Cost Functions
-
-Two main approaches for measuring drift quality:
-
-1. **Kdtree** (default): Sum of negative exponentials of k-nearest neighbor distances
-   - Parameter: `d_cutoff` (distance cutoff in μm, default 0.01)
-   - Uses NearestNeighbors.jl for efficient spatial queries
-
-2. **Entropy**: Upper bound on statistical entropy of Gaussian mixture model
-   - Parameter: `maxn` (max neighbors considered, default 200)
-   - Based on [Cnossen2021] approach
-
-3. **Cross-correlation**: Optional histogram-based correction for inter-dataset
-   - Parameter: `histbinsize` (μm, default -1.0 means disabled)
-   - Uses FourierTools.jl
-
-### Parameter Conversion
-
-The optimization uses flat parameter vectors (θ) internally:
-- `intra2theta()` / `theta2intra!()`: Convert IntraPolynomial ↔ coefficients
-- `inter2theta()` / `theta2inter!()`: Convert InterShift ↔ shift vector
-
-### Optimization Flow
-
-1. Initialize drift model with `Polynomial(smld; degree=2, initialize="zeros")`
-2. For each dataset, optimize intra-dataset drift using `findintra!()`:
-   - Convert model to θ vector
-   - Minimize cost function using Optim.jl
-   - Convert optimized θ back to model
-3. Sequentially optimize inter-dataset drift using `findinter!()`:
-   - First align all datasets to dataset 1
-   - Then align each dataset to all earlier datasets
-4. Apply final corrections with `correctdrift(smld, driftmodel)`
+- `interface.jl`: Main `driftcorrect()` function with quality tiers - start here
+- `legendre.jl`: `LegendrePolynomial`, `IntraLegendre`, `LegendrePoly1D` types and evaluation
+- `intrainter.jl`: `findintra!()`, `findinter!()`, `applydrift()`, `correctdrift()`
+- `costfuns.jl`: `NeighborState`, adaptive entropy cost functions
+- `cost_entropy.jl`: Entropy calculations (KL divergence, `entropy_HD`, `ub_entropy`)
+- `utilities.jl`: `filter_emitters()`, `chunk_smld()`, `drift_trajectory()`
+- `crosscorr.jl`: Cross-correlation helpers (`findshift`, `histimage2D`, `crosscorr2D`)
+- `roi_selection.jl`: Auto-ROI subsampling (`calculate_n_locs_required`, `find_dense_roi`)
+- `typedefs.jl`: Abstract types, `InterShift`, `DriftInfo`
 
 ### Threading
 
-- Intra-dataset corrections use `Threads.@threads` for parallelization
-- Inter-dataset corrections run sequentially (commented threading code exists)
+Intra-dataset correction is parallelized with `Threads.@threads` (each dataset independent). The first inter-dataset pass (all vs DS1) is also threaded using a precomputed snapshot of corrected coordinates. The refinement pass (each vs all earlier) is sequential.
 
-## Working with SMLD Data
+### Adaptive Neighbor Optimization (Intra-dataset)
 
-All distance units are in micrometers (μm). The package works with SMLMData.jl structures:
+The `NeighborState` / `InterNeighborState` structs track KDTree neighbors and rebuild only when drift changes significantly (threshold: 100 nm). This avoids O(N log N) tree rebuilds on every optimizer iteration.
 
+### Inter-dataset Alignment (Merged Cloud Entropy)
+
+Inter-dataset alignment uses a "merged cloud" entropy approach:
+1. Combine shifted dataset with reference dataset(s)
+2. Compute entropy of the combined point cloud
+3. Optimizer finds shift that minimizes entropy (tighter combined cloud = better alignment)
+
+This properly incorporates localization uncertainties (σ) and works well for real SMLM data where datasets image the same underlying structure.
+
+### Quality Tiers
+
+- `:fft`: Fast cross-correlation only (~10x faster, less accurate)
+- `:singlepass` (default): Single pass of intra then inter correction
+- `:iterative`: Full convergence with intra↔inter iteration
+
+### Dataset Modes
+
+- `:registered` (default): Datasets are independent acquisitions with spatial overlap. Uses entropy-based inter-dataset alignment via `findinter!()`.
+- `:continuous`: One long acquisition split into files. Uses polynomial endpoint chaining (warmstart) for inter-dataset alignment since chunks have temporal but not spatial overlap.
+
+**Chunking guidance for continuous mode**: Consider chunking when acquisitions exceed ~4000 frames, using `chunk_frames=4000` as a reasonable maximum. Shorter acquisitions can use a single polynomial with moderate degree. The warmstart mechanism initializes each chunk's polynomial from the previous chunk's endpoint for smooth transitions.
 ```julia
-using SMLMData
+# Short acquisition (<4000 frames) - single polynomial
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous, degree=3)
+
+# Long acquisition - chunk into ~4000 frame segments
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous, chunk_frames=4000)
+
+# Multi-file data - datasets already separate, no explicit chunking needed
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous)
+```
+
+For trajectory plotting in continuous mode:
+```julia
+traj = drift_trajectory(info.model; cumulative=true)
+```
+
+## Usage Patterns
+
+### Basic Usage
+```julia
 using SMLMDriftCorrection
 
-# From simulation
-smld = ... # SMLD structure from SMLMSim
+# Returns tuple (smld_corrected, info::DriftInfo)
+(smld_corrected, info) = driftcorrect(smld)
 
-# From SMITE MATLAB files
-smd = SmiteSMD(path, file)   # *_Results.mat
-smld = load_smite_2d(smd)
-
-# Filter to ROI
-x = [e.x for e in smld.emitters]
-y = [e.y for e in smld.emitters]
-roi_mask = (x .> 64.0) .& (x .< 128.0) .& (y .> 64.0) .& (y .< 128.0)
-smld_roi = SMLMDriftCorrection.filter_emitters(smld, roi_mask)
+# Access model for trajectory extraction
+traj = drift_trajectory(info.model)
+# traj.frames, traj.x, traj.y ready for plotting
 ```
 
-## Common Patterns
-
-### Applying and correcting drift
+### Testing with Simulated Drift
 ```julia
-# Create drift model
-drift_model = SMLMDriftCorrection.Polynomial(smld; degree=2, initialize="random")
+DC = SMLMDriftCorrection
+
+# Create random drift model
+drift_model = DC.LegendrePolynomial(smld; degree=2, initialize="random", rscale=0.1)
 
 # Apply drift (for testing)
-smld_drifted = SMLMDriftCorrection.applydrift(smld, drift_model)
+smld_drifted = DC.applydrift(smld, drift_model)
 
-# Correct drift (inverse operation)
-smld_corrected = SMLMDriftCorrection.correctdrift(smld_drifted, drift_model)
+# Correct drift (inverse operation - exact recovery)
+smld_recovered = DC.correctdrift(smld_drifted, drift_model)
 ```
 
-### Main drift correction interface
+### Warm Start
 ```julia
-# Basic usage (Kdtree cost function)
-smld_corrected = driftcorrect(smld)
+# First dataset
+(smld1_corrected, info1) = driftcorrect(smld1; degree=2)
 
-# With Entropy cost function
-smld_corrected = driftcorrect(smld; cost_fun="Entropy", maxn=100)
-
-# With cross-correlation inter-dataset correction
-smld_corrected = driftcorrect(smld; histbinsize=0.1)
-
-# Custom cost functions for intra vs inter
-smld_corrected = driftcorrect(smld; cost_fun_intra="Entropy", cost_fun_inter="Kdtree")
+# Second dataset - use model from first as starting point
+(smld2_corrected, info2) = driftcorrect(smld2; warm_start=info1.model)
 ```
 
-## Testing Strategy
+### Filtering to ROI
+```julia
+x = [e.x for e in smld.emitters]
+y = [e.y for e in smld.emitters]
+mask = (x .> 64.0) .& (x .< 128.0) .& (y .> 64.0) .& (y .< 128.0)
+smld_roi = filter_emitters(smld, mask)
+```
 
-The test suite (`test/runtests.jl`) uses SMLMSim to generate synthetic data:
-1. Create simulated SMLD with known structure (Nmers)
-2. Apply synthetic drift with random polynomial coefficients
-3. Run drift correction
-4. Compute RMSD between corrected and original coordinates
-5. Assert RMSD is within tolerance (typically 1.0 μm for recovered drift)
+## Key Parameters
 
-Tests cover:
-- Entropy calculations (2D and 3D)
-- Cross-correlation shift finding (identity and imposed shift)
-- Polynomial drift application/correction (exact recovery)
-- Full drift correction pipeline with Kdtree, Entropy, and cross-correlation methods
-- Both 2D and 3D workflows
+- `quality=:singlepass`: Quality tier (`:fft`, `:singlepass`, `:iterative`)
+- `degree=2`: Polynomial degree for intra-dataset drift
+- `maxn=200`: Maximum neighbors for entropy calculation
+- `dataset_mode=:registered`: How to handle multi-dataset alignment
+- `chunk_frames` / `n_chunks`: Chunking for continuous mode
+- `max_iterations=10`: Maximum iterations for `:iterative` mode
+- `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
+- `warm_start=nothing`: Previous model for warm starting optimization
+- `verbose=0`: 0=quiet, 1=info, 2=debug
+
+### Auto-ROI Parameters
+
+- `auto_roi=false`: Set to `true` for faster processing using a dense spatial subset (~15% of data). Trades some accuracy (~1.4nm vs ~0.5nm RMSD) for speed.
+- `σ_loc=0.010`: Typical localization precision (μm) for ROI sizing
+- `σ_target=0.001`: Target drift precision (μm) for ROI sizing
+- `roi_safety_factor=4.0`: Safety multiplier for required localizations
+
+When `auto_roi=true`, selects a contiguous rectangular region from the densest part of the FOV. This preserves blink pairs from the same emitters which is essential for entropy-based optimization.
+
+## Units
+
+All distance units are in **micrometers (μm)**.
+
+### SMLMData Compatibility
+
+The package supports both SMLMData 0.5 and 0.6+ via `_HAS_SIGMA_XY` (compile-time `const`). The `_make_emitter_2d` / `_make_emitter_3d` helpers in `utilities.jl` dispatch to positional (0.5) or keyword (0.6+) constructors. Current compat: SMLMData 0.7.
+
+### Continuous Mode Internals
+
+For continuous mode, inter-shifts are warmstarted from polynomial endpoint chaining (`_warmstart_inter_continuous!`) and regularized using boundary gap estimates (`_estimate_continuous_lambda`). Key functions: `endpoint_drift()`, `startpoint_drift()`, `evaluate_drift()` in `legendre.jl`.
 
 ## Key Dependencies
 
-- **SMLMData.jl**: Core SMLM data structures (SMLD, Emitter types)
+- **SMLMData.jl**: SMLD, Emitter types (compat: 0.7)
 - **NearestNeighbors.jl**: KDTree for efficient spatial queries
-- **Optim.jl**: Optimization backend (used with default settings, 10000 iterations)
-- **FourierTools.jl**: Cross-correlation via FFT
-- **SMLMSim.jl**: Simulation for testing
-
-## References
-
-The algorithms are based on:
-- [Wester2021]: Kdtree-based drift correction (Scientific Reports)
-- [Cnossen2021]: Entropy minimization approach (Optics Express)
-- [SchodtWester2023]: SMITE MATLAB toolbox
-
-See README.md for full citations.
-
-## Branch Information
-
-The `SMLMData` branch contains updates to work with newer versions of SMLMData.jl. Check the current branch when working on compatibility issues.
-- This is part of the larger JuliaSMLM envriornment
+- **Optim.jl**: BFGS for inter-dataset, Nelder-Mead for intra-dataset (10000 iterations)
+- **LegendrePolynomials.jl**: Orthogonal polynomial basis (`Pl`)
+- **SMLMSim.jl**: Test data generation (compat: 0.3-0.6)
