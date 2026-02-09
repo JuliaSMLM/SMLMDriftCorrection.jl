@@ -5,198 +5,129 @@
 [![Build Status](https://github.com/JuliaSMLM/SMLMDriftCorrection.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaSMLM/SMLMDriftCorrection.jl/actions/workflows/CI.yml)
 [![Coverage](https://codecov.io/gh/JuliaSMLM/SMLMDriftCorrection.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/JuliaSMLM/SMLMDriftCorrection.jl)
 
-## Overview
-
-Drift correction.  The main algorithm (*driftcorrect*) consists of an
-intra-dataset portion and an inter-dataset portion (dataset refers to a
-collection or segment of movie frames).  The drift corrected coordinates are
-returned as output.  All distance units are in μm.
+Fiducial-free drift correction for single-molecule localization microscopy (SMLM): correcting both intra-dataset drift (within each acquisition) and inter-dataset drift (between acquisitions) using entropy minimization with Legendre polynomial models. Works on 2D and 3D localization data. All distance units are in μm.
 
 ## Installation
+
 ```julia
 using Pkg
 Pkg.add("SMLMDriftCorrection")
 ```
 
-## Basic Example
+## Quick Start
 
-```julia
-using SMLMSim
-using SMLMDriftCorrection
-DC = SMLMDriftCorrection
-
-# Make an Nmer dataset.  Simulation parameters use physical units, while smld
-# structures are in units of pixels and frames.
-# Original noisy data ...
-smld_true, smld_model, smld_noisy = simulate(;
-    ρ=1.0,                # emitters per μm²
-    σ_psf=0.13,           # PSF width in μm (130nm)
-    minphotons=50,        # minimum photons for detection
-    ndatasets=10,         # number of independent datasets
-    nframes=1000,         # frames per dataset
-    framerate=50.0,       # frames per second
-    pattern=Nmer2D(n=6, d=0.2),  # hexamer with 200nm diameter
-    molecule=GenericFluor(; q=[0 50; 1e-2 0]),  # rates in 1/s
-    camera=IdealCamera(1:256, 1:256, 0.1)  # pixelsize in μm
-)
-
-## Set up a degree 2 polynomial drift model with normalized random coefficients
-drift_true = DC.Polynomial(smld_noisy; degree=2, initialize="random", rscale=0.1)
-
-# Produce drifted data ...
-smld_drifted = DC.applydrift(smld_noisy, drift_true)
-
-## Correct drift (Kdtree cost function by default)
-smld_corrected = driftcorrect(smld_drifted; verbose=1)
-
-# Compute the RMSD (root mean square deviation) between the original and
-# corrected SMLD structures
-N = length(smld_noisy.emitters)
-smld_noisy_x = [e.x for e in smld_noisy.emitters]
-smld_noisy_y = [e.y for e in smld_noisy.emitters]
-smld_corrected_x = [e.x for e in smld_corrected.emitters]
-smld_corrected_y = [e.y for e in smld_corrected.emitters]
-rmsd = sqrt(sum((smld_corrected_x .- smld_noisy_x).^2 .+
-		(smld_corrected_y .- smld_noisy_y).^2) ./ N)
-print("rmsd 2D [driftcorrect] = $rmsd\n")
-
-```
-
-## Common Workflows
-
-### Generic 2D or 3D Data
 ```julia
 using SMLMDriftCorrection
 
-smld = ...
-smld_DC = driftcorrect(smld)
+# Default configuration
+(smld_corrected, info) = driftcorrect(smld, DriftConfig())
+
+# Custom configuration
+config = DriftConfig(quality=:iterative, degree=3, verbose=1)
+(smld_corrected, info) = driftcorrect(smld, config)
+
+# Extract drift trajectory for plotting
+traj = drift_trajectory(info.model)
+# traj.frames, traj.x, traj.y ready for plotting
 ```
 
-### SMITE Results.mat File
+For complete SMLM workflows (detection + fitting + frame-connection + drift correction + rendering), see [SMLMAnalysis.jl](https://github.com/JuliaSMLM/SMLMAnalysis.jl).
+
+## Configuration
+
+`driftcorrect(smld, config::DriftConfig)` is the primary interface. `DriftConfig` is a `@kwdef` struct:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `quality` | `:singlepass` | Quality tier (`:fft`, `:singlepass`, `:iterative`) |
+| `degree` | `2` | Legendre polynomial degree for intra-dataset drift |
+| `dataset_mode` | `:registered` | Multi-dataset handling (`:registered` or `:continuous`) |
+| `chunk_frames` | `0` | Split datasets into chunks of N frames (continuous mode) |
+| `n_chunks` | `0` | Alternative: number of chunks per dataset |
+| `maxn` | `200` | Maximum neighbors for entropy calculation |
+| `max_iterations` | `10` | Maximum iterations for `:iterative` mode |
+| `convergence_tol` | `0.001` | Convergence tolerance (μm) for `:iterative` mode |
+| `warm_start` | `nothing` | Previous `info.model` for warm starting |
+| `auto_roi` | `false` | Use dense ROI subset for faster estimation |
+| `verbose` | `0` | Verbosity (0=quiet, 1=info, 2=debug) |
+
 ```julia
-using SMLMData
-using SMLMDriftCorrection
+# Config struct (preferred - reusable, composable)
+config = DriftConfig(quality=:iterative, degree=3, verbose=1)
+(smld_corrected, info) = driftcorrect(smld, config)
 
-smd = SmiteSMD(path, file)   # *_Results.mat file
-smld2 = load_smite_2d(smd)   # To check keys, use: varnames = keys(smld2)
-smld2_DC = driftcorrect(smld2; verbose = 1, cost_fun = "Kdtree")
+# Keyword convenience form also supported
+(smld_corrected, info) = driftcorrect(smld; quality=:iterative, degree=3, verbose=1)
 ```
 
-### Selecting a ROI to Analyze
+**Quality tier guidance:** `:singlepass` works well for most data. Use `:fft` for fast previews (~10x faster, less accurate). Use `:iterative` when maximum accuracy is needed (iterates intra↔inter until convergence).
+
+**Dataset mode guidance:** Use `:registered` (default) when datasets are independent acquisitions of the same FOV. Use `:continuous` when data is one long acquisition split across files, with `chunk_frames=4000` for long acquisitions.
+
+## Output Format
+
+`driftcorrect()` returns `(smld_corrected::SMLD, info::DriftInfo)`.
+
+| Output | Description |
+|--------|-------------|
+| `smld_corrected` | Drift-corrected localizations (main output) |
+| `info.model` | Fitted `LegendrePolynomial` drift model |
+| `info.elapsed_s` | Wall time (seconds) |
+| `info.backend` | Computation backend (`:cpu`) |
+| `info.iterations` | Iterations completed (0 for `:fft`, 1 for `:singlepass`) |
+| `info.converged` | Whether convergence was achieved |
+| `info.entropy` | Final entropy value |
+| `info.history` | Entropy per iteration (for diagnostics) |
+| `info.roi_indices` | Indices used for ROI subset (`nothing` if `auto_roi=false`) |
+
+## Algorithm Pipeline
+
+1. **Intra-dataset**: For each dataset, fit Legendre polynomial drift over time via entropy minimization with adaptive KDTree neighbor rebuilding (threaded across datasets)
+2. **Inter-dataset**: Align datasets using constant shifts optimized via merged-cloud entropy. First pass aligns all to dataset 1 (threaded), then sequential refinement against all earlier datasets
+3. **Iterative** (`:iterative` only): Repeat intra↔inter until inter-shift changes < `convergence_tol`
+
+The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
+
+## Utility Functions
+
+### drift_trajectory
 ```julia
-using SMLMData
-using SMLMDriftCorrection
+traj = drift_trajectory(info.model)
+traj = drift_trajectory(info.model; cumulative=true)  # for continuous mode
+```
+Extract drift trajectory for plotting. Returns NamedTuple with `frames`, `x`, `y` (and `z` for 3D), `dataset`.
 
-println("N_smld2    = $(length(smld2.emitters))")
-smld2_x = [e.x for e in smld2.emitters]
-smld2_y = [e.y for e in smld2.emitters]
-subind = (smld2_x .> 64.0) .& (smld2_x .< 128.0) .&
-         (smld2_y .> 64.0) .& (smld2_y .< 128.0)
-smld2roi = DC.filter_emitters(smld2, subind)
-println("N_smld2roi = $(length(smld2roi.emitters))")
+### filter_emitters
+```julia
+smld_roi = filter_emitters(smld, mask)  # boolean mask or indices
+```
+Select emitters by boolean mask or index vector. Useful for ROI selection before correction.
 
-smld2roi_DC = driftcorrect(smld2roi)
+### Warm Start / Continuation
+```julia
+# Warm start from previous model
+config = DriftConfig(warm_start=info1.model)
+(smld2, info2) = driftcorrect(smld2, config)
+
+# Continue iterating from previous result
+(smld2, info2) = driftcorrect(smld1, info1; max_iterations=5)
 ```
 
-## Interface
+## Algorithm References
 
-**driftcorrect** is the main interface for drift correction (DC).  This
-algorithm consists of an intra-dataset portion and an inter-dataset portion.
-The drift corrected coordinates are returned as output.  All distance units
-are in μm.
+> Cnossen, J., Cui, T.J., Joo, C. and Smith, C. "Drift correction in localization microscopy using entropy minimization." *Optics Express*, 29(18), 27961-27974, 2021. [DOI: 10.1364/OE.426620](https://doi.org/10.1364/OE.426620)
 
-```
-function driftcorrect(smld::SMLD;
-    intramodel::String = "Polynomial",
-    cost_fun::String = "Kdtree",
-    cost_fun_intra::String = "",
-    cost_fun_inter::String = "",
-    degree::Int = 2,
-    d_cutoff::AbstractFloat = 0.01,
-    maxn::Int = 200,
-    histbinsize::AbstractFloat = -1.0,
-    verbose::Int = 0)
-```
-### Input
-- ***smld***:           structure containing (X, Y) or (X, Y, Z) localization
-                        coordinates (μm) - see SMLMData
-### Optional Keyword Input Fields
-- ***intramodel***:     polynomial model for intra-dataset drift correction:
-                        {"Polynomial", "LegendrePoly"} = "Polynomial"
-- ***cost_fun:***       intra/inter cost function: {"Kdtree", "Entropy"} = "Kdtree"
-- ***cost_fun_intra***: intra cost function override: ""
-- ***cost_fun_inter***: inter cost function override: ""
-- ***degree***:         degree for polynomial intra-dataset drift correction = 2
-- ***d_cutoff***:       distance cutoff (μm) = 0.01 [Kdtree cost function]
-- ***maxn***:           maximum number of neighbors considered = 200
-                        [Entropy cost function]
-- ***histbinsize***:    histogram bin size for inter-datset cross-correlation
-                        correction (μm) = -1.0 [< 0 means no correction]
-- ***verbose***:        flag for more output = 0
-### Output
-- ***smld_found***:     structure containing drift corrected coordinates (μm)
+> Wester, M.J., Schodt, D.J., Mazloom-Farsibaf, H., Fazel, M., Pallikkuth, S. and Lidke, K.A. "Robust, fiducial-free drift correction for super-resolution imaging." *Scientific Reports*, 11, 23672, 2021. [DOI: 10.1038/s41598-021-02850-7](https://doi.org/10.1038/s41598-021-02850-7)
 
-## Other Entry Points into SMLMDriftCorrect
-- ***Polynomial*** define data type for intra-dataset drifts, which will be a
-                   collection of univariate polynomials of a given degree
-	           indexed by each coordinate dimension and frame number
-- ***applydrift*** apply drift to simulated data
-- ***crosscorr***  computes the cross-correlation between 2 histogram images
-- ***findshift***  computes histogram image shift between 2 SMLDs representing
-                   locaiizations via cross-correlation
-- ***histImage***  produces a histogram image from the localization coordinates
-- ***entropy_HD*** is the entropy summed over all/nearest neighbor localizations
-- ***ub_entropy*** is an upper bound on the entropy based on nearest neighbors
+> Schodt, D.J.\*, Wester, M.J.\*, et al. "SMITE: Single Molecule Imaging Toolbox Extraordinaire (MATLAB)." *Journal of Open Source Software*, 8(90), 5563, 2023. [DOI: 10.21105/joss.05563](https://doi.org/10.21105/joss.05563) — MATLAB implementation of this algorithm
 
-## Algorithms
+## Related Packages
 
-The procedure divides the problem into intra-dataset and inter-dataset drift
-correction, both minimizing a cost function that is based on the predicted
-emitter positions in a dataset, either with respect to itself for intra-dataset
-drift correction (noting that different sets of localizations over time are
-coming from the blinking fluorophores), or the first dataset for inter-dataset
-drift correction. Intra-dataset drift correction is performed first, with the
-results saved for the next phase. For inter-dataset drift correction, the
-datasets are drift corrected in sequence against the first dataset.  Here,
-"dataset" means a segment or collection of movie frames.  Several datasets make
-up a full movie.
+- **[SMLMAnalysis.jl](https://github.com/JuliaSMLM/SMLMAnalysis.jl)** - Complete SMLM workflow (detection + fitting + frame-connection + rendering)
+- **[SMLMData.jl](https://github.com/JuliaSMLM/SMLMData.jl)** - Core data types for SMLM
+- **[SMLMFrameConnection.jl](https://github.com/JuliaSMLM/SMLMFrameConnection.jl)** - Frame connection (linking blinks across frames)
+- **[SMLMSim.jl](https://github.com/JuliaSMLM/SMLMSim.jl)** - SMLM data simulation
 
-- **Kdtree**: cost function is simply the thresholded sum of the nearest
-  neighbor distances for all the predicted emitter positions in a dataset,
-  either with respect to itself for intra-dataset drift correction (noting that
-  different sets of localizations over time are coming from the blinking
-  fluorophores), or the first dataset for inter-dataset drift correction.  The
-  fast nearest neighbor search is done using a k-dimensional tree data
-  structure to partition the image.  See [Wester2021], and also
-  [SchodtWester2023] for a MATLAB implementation.
-- **Entropy**; cost function (Drift at Minimum Entropy as described in
-  [Cnossen2021].  The cost is the upper bound on the statistical entropy of a
-  Gaussian Mixture Model characterizing the sum of the localization probability
-  distributions.
-- **histbinsize > 0**: performs cross correlation between two histogram images
-  formed from dataset sum images with the specified histogram bin size.  This
-  is performed for inter-dataset drift correction only.
+## License
 
-## References
-
-- **[Cnossen2021]** Jelmer Cnossen, Tao Ju Cui, Chirlmin Joo and Carlas Smith,
-  "Drift correction in localization microscopy using entropy minimization",
-  *Optics Express*, Volume 29, Number 18, August 30, 2021, 27961-27974,
-  PMID: 34614938,
-  https://doi.org/10.1364/OE.426620,
-  (DOI: 10.1364/OE.426620)
-- **[Wester2021]** Michael J. Wester, David J. Schodt, Hanieh Mazloom-Farsibaf,
-  Mohamadreza Fazel, Sandeep Pallikkuth and Keith A. Lidke, "Robust,
-  fiducial-free drift correction for super-resolution imaging", *Scientific
-  Reports*, Volume 11, Article 23672, December 8, 2021, 1-14,
-  https://www.nature.com/articles/s41598-021-02850-7,
-  (DOI: 10.1038/s41598-021-02850-7).
-- **[SchodtWester2023]** David J. Schodt*, Michael J. Wester*, Mohamadreza
-  Fazel, Sajjad Khan, Hanieh Mazloom-Farsibaf, Sandeep Pallikkuth, Marjolein
-  B. M. Meddens, Farzin Farzam, Eric A. Burns, William K. Kanagy, Derek A.
-  Rinaldi, Elton Jhamba, Sheng Liu, Peter K. Relich, Mark J. Olah, Stanly L.
-  Steinberg and Keith A. Lidke (* = co-1st author), "SMITE: Single Molecule
-  Imaging Toolbox Extraordinaire (MATLAB)", *Journal of Open Source Software*,
-  Volume 8, Number 90, 2023, p. 5563,
-  https://joss.theoj.org/papers/10.21105/joss.05563, (DOI:
-  10.21105/joss.05563).
+MIT License - see [LICENSE](LICENSE) file for details.
