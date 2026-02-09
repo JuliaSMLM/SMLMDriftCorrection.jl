@@ -1,7 +1,5 @@
 using SMLMDriftCorrection
-using SMLMSim
 using SMLMData
-using SMLMRender
 using Documenter
 
 DocMeta.setdocmeta!(SMLMDriftCorrection, :DocTestSetup, :(using SMLMDriftCorrection, SMLMData); recursive=true)
