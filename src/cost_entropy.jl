@@ -8,6 +8,20 @@ https://doi.org/10.1364/OE.620
 Optimized for minimal allocations - uses scalar operations in inner loops.
 """
 
+# Zero-allocation logsumexp for pre-allocated buffers
+@inline function _logsumexp(x::AbstractVector{T}, n::Int) where T
+    m = x[1]
+    @inbounds for i in 2:n
+        xi = x[i]
+        m = ifelse(xi > m, xi, m)
+    end
+    s = zero(T)
+    @inbounds for i in 1:n
+        s += exp(x[i] - m)
+    end
+    return m + log(s)
+end
+
 # ============================================================================
 # Entropy of localization uncertainties (H_i(D) base term)
 # ============================================================================
@@ -224,19 +238,19 @@ Entropy1 for 2D - sequential with minimal allocations.
 - x, y: Localization positions
 - σ_x, σ_y: Localization uncertainties
 - divmethod: Divergence method ("KL", "Symmetric", "Bhattacharyya", "Mahalanobis")
+- kldiv: Pre-allocated work buffer of length >= maxn (optional)
 """
 function entropy1_2D(idxs::Vector{Vector{Int}},
                      x::Vector{T}, y::Vector{T},
                      σ_x::Vector{T}, σ_y::Vector{T};
-                     divmethod::String="KL") where {T<:Real}
+                     divmethod::String="KL",
+                     kldiv::Vector{T}=Vector{T}(undef, length(idxs[1]) - 1)) where {T<:Real}
 
     divfunc = select_divfunc_2D(divmethod)
     maxn = length(idxs[1]) - 1
     N = length(x)
     log_maxn = log(T(maxn))
 
-    # Single pre-allocated buffer
-    kldiv = Vector{T}(undef, maxn)
     out = T(0)
 
     @inbounds for i in 1:N
@@ -246,10 +260,10 @@ function entropy1_2D(idxs::Vector{Vector{Int}},
 
         for j in 1:maxn
             jj = idx[j+1]  # +1 because first neighbor is self
-            kldiv[j] = divfunc(xi, yi, sxi, syi, x[jj], y[jj], σ_x[jj], σ_y[jj])
+            kldiv[j] = -divfunc(xi, yi, sxi, syi, x[jj], y[jj], σ_x[jj], σ_y[jj])
         end
 
-        out += logsumexp(-kldiv) - log_maxn
+        out += _logsumexp(kldiv, maxn) - log_maxn
     end
 
     return entropy_HD(σ_x, σ_y) - out / N
@@ -261,14 +275,14 @@ Entropy1 for 3D - sequential with minimal allocations.
 function entropy1_3D(idxs::Vector{Vector{Int}},
                      x::Vector{T}, y::Vector{T}, z::Vector{T},
                      σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T};
-                     divmethod::String="KL") where {T<:Real}
+                     divmethod::String="KL",
+                     kldiv::Vector{T}=Vector{T}(undef, length(idxs[1]) - 1)) where {T<:Real}
 
     divfunc = select_divfunc_3D(divmethod)
     maxn = length(idxs[1]) - 1
     N = length(x)
     log_maxn = log(T(maxn))
 
-    kldiv = Vector{T}(undef, maxn)
     out = T(0)
 
     @inbounds for i in 1:N
@@ -278,11 +292,11 @@ function entropy1_3D(idxs::Vector{Vector{Int}},
 
         for j in 1:maxn
             jj = idx[j+1]
-            kldiv[j] = divfunc(xi, yi, zi, sxi, syi, szi,
+            kldiv[j] = -divfunc(xi, yi, zi, sxi, syi, szi,
                                x[jj], y[jj], z[jj], σ_x[jj], σ_y[jj], σ_z[jj])
         end
 
-        out += logsumexp(-kldiv) - log_maxn
+        out += _logsumexp(kldiv, maxn) - log_maxn
     end
 
     return entropy_HD(σ_x, σ_y, σ_z) - out / N
@@ -325,7 +339,8 @@ function ub_entropy(x::Vector{T}, y::Vector{T},
     kdtree = KDTree(data; leafsize=10)
     idxs, _ = knn(kdtree, data, maxn + 1, true)
 
-    entropy1_2D(idxs, x, y, σ_x, σ_y; divmethod=divmethod)
+    kldiv = Vector{T}(undef, maxn)
+    entropy1_2D(idxs, x, y, σ_x, σ_y; divmethod=divmethod, kldiv=kldiv)
 end
 
 """
@@ -355,7 +370,8 @@ function ub_entropy(x::Vector{T}, y::Vector{T}, z::Vector{T},
     kdtree = KDTree(data; leafsize=10)
     idxs, _ = knn(kdtree, data, maxn + 1, true)
 
-    entropy1_3D(idxs, x, y, z, σ_x, σ_y, σ_z; divmethod=divmethod)
+    kldiv = Vector{T}(undef, maxn)
+    entropy1_3D(idxs, x, y, z, σ_x, σ_y, σ_z; divmethod=divmethod, kldiv=kldiv)
 end
 
 """
