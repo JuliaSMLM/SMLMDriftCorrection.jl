@@ -26,7 +26,7 @@ arguments; all fields have sensible defaults.
 | `dataset_mode` | `:registered` | Multi-dataset handling: `:registered` or `:continuous` |
 | `chunk_frames` | `0` | Split datasets into chunks of N frames (0 = no chunking) |
 | `n_chunks` | `0` | Alternative: number of chunks per dataset (0 = use chunk_frames) |
-| `maxn` | `200` | Maximum neighbors for entropy calculation |
+| `maxn` | `100` | Maximum neighbors for entropy calculation |
 | `max_iterations` | `10` | Maximum iterations for `:iterative` mode |
 | `convergence_tol` | `0.001` | Convergence tolerance in μm for `:iterative` mode |
 | `warm_start` | `nothing` | Previous `info.model` for warm starting optimization |
@@ -56,7 +56,7 @@ julia> config.convergence_tol
     dataset_mode::Symbol = :registered
     chunk_frames::Int = 0
     n_chunks::Int = 0
-    maxn::Int = 200
+    maxn::Int = 100
     max_iterations::Int = 10
     convergence_tol::Float64 = 0.001
     warm_start::Union{Nothing, AbstractIntraInter} = nothing

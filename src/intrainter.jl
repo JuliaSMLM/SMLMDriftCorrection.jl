@@ -156,7 +156,7 @@ function findintra!(intra::AbstractIntraDrift,
                                                        divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work)
     end
 
-    # Optimize with convergence tolerances
+    # Optimize with Nelder-Mead
     opt = Optim.Options(iterations=10000, f_abstol=1e-2, x_abstol=1e-4, show_trace=false)
     res = optimize(myfun, θ0, opt)
     theta2intra!(intra, res.minimizer)
