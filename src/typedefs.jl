@@ -8,7 +8,7 @@ abstract type AbstractIntraInter <: AbstractDriftModel end
 
 mutable struct InterShift
     ndims::Int
-    dm::Vector{<:Real}
+    dm::Vector{Float64}
 end
 
 """
