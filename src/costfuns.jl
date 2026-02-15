@@ -160,9 +160,7 @@ Uses matrix-stored neighbor indices (k × N) and pre-allocated kldiv buffer.
 function entropy1_2D_adaptive(neighbor_indices::Matrix{Int}, k::Int,
                                x::Vector{T}, y::Vector{T},
                                σ_x::Vector{T}, σ_y::Vector{T},
-                               kldiv::Vector{T};
-                               divmethod::String="KL") where {T<:Real}
-    divfunc = select_divfunc_2D(divmethod)
+                               kldiv::Vector{T}) where {T<:Real}
     N = length(x)
 
     if k < 1
@@ -178,7 +176,7 @@ function entropy1_2D_adaptive(neighbor_indices::Matrix{Int}, k::Int,
 
         for j in 1:k
             jj = neighbor_indices[j, i]
-            kldiv[j] = -divfunc(xi, yi, sxi, syi, x[jj], y[jj], σ_x[jj], σ_y[jj])
+            kldiv[j] = -divKL_2D(xi, yi, sxi, syi, x[jj], y[jj], σ_x[jj], σ_y[jj])
         end
 
         out += _logsumexp(kldiv, k) - log_k
@@ -195,9 +193,7 @@ end
 function entropy1_3D_adaptive(neighbor_indices::Matrix{Int}, k::Int,
                                x::Vector{T}, y::Vector{T}, z::Vector{T},
                                σ_x::Vector{T}, σ_y::Vector{T}, σ_z::Vector{T},
-                               kldiv::Vector{T};
-                               divmethod::String="KL") where {T<:Real}
-    divfunc = select_divfunc_3D(divmethod)
+                               kldiv::Vector{T}) where {T<:Real}
     N = length(x)
 
     if k < 1
@@ -213,7 +209,7 @@ function entropy1_3D_adaptive(neighbor_indices::Matrix{Int}, k::Int,
 
         for j in 1:k
             jj = neighbor_indices[j, i]
-            kldiv[j] = -divfunc(xi, yi, zi, sxi, syi, szi,
+            kldiv[j] = -divKL_3D(xi, yi, zi, sxi, syi, szi,
                                x[jj], y[jj], z[jj], σ_x[jj], σ_y[jj], σ_z[jj])
         end
 
@@ -231,7 +227,6 @@ function costfun_entropy_intra_2D_adaptive(θ, x::Vector{T}, y::Vector{T},
                                             framenum::Vector{Int}, maxn::Int,
                                             intra::AbstractIntraDrift,
                                             state::NeighborState{T}, nframes::Int;
-                                            divmethod::String="KL",
                                             x_work::Vector{T}=similar(x),
                                             y_work::Vector{T}=similar(y)) where {T<:Real}
     theta2intra!(intra, θ)
@@ -245,8 +240,7 @@ function costfun_entropy_intra_2D_adaptive(θ, x::Vector{T}, y::Vector{T},
     maybe_rebuild_neighbors!(state, x_work, y_work, intra, nframes)
 
     return entropy1_2D_adaptive(state.neighbor_indices, state.k,
-                                 x_work, y_work, σ_x, σ_y, state.kldiv;
-                                 divmethod=divmethod)
+                                 x_work, y_work, σ_x, σ_y, state.kldiv)
 end
 
 """
@@ -257,7 +251,6 @@ function costfun_entropy_intra_3D_adaptive(θ, x::Vector{T}, y::Vector{T}, z::Ve
                                             framenum::Vector{Int}, maxn::Int,
                                             intra::AbstractIntraDrift,
                                             state::NeighborState{T}, nframes::Int;
-                                            divmethod::String="KL",
                                             x_work::Vector{T}=similar(x),
                                             y_work::Vector{T}=similar(y),
                                             z_work::Vector{T}=similar(z)) where {T<:Real}
@@ -274,8 +267,7 @@ function costfun_entropy_intra_3D_adaptive(θ, x::Vector{T}, y::Vector{T}, z::Ve
 
     return entropy1_3D_adaptive(state.neighbor_indices, state.k,
                                  x_work, y_work, z_work,
-                                 σ_x, σ_y, σ_z, state.kldiv;
-                                 divmethod=divmethod)
+                                 σ_x, σ_y, σ_z, state.kldiv)
 end
 
 # ============================================================================
@@ -343,13 +335,10 @@ function costfun_entropy_inter_2D_merged(θ,
     x_n::Vector{T}, y_n::Vector{T}, σ_x_n::Vector{T}, σ_y_n::Vector{T},
     x_ref::Vector{T}, y_ref::Vector{T}, σ_x_ref::Vector{T}, σ_y_ref::Vector{T},
     maxn::Int, inter::InterShift;
-    divmethod::String="KL",
     x_work::Vector{T}=similar(x_n),
     y_work::Vector{T}=similar(y_n),
     data_combined::Matrix{T}=Matrix{T}(undef, 2, length(x_n)+length(x_ref)),
     state::Union{InterNeighborState{T}, Nothing}=nothing) where {T<:Real}
-
-    divfunc = select_divfunc_2D(divmethod)
 
     # Apply shift to dataset_n
     theta2inter!(inter, θ)
@@ -418,7 +407,7 @@ function costfun_entropy_inter_2D_merged(θ,
                 xj, yj = x_ref[ref_idx], y_ref[ref_idx]
                 sxj, syj = σ_x_ref[ref_idx], σ_y_ref[ref_idx]
             end
-            kldiv_buf[j] = -divfunc(xi, yi, sxi, syi, xj, yj, sxj, syj)
+            kldiv_buf[j] = -divKL_2D(xi, yi, sxi, syi, xj, yj, sxj, syj)
         end
 
         out += _logsumexp(kldiv_buf, k) - log_k
@@ -440,14 +429,11 @@ function costfun_entropy_inter_3D_merged(θ,
     x_ref::Vector{T}, y_ref::Vector{T}, z_ref::Vector{T},
     σ_x_ref::Vector{T}, σ_y_ref::Vector{T}, σ_z_ref::Vector{T},
     maxn::Int, inter::InterShift;
-    divmethod::String="KL",
     x_work::Vector{T}=similar(x_n),
     y_work::Vector{T}=similar(y_n),
     z_work::Vector{T}=similar(z_n),
     data_combined::Matrix{T}=Matrix{T}(undef, 3, length(x_n)+length(x_ref)),
     state::Union{InterNeighborState{T}, Nothing}=nothing) where {T<:Real}
-
-    divfunc = select_divfunc_3D(divmethod)
 
     # Apply shift to dataset_n
     theta2inter!(inter, θ)
@@ -520,7 +506,7 @@ function costfun_entropy_inter_3D_merged(θ,
                 xj, yj, zj = x_ref[ref_idx], y_ref[ref_idx], z_ref[ref_idx]
                 sxj, syj, szj = σ_x_ref[ref_idx], σ_y_ref[ref_idx], σ_z_ref[ref_idx]
             end
-            kldiv_buf[j] = -divfunc(xi, yi, zi, sxi, syi, szi, xj, yj, zj, sxj, syj, szj)
+            kldiv_buf[j] = -divKL_3D(xi, yi, zi, sxi, syi, szi, xj, yj, zj, sxj, syj, szj)
         end
 
         out += _logsumexp(kldiv_buf, k) - log_k

@@ -147,13 +147,13 @@ function findintra!(intra::AbstractIntraDrift,
         build_neighbors!(state, x, y)
         myfun = θ -> costfun_entropy_intra_2D_adaptive(θ, x, y, σ_x, σ_y, framenum, maxn, intra,
                                                        state, nframes;
-                                                       divmethod="KL", x_work=x_work, y_work=y_work)
+                                                       x_work=x_work, y_work=y_work)
     else # 3D
         z_work = similar(z)
         build_neighbors!(state, x, y, z)
         myfun = θ -> costfun_entropy_intra_3D_adaptive(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra,
                                                        state, nframes;
-                                                       divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work)
+                                                       x_work=x_work, y_work=y_work, z_work=z_work)
     end
 
     # Optimize with Nelder-Mead
@@ -300,7 +300,7 @@ function findinter!(dm::AbstractIntraInter,
             x_n, y_n, σ_x_n, σ_y_n,
             x_ref, y_ref, σ_x_ref, σ_y_ref,
             maxn, inter;
-            divmethod="KL", x_work=x_work, y_work=y_work, data_combined=data_combined, state=state)
+            x_work=x_work, y_work=y_work, data_combined=data_combined, state=state)
     else # 3D
         z_work = similar(z_n)
         data_combined = Matrix{Float64}(undef, 3, N_n + N_ref)
@@ -309,7 +309,7 @@ function findinter!(dm::AbstractIntraInter,
             x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
             x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
             maxn, inter;
-            divmethod="KL", x_work=x_work, y_work=y_work, z_work=z_work, data_combined=data_combined, state=state)
+            x_work=x_work, y_work=y_work, z_work=z_work, data_combined=data_combined, state=state)
     end
 
     # Add regularization if specified: cost = entropy + λ*||θ - target||²
