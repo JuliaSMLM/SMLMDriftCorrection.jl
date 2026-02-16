@@ -19,7 +19,7 @@ optimization.
 """
 mutable struct LegendrePoly1D <: AbstractIntraDrift1D
     degree::Int
-    coefficients::Vector{<:Real}
+    coefficients::Vector{Float64}
     n_frames::Int  # needed for time normalization
 end
 
@@ -89,7 +89,7 @@ Layout: [c1_x, c2_x, ..., c1_y, c2_y, ...]  (coefficients for P_1, P_2, ...)
 function intra2theta(p::IntraLegendre)
     n_coeffs = p.dm[1].degree  # degree coefficients (P_1 through P_degree)
     l = p.ndims * n_coeffs
-    θ = zeros(Real, l)
+    θ = zeros(Float64, l)
     for ii = 1:p.ndims, jj = 1:n_coeffs
         θ[jj + (ii - 1) * n_coeffs] = p.dm[ii].coefficients[jj]
     end
