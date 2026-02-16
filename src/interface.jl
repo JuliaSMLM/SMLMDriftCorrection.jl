@@ -70,7 +70,7 @@ function driftcorrect(smld::SMLD;
     dataset_mode::Symbol = :registered,
     chunk_frames::Int = 0,
     n_chunks::Int = 0,
-    maxn::Int = 200,
+    maxn::Int = 100,
     max_iterations::Int = 10,
     convergence_tol::Float64 = 0.001,
     warm_start::Union{Nothing, AbstractIntraInter} = nothing,
@@ -198,7 +198,7 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
     dataset_mode::Symbol = :registered,
     max_iterations::Int = 10,
     convergence_tol::Float64 = 0.001,
-    maxn::Int = 200,
+    maxn::Int = 100,
     verbose::Int = 0)
 
     t_start = time_ns()
