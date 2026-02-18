@@ -17,11 +17,15 @@ include("intrainter.jl")
 include("utilities.jl")
 include("roi_selection.jl")
 include("interface.jl")
+include("align.jl")
 
 export driftcorrect
 export DriftConfig
 export DriftInfo
 export filter_emitters
 export drift_trajectory
+export align_smld
+export AlignConfig
+export AlignInfo
 
 end
