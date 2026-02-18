@@ -341,6 +341,116 @@ using Random
         end
     end
 
+    # ========== align_smld ==========
+    @testset "align_smld" begin
+        # --- Type checks ---
+        @testset "Type hierarchy" begin
+            @test DC.AlignConfig <: DC.AbstractSMLMConfig
+            @test DC.AlignInfo <: DC.AbstractSMLMInfo
+            config = DC.AlignConfig(method=:fft, maxn=50)
+            @test config.method == :fft
+            @test config.maxn == 50
+        end
+
+        # --- Build shifted SMLDs from smld_noisy (2D) ---
+        # Use dataset=1 subset as independent "acquisitions"
+        smld_base = DC.filter_emitters(smld_noisy,
+            [e.dataset == 1 for e in smld_noisy.emitters])
+
+        true_shifts_2d = [[0.0, 0.0], [0.3, -0.2], [-0.15, 0.4]]
+        smlds_2d = Vector{typeof(smld_base)}(undef, 3)
+        smlds_2d[1] = smld_base
+        for k in 2:3
+            s = deepcopy(smld_base)
+            for nn in eachindex(s.emitters)
+                s.emitters[nn].x += true_shifts_2d[k][1]
+                s.emitters[nn].y += true_shifts_2d[k][2]
+            end
+            smlds_2d[k] = s
+        end
+
+        # --- Entropy 2D ---
+        @testset "Entropy 2D" begin
+            (aligned, info) = DC.align_smld(smlds_2d; method=:entropy, verbose=1)
+            @test length(aligned) == 3
+            @test info isa DC.AlignInfo
+            @test info.method == :entropy
+            @test info.backend == :cpu
+            @test info.elapsed_s > 0
+            @test info.shifts[1] == [0.0, 0.0]
+            for k in 2:3
+                @test isapprox(info.shifts[k], true_shifts_2d[k]; atol=0.050)
+            end
+        end
+
+        # --- FFT 2D ---
+        @testset "FFT 2D" begin
+            (aligned, info) = DC.align_smld(smlds_2d; method=:fft)
+            @test info.method == :fft
+            for k in 2:3
+                @test isapprox(info.shifts[k], true_shifts_2d[k]; atol=0.150)
+            end
+        end
+
+        # --- Build shifted SMLDs from smld_noisy3 (3D) ---
+        smld_base3 = DC.filter_emitters(smld_noisy3,
+            [e.dataset == 1 for e in smld_noisy3.emitters])
+
+        true_shifts_3d = [[0.0, 0.0, 0.0], [0.2, -0.15, 0.1], [-0.1, 0.25, -0.05]]
+        smlds_3d = Vector{typeof(smld_base3)}(undef, 3)
+        smlds_3d[1] = smld_base3
+        for k in 2:3
+            s = deepcopy(smld_base3)
+            for nn in eachindex(s.emitters)
+                s.emitters[nn].x += true_shifts_3d[k][1]
+                s.emitters[nn].y += true_shifts_3d[k][2]
+                s.emitters[nn].z += true_shifts_3d[k][3]
+            end
+            smlds_3d[k] = s
+        end
+
+        # --- Entropy 3D ---
+        @testset "Entropy 3D" begin
+            (aligned, info) = DC.align_smld(smlds_3d; method=:entropy, verbose=1)
+            @test info.method == :entropy
+            @test info.shifts[1] == [0.0, 0.0, 0.0]
+            for k in 2:3
+                @test isapprox(info.shifts[k], true_shifts_3d[k]; atol=0.100)
+            end
+        end
+
+        # --- FFT 3D ---
+        @testset "FFT 3D" begin
+            (aligned, info) = DC.align_smld(smlds_3d; method=:fft)
+            @test info.method == :fft
+            for k in 2:3
+                @test isapprox(info.shifts[k], true_shifts_3d[k]; atol=0.150)
+            end
+        end
+
+        # --- Config dispatch ---
+        @testset "Config dispatch" begin
+            config = DC.AlignConfig(method=:fft, histbinsize=0.05)
+            (aligned, info) = DC.align_smld(smlds_2d, config)
+            @test info isa DC.AlignInfo
+            @test info.method == :fft
+        end
+
+        # --- Edge cases ---
+        @testset "Edge cases" begin
+            # 2 SMLDs works
+            (aligned2, info2) = DC.align_smld(smlds_2d[1:2]; method=:fft)
+            @test length(aligned2) == 2
+            @test length(info2.shifts) == 2
+
+            # 1 SMLD errors
+            @test_throws ErrorException DC.align_smld([smlds_2d[1]])
+
+            # Bad method errors
+            @test_throws ErrorException DC.align_smld(smlds_2d; method=:bad)
+        end
+    end
+
     # ========== Auto ROI Integration ==========
     @testset "Auto ROI integration" begin
         # Test that auto_roi=true produces reasonable results

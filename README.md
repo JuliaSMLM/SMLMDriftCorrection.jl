@@ -88,6 +88,34 @@ config = DriftConfig(quality=:iterative, degree=3, verbose=1)
 
 The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
 
+## Aligning Independent SMLDs
+
+`align_smld` aligns a vector of independent SMLD structures to a common reference (the first) using rigid shifts. Use case: aligning separate acquisitions or multi-color channels that image the same FOV.
+
+```julia
+using SMLMDriftCorrection
+
+# Entropy method (CC initial guess + entropy refinement, default)
+(aligned, info) = align_smld([smld_ch1, smld_ch2]; method=:entropy)
+info.shifts  # [zeros(2), [dx, dy]] -- shift applied to each SMLD
+
+# FFT method (cross-correlation only, faster)
+(aligned, info) = align_smld([smld_ch1, smld_ch2]; method=:fft)
+
+# Config struct form
+config = AlignConfig(method=:entropy, maxn=100, histbinsize=0.05)
+(aligned, info) = align_smld(smlds, config)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `method` | `:entropy` | `:entropy` (CC + entropy refinement) or `:fft` (CC only) |
+| `maxn` | `100` | Maximum neighbors for entropy calculation |
+| `histbinsize` | `0.05` | Histogram bin size (μm) for cross-correlation |
+| `verbose` | `0` | Verbosity (0=quiet, 1=info) |
+
+Works on both 2D and 3D data. Threaded across datasets. The entropy method uses regularization toward the CC result to prevent optimizer divergence.
+
 ## Utility Functions
 
 ### drift_trajectory
