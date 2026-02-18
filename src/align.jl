@@ -20,7 +20,7 @@ same FOV/structure.
 # Returns
 Tuple `(aligned_smlds, info::AlignInfo)` where:
 - `aligned_smlds`: Vector of aligned SMLDs (first is unchanged)
-- `info.shifts[i]`: shift applied to smlds[i] (shifts[1] = zeros)
+- `info.shifts[i]`: shift applied to `smlds[i]` (`shifts[1]` = zeros)
 
 # Example
 ```julia
