@@ -114,3 +114,36 @@ Pass `DriftInfo` directly to continue iterating from a previous result:
 # Continue with more iterations
 (smld2, info2) = driftcorrect(smld, info1; max_iterations=5)
 ```
+
+## SMLD Alignment
+
+For aligning independent SMLD structures (e.g., multi-color channels or separate acquisitions of the same FOV), use `align_smld` with `AlignConfig`.
+
+### Input: AlignConfig
+
+```@docs
+AlignConfig
+```
+
+### Output: AlignInfo
+
+```@docs
+AlignInfo
+```
+
+### Usage
+
+```julia
+# Entropy method (default) -- CC initial guess + entropy refinement
+(aligned, info) = align_smld([smld_ch1, smld_ch2])
+info.shifts  # [zeros(2), [dx, dy]]
+
+# FFT method -- cross-correlation only
+(aligned, info) = align_smld(smlds; method=:fft)
+
+# Config struct form
+config = AlignConfig(method=:entropy, maxn=100)
+(aligned, info) = align_smld(smlds, config)
+```
+
+The entropy method regularizes toward the cross-correlation initial guess to prevent optimizer divergence. Works on both 2D and 3D data, threaded across datasets.

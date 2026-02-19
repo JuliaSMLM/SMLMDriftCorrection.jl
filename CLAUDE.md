@@ -49,6 +49,9 @@ InterShift (per-dataset constant shift)
 
 DriftConfig <: AbstractSMLMConfig (input config, @kwdef)
 DriftInfo{M} <: AbstractSMLMInfo (output struct with model, timing, convergence, roi_indices)
+
+AlignConfig <: AbstractSMLMConfig (input config for align_smld, @kwdef)
+AlignInfo <: AbstractSMLMInfo (output struct with shifts, timing)
 ```
 
 ### Key Data Flow
@@ -70,7 +73,8 @@ DriftInfo{M} <: AbstractSMLMInfo (output struct with model, timing, convergence,
 - `utilities.jl`: `filter_emitters()`, `chunk_smld()`, `drift_trajectory()`
 - `crosscorr.jl`: Cross-correlation helpers (`findshift`, `histimage2D`, `crosscorr2D`)
 - `roi_selection.jl`: Auto-ROI subsampling (`calculate_n_locs_required`, `find_dense_roi`)
-- `typedefs.jl`: Abstract types, `InterShift`, `DriftInfo`
+- `align.jl`: `align_smld()` for rigid-shift alignment of independent SMLDs
+- `typedefs.jl`: Abstract types, `InterShift`, `DriftInfo`, `AlignConfig`, `AlignInfo`
 
 ### Threading
 
@@ -152,6 +156,22 @@ smld_recovered = DC.correctdrift(smld_drifted, drift_model)
 
 # Second dataset - use model from first as starting point
 (smld2_corrected, info2) = driftcorrect(smld2; warm_start=info1.model)
+```
+
+### Aligning Independent SMLDs
+```julia
+using SMLMDriftCorrection
+
+# Align separate acquisitions to a common reference (smlds[1])
+(aligned, info) = align_smld(smlds; method=:entropy)
+info.shifts  # shift applied to each SMLD
+
+# FFT-only (faster, less accurate)
+(aligned, info) = align_smld(smlds; method=:fft)
+
+# Config struct form
+config = AlignConfig(method=:entropy, maxn=100)
+(aligned, info) = align_smld(smlds, config)
 ```
 
 ### Filtering to ROI

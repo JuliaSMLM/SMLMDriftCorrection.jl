@@ -8,10 +8,11 @@ Fiducial-free drift correction for Single Molecule Localization Microscopy (SMLM
 
 ## Overview
 
-SMLMDriftCorrection.jl implements entropy-based drift correction using Legendre polynomial models. The algorithm corrects both:
+SMLMDriftCorrection.jl implements entropy-based drift correction using Legendre polynomial models. The package provides:
 
-- **Intra-dataset drift**: Drift within each dataset (movie segment) modeled as a polynomial over time
-- **Inter-dataset drift**: Constant shifts between datasets to align them
+- **Intra-dataset drift correction**: Drift within each dataset (movie segment) modeled as a polynomial over time
+- **Inter-dataset drift correction**: Constant shifts between datasets to align them
+- **SMLD alignment** (`align_smld`): Rigid-shift alignment of independent SMLD structures (e.g., multi-color channels)
 
 All distance units are in **micrometers (μm)**.
 
@@ -146,6 +147,17 @@ config = DriftConfig(dataset_mode=:continuous)
 # With chunking for finer-grained correction
 config = DriftConfig(dataset_mode=:continuous, chunk_frames=4000)
 (smld_corrected, info) = driftcorrect(smld, config)
+```
+
+### Aligning Independent SMLDs
+
+For aligning separate acquisitions or multi-color channels:
+
+```julia
+using SMLMDriftCorrection
+
+(aligned, info) = align_smld([smld_ch1, smld_ch2]; method=:entropy)
+info.shifts  # [zeros(2), [dx, dy]]
 ```
 
 ### Warm Start / Continuation

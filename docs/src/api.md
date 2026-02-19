@@ -16,6 +16,14 @@ driftcorrect
 
 See [Configuration](@ref) for full documentation of [`DriftConfig`](@ref) and [`DriftInfo`](@ref).
 
+## SMLD Alignment
+
+```@docs
+align_smld
+```
+
+See [Configuration](@ref) for full documentation of [`AlignConfig`](@ref) and [`AlignInfo`](@ref).
+
 ## Utility Functions
 
 ```@docs

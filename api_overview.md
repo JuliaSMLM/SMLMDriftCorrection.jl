@@ -4,8 +4,8 @@ AI-parseable API reference for SMLMDriftCorrection.jl. All distance units are in
 
 ## Exports Summary
 
-- **Types:** 2 (`DriftConfig`, `DriftInfo`)
-- **Functions:** 3 (`driftcorrect`, `filter_emitters`, `drift_trajectory`)
+- **Types:** 4 (`DriftConfig`, `DriftInfo`, `AlignConfig`, `AlignInfo`)
+- **Functions:** 4 (`driftcorrect`, `align_smld`, `filter_emitters`, `drift_trajectory`)
 
 ## Key Concepts
 
@@ -61,6 +61,40 @@ Output metadata from drift correction. Returned as second element of tuple.
 - `history::Vector{Float64}`: Entropy per iteration (for diagnostics)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subset (`nothing` if `auto_roi=false`)
 
+### AlignConfig
+
+```julia
+@kwdef struct AlignConfig <: AbstractSMLMConfig
+```
+
+Configuration for rigid-shift alignment of independent SMLDs via `align_smld`.
+
+**Fields:**
+- `method::Symbol = :entropy`: Alignment method (`:entropy` or `:fft`)
+- `maxn::Int = 100`: Maximum neighbors for entropy calculation
+- `histbinsize::Float64 = 0.05`: Histogram bin size (μm) for cross-correlation
+- `verbose::Int = 0`: Verbosity (0=quiet, 1=info)
+
+**Constructor:**
+```julia
+AlignConfig()                           # all defaults
+AlignConfig(method=:fft, maxn=50)       # keyword overrides
+```
+
+### AlignInfo
+
+```julia
+struct AlignInfo <: AbstractSMLMInfo
+```
+
+Output metadata from `align_smld`.
+
+**Fields:**
+- `shifts::Vector{Vector{Float64}}`: Shift applied to each SMLD (shifts[1] = zeros)
+- `elapsed_s::Float64`: Wall time in seconds
+- `method::Symbol`: Method used (`:entropy` or `:fft`)
+- `backend::Symbol`: Computation backend (`:cpu`)
+
 ## Functions
 
 ### driftcorrect
@@ -82,6 +116,25 @@ Main interface for drift correction. The config struct form is preferred.
 ```julia
 config = DriftConfig(quality=:iterative, degree=3, verbose=1)
 (smld_corrected, info) = driftcorrect(smld, config)
+```
+
+### align_smld
+
+```julia
+align_smld(smlds::Vector{<:SMLD}; kwargs...) -> (Vector{<:SMLD}, AlignInfo)
+align_smld(smlds::Vector{<:SMLD}, config::AlignConfig) -> (Vector{<:SMLD}, AlignInfo)
+```
+
+Align a vector of independent SMLD structures to a common reference (smlds[1]) using rigid shifts. Two methods: `:entropy` (CC initial guess + regularized entropy refinement) and `:fft` (cross-correlation only). Works on 2D and 3D data. Threaded across datasets.
+
+**Arguments:**
+- `smlds`: Vector of 2+ SMLD structures (same dimensionality, non-empty)
+- `config`: `AlignConfig` with alignment parameters
+
+**Example:**
+```julia
+(aligned, info) = align_smld([smld_ch1, smld_ch2]; method=:entropy)
+info.shifts  # [zeros(2), [dx, dy]]
 ```
 
 ### filter_emitters
@@ -206,10 +259,12 @@ AbstractIntraDrift1D
 InterShift (per-dataset constant shift)
 
 AbstractSMLMConfig
-└── DriftConfig (exported)
+├── DriftConfig (exported)
+└── AlignConfig (exported)
 
 AbstractSMLMInfo
-└── DriftInfo{M} (exported)
+├── DriftInfo{M} (exported)
+└── AlignInfo (exported)
 ```
 
 ### IntraLegendre
@@ -384,4 +439,10 @@ config2 = DriftConfig(warm_start=info1.model)
 ```julia
 (smld1, info1) = driftcorrect(smld, DriftConfig(quality=:singlepass))
 (smld2, info2) = driftcorrect(smld1, info1; max_iterations=5)
+```
+
+### Align Independent SMLDs (Multi-Channel Registration)
+```julia
+(aligned, info) = align_smld([smld_ch1, smld_ch2], AlignConfig(method=:entropy))
+info.shifts  # [zeros(2), [dx, dy]]
 ```
