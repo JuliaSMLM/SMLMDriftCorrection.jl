@@ -106,3 +106,42 @@ struct DriftInfo{M<:AbstractIntraInter} <: AbstractSMLMInfo
     history::Vector{Float64}
     roi_indices::Union{Nothing, Vector{Int}}
 end
+
+"""
+    AlignConfig <: AbstractSMLMConfig
+
+Configuration for rigid-shift alignment of independent SMLDs.
+
+# Fields
+
+| Field | Default | Description |
+|:------|:--------|:------------|
+| `method` | `:entropy` | Alignment method: `:entropy` (CC + entropy refinement) or `:fft` (CC only) |
+| `maxn` | `100` | Maximum neighbors for entropy calculation |
+| `histbinsize` | `0.05` | Histogram bin size (μm) for cross-correlation |
+| `verbose` | `0` | Verbosity level: 0=quiet, 1=info |
+"""
+@kwdef struct AlignConfig <: AbstractSMLMConfig
+    method::Symbol = :entropy
+    maxn::Int = 100
+    histbinsize::Float64 = 0.05
+    verbose::Int = 0
+end
+
+"""
+    AlignInfo <: AbstractSMLMInfo
+
+Result metadata from `align_smld`.
+
+# Fields
+- `shifts::Vector{Vector{Float64}}`: Recovered shift for each SMLD (shifts[1] = zeros)
+- `elapsed_s::Float64`: Wall time in seconds
+- `method::Symbol`: Method used (`:entropy` or `:fft`)
+- `backend::Symbol`: Computation backend (`:cpu`)
+"""
+struct AlignInfo <: AbstractSMLMInfo
+    shifts::Vector{Vector{Float64}}
+    elapsed_s::Float64
+    method::Symbol
+    backend::Symbol
+end
