@@ -372,9 +372,9 @@ function findshift(smld1::T, smld2::T;
     histbinsize = coord_type(histbinsize)
 
     # Compute the histogram images (assume the same size for both images).
-    if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
-       smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
-       smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
+    if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   ||
+       smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] ||
+       smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   ||
        smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
         error("Images must have the same size.")
     end
@@ -486,9 +486,9 @@ function findshift_damped(smld1::T, smld2::T;
     histbinsize = coord_type(histbinsize)
 
     # Build histogram images (same as findshift)
-    if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   &&
-       smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] &&
-       smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   &&
+    if smld1.camera.pixel_edges_x[1]   != smld2.camera.pixel_edges_x[1]   ||
+       smld1.camera.pixel_edges_x[end] != smld2.camera.pixel_edges_x[end] ||
+       smld1.camera.pixel_edges_y[1]   != smld2.camera.pixel_edges_y[1]   ||
        smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
         error("Images must have the same size.")
     end
