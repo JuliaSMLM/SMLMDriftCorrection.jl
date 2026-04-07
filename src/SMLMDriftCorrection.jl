@@ -18,6 +18,7 @@ include("utilities.jl")
 include("roi_selection.jl")
 include("interface.jl")
 include("align.jl")
+include("diagnostics.jl")
 
 export driftcorrect
 export DriftConfig
@@ -27,5 +28,6 @@ export drift_trajectory
 export align_smld
 export AlignConfig
 export AlignInfo
+export position_frame_correlation
 
 end

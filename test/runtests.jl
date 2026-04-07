@@ -481,4 +481,91 @@ using Random
         (smld_roi3, info_roi3) = DC.driftcorrect(smld_drift3; auto_roi=true)
         @test info_roi3 isa DC.DriftInfo
     end
+
+    # ========== position_frame_correlation ==========
+    # Smoke test for the diagnostic function. Wrapped in isdefined so this
+    # testset is skipped gracefully if the function hasn't been merged yet.
+    if isdefined(SMLMDriftCorrection, :position_frame_correlation)
+        @testset "position_frame_correlation" begin
+            # Build a small synthetic SMLD specifically for this test
+            # (3 datasets, 500 frames, density ~10) to keep things fast.
+            Random.seed!(7)
+            params_pfc = StaticSMLMConfig(
+                30.0,    # density (higher for enough locs)
+                0.13,    # σ_psf
+                30,      # minphotons
+                2,       # ndatasets
+                2000,    # nframes
+                50.0,    # framerate
+                2,       # ndims (2D)
+                [0.0, 1.0]
+            )
+            (smld_pfc, _) = simulate(
+                params_pfc;
+                pattern=Nmer2D(n=6, d=0.2),
+                molecule=GenericFluor(; photons=5000.0, k_on=0.05, k_off=50.0),
+                camera=IdealCamera(1:64, 1:64, 0.1)
+            )
+
+            # Apply a known random drift large enough to dominate noise
+            Random.seed!(321)
+            drift_pfc = DC.LegendrePolynomial(smld_pfc; degree=2,
+                                              initialize="random", rscale=0.3)
+            drift_pfc.inter[1].dm .= 0.0
+            smld_drifted_pfc = DC.applydrift(smld_pfc, drift_pfc)
+
+            # Drift-correct
+            (smld_corr_pfc, _info_pfc) = DC.driftcorrect(smld_drifted_pfc)
+
+            # --- Intra mode ---
+            res_drifted = SMLMDriftCorrection.position_frame_correlation(
+                smld_drifted_pfc; K=20, mode=:intra)
+            res_corrected = SMLMDriftCorrection.position_frame_correlation(
+                smld_corr_pfc; K=20, mode=:intra)
+
+            # Shape checks
+            @test res_drifted.mode == :intra
+            @test res_corrected.mode == :intra
+            @test res_drifted.K == 20
+            @test length(res_drifted.per_dataset) == 2
+            @test length(res_corrected.per_dataset) == 2
+
+            for entry in res_drifted.per_dataset
+                @test 0.0 <= abs(entry.corr_x) <= 1.0
+                @test 0.0 <= abs(entry.corr_y) <= 1.0
+                @test entry.corr_z === nothing  # 2D
+                @test entry.residuals_z === nothing
+                @test length(entry.residuals_x) == entry.n_locs
+                @test length(entry.residuals_y) == entry.n_locs
+                @test length(entry.frames) == entry.n_locs
+            end
+
+            # Summary checks
+            @test 0.0 <= res_drifted.summary.mean_abs_corr_x <= 1.0
+            @test 0.0 <= res_drifted.summary.mean_abs_corr_y <= 1.0
+            @test res_drifted.summary.mean_abs_corr_z === nothing
+            @test 0.0 <= res_corrected.summary.mean_abs_corr_x <= 1.0
+            @test 0.0 <= res_corrected.summary.mean_abs_corr_y <= 1.0
+
+            # Hypothesis: drifted data should show stronger combined
+            # position-frame correlation than corrected data. Check the sum
+            # of |corr_x| and |corr_y| to avoid per-axis noise flipping the sign.
+            drifted_total = res_drifted.summary.mean_abs_corr_x + res_drifted.summary.mean_abs_corr_y
+            corrected_total = res_corrected.summary.mean_abs_corr_x + res_corrected.summary.mean_abs_corr_y
+            print("position_frame_correlation: |corr_x|+|corr_y| drifted=$drifted_total corrected=$corrected_total\n")
+            @test drifted_total > corrected_total
+
+            # --- Inter mode ---
+            res_inter = SMLMDriftCorrection.position_frame_correlation(
+                smld_drifted_pfc; K=20, mode=:inter)
+            @test res_inter.mode == :inter
+            @test res_inter.K == 20
+            @test 0.0 <= abs(res_inter.corr_x) <= 1.0
+            @test 0.0 <= abs(res_inter.corr_y) <= 1.0
+            @test res_inter.corr_z === nothing
+            @test res_inter.residuals_z === nothing
+            @test length(res_inter.residuals_x) == length(res_inter.dataset_indices)
+            @test length(res_inter.residuals_y) == length(res_inter.dataset_indices)
+        end
+    end
 end
