@@ -65,6 +65,7 @@ julia> config.convergence_tol
     σ_loc::Float64 = 0.010
     σ_target::Float64 = 0.001
     roi_safety_factor::Float64 = 4.0
+    shift_scale::Float64 = 1.0
 end
 
 """
