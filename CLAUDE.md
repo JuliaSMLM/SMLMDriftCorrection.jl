@@ -192,6 +192,7 @@ smld_roi = filter_emitters(smld, mask)
 - `max_iterations=10`: Maximum iterations for `:iterative` mode
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start=nothing`: Previous model for warm starting optimization
+- `shift_scale=1.0`: Expected inter-shift scale (μm) for registered mode L2 regularization (λ=1/σ²)
 - `verbose=0`: 0=quiet, 1=info, 2=debug
 
 ### Auto-ROI Parameters
