@@ -167,6 +167,10 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
+    # Compute residual drift diagnostic
+    diag = position_frame_correlation(smld_corrected; K=min(20, length(smld_corrected.emitters) ÷ smld_corrected.n_datasets - 1), mode=:intra)
+    residual_corr = diag.summary
+
     elapsed_s = (time_ns() - t_start) / 1e9
 
     info = DriftInfo(
@@ -177,7 +181,8 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
         result.converged,
         final_entropy,
         result.history,
-        roi_indices
+        roi_indices,
+        residual_corr
     )
 
     return (smld_corrected, info)
@@ -219,6 +224,10 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
+    # Compute residual drift diagnostic
+    diag = position_frame_correlation(smld_corrected; K=min(20, length(smld_corrected.emitters) ÷ smld_corrected.n_datasets - 1), mode=:intra)
+    residual_corr = diag.summary
+
     elapsed_s = (time_ns() - t_start) / 1e9
 
     new_info = DriftInfo(
@@ -229,7 +238,8 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
         iter_result.converged,
         final_entropy,
         iter_result.history,
-        info.roi_indices  # Preserve ROI from original call
+        info.roi_indices,  # Preserve ROI from original call
+        residual_corr
     )
 
     return (smld_corrected, new_info)

@@ -83,6 +83,9 @@ Supports warm start via `info.model`.
 - `entropy::Float64`: Final entropy value after correction
 - `history::Vector{Float64}`: Entropy per iteration (empty for :fft)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subsampling (nothing if not used)
+- `residual_correlation::NamedTuple`: Position-frame correlation diagnostic on corrected data.
+  Fields: `mean_abs_corr_x`, `mean_abs_corr_y`, `mean_abs_corr_z` (nothing for 2D).
+  Low values (~0.01) indicate drift is well-corrected; high values indicate residual drift.
 
 # Usage
 ```julia
@@ -92,6 +95,7 @@ info.entropy      # final value
 info.elapsed_s    # timing
 plot(info.history)  # diagnostics
 info.roi_indices  # ROI used for estimation (nothing if auto_roi=false)
+info.residual_correlation.mean_abs_corr_y  # residual drift quality
 
 # Warm start from previous result
 (smld2, info2) = driftcorrect(smld2; warm_start=info.model)
@@ -106,6 +110,7 @@ struct DriftInfo{M<:AbstractIntraInter} <: AbstractSMLMInfo
     entropy::Float64
     history::Vector{Float64}
     roi_indices::Union{Nothing, Vector{Int}}
+    residual_correlation::NamedTuple
 end
 
 """
