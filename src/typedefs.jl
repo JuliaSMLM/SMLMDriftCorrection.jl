@@ -84,7 +84,9 @@ Supports warm start via `info.model`.
 - `history::Vector{Float64}`: Entropy per iteration (empty for :fft)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subsampling (nothing if not used)
 - `residual_correlation::NamedTuple`: Position-frame correlation diagnostic on corrected data.
-  Fields: `mean_abs_corr_x`, `mean_abs_corr_y`, `mean_abs_corr_z` (nothing for 2D).
+  - `intra_summary`: `(mean_abs_corr_x, mean_abs_corr_y, mean_abs_corr_z)` — per-dataset average
+  - `intra_per_dataset`: vector of `(dataset, n_locs, corr_x, corr_y, corr_z)` — flag bad datasets
+  - `inter`: `(corr_x, corr_y, corr_z)` — cross-dataset alignment quality
   Low values (~0.01) indicate drift is well-corrected; high values indicate residual drift.
 
 # Usage
@@ -95,7 +97,9 @@ info.entropy      # final value
 info.elapsed_s    # timing
 plot(info.history)  # diagnostics
 info.roi_indices  # ROI used for estimation (nothing if auto_roi=false)
-info.residual_correlation.mean_abs_corr_y  # residual drift quality
+info.residual_correlation.intra_summary.mean_abs_corr_y  # overall residual
+info.residual_correlation.intra_per_dataset[5].corr_y    # dataset 5 residual
+info.residual_correlation.inter.corr_y                   # inter-dataset alignment
 
 # Warm start from previous result
 (smld2, info2) = driftcorrect(smld2; warm_start=info.model)

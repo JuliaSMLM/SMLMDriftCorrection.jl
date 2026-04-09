@@ -167,9 +167,15 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
-    # Compute residual drift diagnostic
-    diag = position_frame_correlation(smld_corrected; K=min(20, length(smld_corrected.emitters) ÷ smld_corrected.n_datasets - 1), mode=:intra)
-    residual_corr = diag.summary
+    # Compute residual drift diagnostic (intra + inter)
+    _K = min(20, max(1, length(smld_corrected.emitters) ÷ max(1, smld_corrected.n_datasets) - 1))
+    _diag_intra = position_frame_correlation(smld_corrected; K=_K, mode=:intra)
+    _diag_inter = position_frame_correlation(smld_corrected; K=_K, mode=:inter)
+    residual_corr = (
+        intra_summary = _diag_intra.summary,
+        intra_per_dataset = [(dataset=e.dataset, n_locs=e.n_locs, corr_x=e.corr_x, corr_y=e.corr_y, corr_z=e.corr_z) for e in _diag_intra.per_dataset],
+        inter = (corr_x=_diag_inter.corr_x, corr_y=_diag_inter.corr_y, corr_z=_diag_inter.corr_z),
+    )
 
     elapsed_s = (time_ns() - t_start) / 1e9
 
@@ -224,9 +230,15 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
-    # Compute residual drift diagnostic
-    diag = position_frame_correlation(smld_corrected; K=min(20, length(smld_corrected.emitters) ÷ smld_corrected.n_datasets - 1), mode=:intra)
-    residual_corr = diag.summary
+    # Compute residual drift diagnostic (intra + inter)
+    _K = min(20, max(1, length(smld_corrected.emitters) ÷ max(1, smld_corrected.n_datasets) - 1))
+    _diag_intra = position_frame_correlation(smld_corrected; K=_K, mode=:intra)
+    _diag_inter = position_frame_correlation(smld_corrected; K=_K, mode=:inter)
+    residual_corr = (
+        intra_summary = _diag_intra.summary,
+        intra_per_dataset = [(dataset=e.dataset, n_locs=e.n_locs, corr_x=e.corr_x, corr_y=e.corr_y, corr_z=e.corr_z) for e in _diag_intra.per_dataset],
+        inter = (corr_x=_diag_inter.corr_x, corr_y=_diag_inter.corr_y, corr_z=_diag_inter.corr_z),
+    )
 
     elapsed_s = (time_ns() - t_start) / 1e9
 
