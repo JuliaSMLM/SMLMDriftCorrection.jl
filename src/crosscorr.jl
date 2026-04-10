@@ -569,6 +569,48 @@ function findshift_damped(smld1::T, smld2::T;
     return shift
 end
 
+"""
+    _gaussian_image(x, y, xlo, ylo, xhi, yhi, pixsize; σ_factor=1.5)
+
+Render localizations as Gaussian blobs on a pixel grid.
+Each loc becomes a Gaussian with σ = σ_factor × pixsize.
+Much smoother than histogram binning → better CC peak precision.
+"""
+function _gaussian_image(x::Vector{Float64}, y::Vector{Float64},
+                         xlo::Float64, ylo::Float64, xhi::Float64, yhi::Float64,
+                         pixsize::Float64; σ_factor::Float64=1.5)
+    nx = round(Int, (xhi - xlo) / pixsize)
+    ny = round(Int, (yhi - ylo) / pixsize)
+    (nx < 2 || ny < 2) && return zeros(Float64, max(nx, 2), max(ny, 2))
+
+    im = zeros(Float64, nx, ny)
+    σ = σ_factor * pixsize
+    σ2 = 2 * σ^2
+    hw = ceil(Int, 3 * σ_factor)  # stamp half-width in pixels
+
+    @inbounds for k in eachindex(x)
+        # Pixel coordinates (1-based, fractional)
+        px = (x[k] - xlo) / pixsize
+        py = (y[k] - ylo) / pixsize
+        ix = round(Int, px)
+        iy = round(Int, py)
+
+        # Stamp Gaussian in neighborhood
+        for di in -hw:hw
+            ii = ix + di
+            (ii < 1 || ii > nx) && continue
+            dx2 = ((ii - px) * pixsize)^2
+            for dj in -hw:hw
+                jj = iy + dj
+                (jj < 1 || jj > ny) && continue
+                dy2 = ((jj - py) * pixsize)^2
+                im[ii, jj] += exp(-(dx2 + dy2) / σ2)
+            end
+        end
+    end
+    return im
+end
+
 # ============================================================================
 # Shift-field affine: 5×5 grid CC shifts + weighted least-squares affine fit
 # ============================================================================
@@ -643,12 +685,11 @@ function find_affine_shift_field(smld1::S, smld2::S;
         sub1 = BasicSMLD(smld1.emitters[mask1], sub_cam, smld1.n_frames, 1)
         sub2 = BasicSMLD(smld2_shifted.emitters[mask2], sub_cam, smld2_shifted.n_frames, 1)
 
-        # Histogram + CC
+        # Gaussian-rendered images for CC (smooth, sub-bin precision)
         sub_x1 = [e.x for e in sub1.emitters]; sub_y1 = [e.y for e in sub1.emitters]
         sub_x2 = [e.x for e in sub2.emitters]; sub_y2 = [e.y for e in sub2.emitters]
-        sub_ROI = float([xlo, xhi, ylo, yhi])
-        im_a = histimage2D(sub_x1, sub_y1; ROI=sub_ROI, histbinsize=hbs)
-        im_b = histimage2D(sub_x2, sub_y2; ROI=sub_ROI, histbinsize=hbs)
+        im_a = _gaussian_image(sub_x1, sub_y1, xlo, ylo, xhi, yhi, hbs)
+        im_b = _gaussian_image(sub_x2, sub_y2, xlo, ylo, xhi, yhi, hbs)
         cc = crosscorr2D(im_a, im_b)
 
         # Peak and quality
