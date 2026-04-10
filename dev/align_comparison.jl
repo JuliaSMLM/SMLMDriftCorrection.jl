@@ -52,8 +52,8 @@ em2 = load_dme_dcch(joinpath(BASE, "dme_2ch.h5"))
 pixel_size = 0.078
 all_x = vcat([e.x for e in em1], [e.x for e in em2])
 all_y = vcat([e.y for e in em1], [e.y for e in em2])
-x0 = floor(minimum(all_x) - 0.5; digits=1)
-y0 = floor(minimum(all_y) - 0.5; digits=1)
+x0 = max(0.0, floor(minimum(all_x) - 0.5; digits=1))
+y0 = max(0.0, floor(minimum(all_y) - 0.5; digits=1))
 x1 = ceil(maximum(all_x) + 0.5; digits=1)
 y1 = ceil(maximum(all_y) + 0.5; digits=1)
 nx = round(Int, (x1 - x0) / pixel_size) + 1
@@ -80,15 +80,34 @@ println("  shift = ($(round(t_fft.tx; digits=4)), $(round(t_fft.ty; digits=4))) 
 # align_smld with :shift, :fft method
 # ============================================================================
 
-println("\n--- align_smld (shift, fft) ---")
-@time (aligned_shift, _) = DC.align_smld([smld1, smld2]; transform=:shift, method=:fft, verbose=1)
+function fft_affine_align(smld_ref, smld_target; histbinsize=0.05)
+    smld2_work = deepcopy(smld_target)
 
-# ============================================================================
-# Apply FFT affine to full data
-# ============================================================================
+    # Step 1: CC shift to get close
+    shift1 = DC.findshift(smld_ref, smld2_work; histbinsize=histbinsize)
+    DC.correctdrift!(smld2_work, shift1)
+    println("  CC shift: $(round.(shift1; digits=4)) μm")
 
-aligned_affine = [smld1, deepcopy(smld2)]
-DC.apply_affine_transform!(aligned_affine[2], t_fft)
+    # Step 2: FM rotation + scale on shift-corrected data
+    t_fm = DC.find_affine_fft(smld_ref, smld2_work; histbinsize=histbinsize)
+    t_rotscale = DC.AffineTransform2D(t_fm.θ, t_fm.scale, 0.0, 0.0)
+    DC.apply_affine_transform!(smld2_work, t_rotscale)
+    println("  FM rot/scale: θ=$(round(rad2deg(t_fm.θ); digits=4))°, s=$(round(t_fm.scale; digits=6))")
+
+    # Step 3: Refine shift after rot/scale correction
+    shift2 = DC.findshift(smld_ref, smld2_work; histbinsize=histbinsize)
+    DC.correctdrift!(smld2_work, shift2)
+    println("  Refined shift: $(round.(shift2; digits=4)) μm")
+    println("  Total shift: $(round.(shift1 .+ shift2; digits=4)) μm")
+
+    return smld2_work
+end
+
+println("\n--- FFT affine: shift → rot/scale → shift ---")
+@time smld2_aligned = fft_affine_align(smld1, smld2)
+
+aligned_shift = [smld1, smld2_aligned]
+aligned_affine = aligned_shift
 
 # ============================================================================
 # Render
