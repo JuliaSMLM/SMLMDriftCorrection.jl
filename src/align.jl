@@ -58,10 +58,11 @@ function align_smld(smlds::Vector{<:SMLD}, config::AlignConfig)
 
     config.method in (:entropy, :fft) || error("align_smld: unknown method $(config.method), expected :entropy or :fft")
     config.transform in (:shift, :affine) || error("align_smld: unknown transform $(config.transform), expected :shift or :affine")
-    config.transform == :affine && config.method == :fft && error("align_smld: transform=:affine requires method=:entropy (FFT can only recover translation)")
 
     if config.transform == :shift
         return _align_shift(smlds, N, ndims_ref, config, t0)
+    elseif config.method == :fft
+        return _align_affine_fft(smlds, N, ndims_ref, config, t0)
     else
         return _align_affine(smlds, N, ndims_ref, config, t0)
     end
@@ -139,6 +140,58 @@ function _align_affine(smlds, N, ndims_ref, config, t0)
             end
         end
     end
+
+    info = AlignInfo(shifts, transforms, elapsed, config.method, config.transform, :cpu)
+    return (aligned, info)
+end
+
+# ============================================================================
+# FFT affine: shift-field method (sub-region CC + affine fit)
+# ============================================================================
+
+function _align_affine_fft(smlds, N, ndims_ref, config, t0)
+    ndims_ref == 2 || error("align_smld: transform=:affine with method=:fft only supports 2D")
+
+    shifts = Vector{Vector{Float64}}(undef, N)
+    shifts[1] = zeros(ndims_ref)
+    transforms = Vector{AbstractAlignTransform}(undef, N)
+    transforms[1] = AffineTransform2D(0.0, 1.0, 0.0, 0.0)
+    aligned = Vector{typeof(smlds[1])}(undef, N)
+    aligned[1] = smlds[1]
+
+    for i in 2:N
+        result = find_affine_shift_field(smlds[1], smlds[i];
+                    histbinsize=config.histbinsize, min_locs=200)
+        a, b, c, d, e, f = result.a, result.b, result.c, result.d, result.e, result.f
+
+        # Apply: global shift then affine correction
+        aligned[i] = deepcopy(smlds[i])
+        correctdrift!(aligned[i], result.global_shift)
+        for nn in eachindex(aligned[i].emitters)
+            x = aligned[i].emitters[nn].x
+            y = aligned[i].emitters[nn].y
+            aligned[i].emitters[nn].x = x - (a*x + b*y + c)
+            aligned[i].emitters[nn].y = y - (d*x + e*y + f)
+        end
+
+        # Total shift at centroid for backward-compat shifts field
+        cx = mean(em.x for em in smlds[i].emitters)
+        cy = mean(em.y for em in smlds[i].emitters)
+        gs = result.global_shift
+        shifts[i] = [gs[1] + a*cx + b*cy + c, gs[2] + d*cx + e*cy + f]
+
+        # Decompose for AffineTransform2D
+        θ_fit = atan((d - b) / 2)
+        s_fit = sqrt(abs((1 + a) * (1 + e)))
+        transforms[i] = AffineTransform2D(θ_fit, s_fit, shifts[i][1], shifts[i][2])
+
+        if config.verbose >= 1
+            println("  smlds[$i]: θ=$(round(rad2deg(θ_fit); digits=3))°, sx=$(round(1+a; digits=5)), sy=$(round(1+e; digits=5)), shift=$(round.(shifts[i]; digits=4)), tiles=$(result.n_tiles), rms=$(round(result.rms_residual*1000; digits=1))nm")
+        end
+    end
+
+    elapsed = time() - t0
+    config.verbose >= 1 && println("align_smld: aligned $N SMLDs (fft, affine) in $(round(elapsed; digits=2))s")
 
     info = AlignInfo(shifts, transforms, elapsed, config.method, config.transform, :cpu)
     return (aligned, info)
