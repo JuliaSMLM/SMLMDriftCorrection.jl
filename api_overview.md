@@ -4,7 +4,7 @@ AI-parseable API reference for SMLMDriftCorrection.jl. All distance units are in
 
 ## Exports Summary
 
-- **Types:** 4 (`DriftConfig`, `DriftInfo`, `AlignConfig`, `AlignInfo`)
+- **Types:** 7 (`DriftConfig`, `DriftInfo`, `AlignConfig`, `AlignInfo`, `AbstractAlignTransform`, `ShiftTransform`, `AffineTransform2D`)
 - **Functions:** 4 (`driftcorrect`, `align_smld`, `filter_emitters`, `drift_trajectory`)
 
 ## Key Concepts
@@ -60,6 +60,7 @@ Output metadata from drift correction. Returned as second element of tuple.
 - `entropy::Float64`: Final entropy value
 - `history::Vector{Float64}`: Entropy per iteration (for diagnostics)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subset (`nothing` if `auto_roi=false`)
+- `residual_correlation::NamedTuple`: Position-frame correlation diagnostic (intra_summary, intra_per_dataset, inter)
 
 ### AlignConfig
 
@@ -67,18 +68,20 @@ Output metadata from drift correction. Returned as second element of tuple.
 @kwdef struct AlignConfig <: AbstractSMLMConfig
 ```
 
-Configuration for rigid-shift alignment of independent SMLDs via `align_smld`.
+Configuration for alignment of independent SMLDs via `align_smld`.
 
 **Fields:**
 - `method::Symbol = :entropy`: Alignment method (`:entropy` or `:fft`)
+- `transform::Symbol = :shift`: Transform model (`:shift` translation only, `:affine` full 2D affine)
 - `maxn::Int = 100`: Maximum neighbors for entropy calculation
 - `histbinsize::Float64 = 0.05`: Histogram bin size (μm) for cross-correlation
 - `verbose::Int = 0`: Verbosity (0=quiet, 1=info)
 
 **Constructor:**
 ```julia
-AlignConfig()                           # all defaults
-AlignConfig(method=:fft, maxn=50)       # keyword overrides
+AlignConfig()                                        # all defaults
+AlignConfig(transform=:affine)                       # affine alignment
+AlignConfig(method=:fft, transform=:shift, maxn=50)  # keyword overrides
 ```
 
 ### AlignInfo
@@ -90,10 +93,22 @@ struct AlignInfo <: AbstractSMLMInfo
 Output metadata from `align_smld`.
 
 **Fields:**
-- `shifts::Vector{Vector{Float64}}`: Shift applied to each SMLD (shifts[1] = zeros)
+- `shifts::Vector{Vector{Float64}}`: Translation component for each SMLD (shifts[1] = zeros)
+- `transforms::Vector{<:AbstractAlignTransform}`: Full transform per SMLD (`ShiftTransform` or `AffineTransform2D`)
 - `elapsed_s::Float64`: Wall time in seconds
 - `method::Symbol`: Method used (`:entropy` or `:fft`)
+- `transform::Symbol`: Transform model used (`:shift` or `:affine`)
 - `backend::Symbol`: Computation backend (`:cpu`)
+
+### AbstractAlignTransform Hierarchy
+
+```julia
+AbstractAlignTransform
+├── ShiftTransform          # Pure translation: shift::Vector{Float64}
+└── AffineTransform2D       # θ::Float64, scale::Float64, tx::Float64, ty::Float64
+```
+
+`AffineTransform2D` stores the geometric mean scale and rotation from the 6-parameter affine fit. For the full anisotropic parameters, use the `find_affine_shift_field` internal function directly.
 
 ## Functions
 
@@ -125,16 +140,25 @@ align_smld(smlds::Vector{<:SMLD}; kwargs...) -> (Vector{<:SMLD}, AlignInfo)
 align_smld(smlds::Vector{<:SMLD}, config::AlignConfig) -> (Vector{<:SMLD}, AlignInfo)
 ```
 
-Align a vector of independent SMLD structures to a common reference (smlds[1]) using rigid shifts. Two methods: `:entropy` (CC initial guess + regularized entropy refinement) and `:fft` (cross-correlation only). Works on 2D and 3D data. Threaded across datasets.
+Align a vector of independent SMLD structures to a common reference (smlds[1]).
+
+**Transform modes:**
+- `transform=:shift` (default): Translation only. Methods: `:entropy` (CC + entropy refinement) or `:fft` (CC only).
+- `transform=:affine`: Full 2D affine (anisotropic scale + rotation + shear + translation). Uses shift-field method: 5×5 grid of local CC shifts + quality-weighted least-squares affine fit. 2-pass for refinement. ~3nm median residual, ~13s on 1M locs.
 
 **Arguments:**
 - `smlds`: Vector of 2+ SMLD structures (same dimensionality, non-empty)
 - `config`: `AlignConfig` with alignment parameters
 
-**Example:**
+**Examples:**
 ```julia
-(aligned, info) = align_smld([smld_ch1, smld_ch2]; method=:entropy)
-info.shifts  # [zeros(2), [dx, dy]]
+# Shift only (fast, translation)
+(aligned, info) = align_smld([smld_ch1, smld_ch2]; transform=:shift, method=:fft)
+
+# Affine (anisotropic scale + rotation + translation)
+(aligned, info) = align_smld([smld_ch1, smld_ch2]; transform=:affine)
+info.shifts[2]      # translation component [tx, ty]
+info.transforms[2]  # AffineTransform2D(θ, scale, tx, ty)
 ```
 
 ### filter_emitters
@@ -204,6 +228,19 @@ findshift(smld1::SMLD, smld2::SMLD; histbinsize=0.1) -> Vector{Float64}
 ```
 Find shift between two SMLDs via cross-correlation of histogram images. Returns `[dx, dy]` or `[dx, dy, dz]`.
 
+### find_affine_shift_field
+```julia
+find_affine_shift_field(smld1, smld2; histbinsize=0.05, sub_histbinsize=0.005,
+                        grid_n=5, min_locs=30) -> NamedTuple
+```
+Recover full 2D affine transform using local CC shifts on a grid. Returns `(a, b, c, d, e, f, global_shift, n_tiles, rms_residual, ...)` where the correction is `x_new = x - (a*x + b*y + c)`, `y_new = y - (d*x + e*y + f)`. Used internally by `align_smld(; transform=:affine)`.
+
+### find_affine_fft
+```julia
+find_affine_fft(smld1, smld2; histbinsize=0.05, max_rotation=10.0) -> AffineTransform2D
+```
+Recover 2D similarity transform via Fourier-Mellin (log-polar CC of magnitude spectra). Fast (~2s) but assumes isotropic scale. Less accurate than shift-field method for small transforms.
+
 ### drift_at_frame
 ```julia
 drift_at_frame(model::AbstractIntraInter, dataset::Int, frame::Int) -> Vector
@@ -257,6 +294,11 @@ AbstractIntraDrift1D
 └── LegendrePoly1D
 │
 InterShift (per-dataset constant shift)
+
+AbstractAlignTransform (exported)
+├── ShiftTransform (exported)
+├── AffineTransform2D (exported)
+└── AffineTransform3D
 
 AbstractSMLMConfig
 ├── DriftConfig (exported)
@@ -441,8 +483,16 @@ config2 = DriftConfig(warm_start=info1.model)
 (smld2, info2) = driftcorrect(smld1, info1; max_iterations=5)
 ```
 
-### Align Independent SMLDs (Multi-Channel Registration)
+### Align Independent SMLDs (Shift Only)
 ```julia
-(aligned, info) = align_smld([smld_ch1, smld_ch2], AlignConfig(method=:entropy))
+(aligned, info) = align_smld([smld_ch1, smld_ch2]; transform=:shift, method=:fft)
 info.shifts  # [zeros(2), [dx, dy]]
+```
+
+### Align with Affine (Multi-Channel Registration)
+```julia
+# Recovers anisotropic scale, rotation, shear, translation
+(aligned, info) = align_smld([smld_ch1, smld_ch2]; transform=:affine)
+info.transforms[2]  # AffineTransform2D(θ, scale, tx, ty)
+# ~3nm median residual, ~13s on 1M locs
 ```
