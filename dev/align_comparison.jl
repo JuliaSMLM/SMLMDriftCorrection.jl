@@ -103,11 +103,18 @@ function fft_affine_align(smld_ref, smld_target; histbinsize=0.05)
     return smld2_work
 end
 
-println("\n--- FFT affine: shift → rot/scale → shift ---")
-@time smld2_aligned = fft_affine_align(smld1, smld2)
+# Shift-only
+println("\n--- Shift only (CC) ---")
+smld2_shift = deepcopy(smld2)
+shift_cc = DC.findshift(smld1, smld2_shift; histbinsize=0.05)
+DC.correctdrift!(smld2_shift, shift_cc)
+println("  shift = $(round.(shift_cc; digits=4)) μm")
+aligned_shift = [smld1, smld2_shift]
 
-aligned_shift = [smld1, smld2_aligned]
-aligned_affine = aligned_shift
+# Full 3-step affine
+println("\n--- FFT affine: shift → rot/scale → shift ---")
+@time smld2_affine = fft_affine_align(smld1, smld2)
+aligned_affine = [smld1, smld2_affine]
 
 # ============================================================================
 # Render

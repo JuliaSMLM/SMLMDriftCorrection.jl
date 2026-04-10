@@ -724,7 +724,8 @@ function find_affine_fft(smld1::S, smld2::S;
     r_max = 0.45 * min(nr, nc)
     r_min = max(0.02 * min(nr, nc), 2.0)
     log_r_step = (log(r_max) - log(r_min)) / (n_radii - 1)
-    scale_recovered = exp(Δlogr_px * log_r_step)
+    # FM recovers Fourier-space scale; spatial scale is the reciprocal
+    scale_recovered = exp(-Δlogr_px * log_r_step)
 
     # Step 5: Compute translation from centroids
     # Forward model: x2 = s * R(θ) * x1 + t
