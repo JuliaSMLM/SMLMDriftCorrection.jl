@@ -1,8 +1,4 @@
-# align_comparison.jl — Compare shift vs affine alignment on GATTA ruler pairs
-#
-# Loads two independent DNA PAINT acquisitions of the same 20nm GATTA ruler,
-# aligns them with both :shift and :affine, and renders two-color overlays
-# (before/after) to visually assess alignment quality.
+# align_comparison.jl — Compare shift vs affine alignment on 1ch vs 2ch DNA PAINT
 #
 # Usage: julia --project=dev dev/align_comparison.jl
 
@@ -14,82 +10,82 @@ using JLD2
 DC = SMLMDriftCorrection
 
 # ============================================================================
-# Data paths — 2025-10-23 GATTA 20R ruler pair (primary paper dataset)
+# Data: 1ch vs 2ch polarization channels, 2025-10-23 GATTA 20R ruler
+# Same sample, different optical paths → expect small rotation/scale difference
 # ============================================================================
 
-const DATA_ROOT = "/mnt/nas/adapt/projects/smart-microscope/data/DNA paint ruler/papers-vortex-sr/juliasmlm"
-const ACQ1 = "20R-ruler-0.1exp-TIRF-onlyZFocusLockDT1-1ch--2025-10-23_11-29-25"
-const ACQ2 = "20R-ruler-0.1exp-TIRF-onlyZFocusLockDT1-1ch-N2--2025-10-23_13-19-34"
+const DATA_DIR = joinpath(homedir(), "julia_shared_dev/papers/papers-vortex-sr/data/processed")
+const CH1_PATH = joinpath(DATA_DIR, "20R-ruler-0.1exp-TIRF-onlyZFocusLockDT1-1ch--2025-10-23_11-29-25/loc.h5")
+const CH2_PATH = joinpath(DATA_DIR, "20R-ruler-0.1exp-TIRF-onlyZFocusLockDT1-2ch--2025-10-23_12-04-53/loc.h5")
 const OUTDIR = joinpath(@__DIR__, "output", "align_comparison")
-
 mkpath(OUTDIR)
 
 # ============================================================================
-# Load data
+# Load DME-format loc.h5 → SMLD
 # ============================================================================
 
-"""Load smld_final.h5 (JLD2/SMLMData format) into an SMLD struct."""
-function load_smld_h5(path::String)
+function load_dme_h5(path; pixel_size=0.078)
     d = JLD2.load(path)
-    x = Float64.(d["emitters/x"])
-    y = Float64.(d["emitters/y"])
-    σ_x = Float64.(d["emitters/sigma_x"])
-    σ_y = Float64.(d["emitters/sigma_y"])
-    photons = Float64.(d["emitters/photons"])
-    bg = Float64.(d["emitters/bg"])
-    σ_photons = Float64.(d["emitters/sigma_photons"])
-    σ_bg = Float64.(d["emitters/sigma_bg"])
-    frame = Int.(d["emitters/frame"])
-    dataset = Int.(d["emitters/dataset"])
-    id = Int.(d["emitters/id"])
-    track_id = Int.(d["emitters/track_id"])
-
-    px_edges_x = Float64.(d["camera/pixel_edges_x"])
-    px_edges_y = Float64.(d["camera/pixel_edges_y"])
-    pixelsize = px_edges_x[2] - px_edges_x[1]
+    x = Float64.(d["res/x"]) .* pixel_size   # pixels → μm
+    y = Float64.(d["res/y"]) .* pixel_size
+    crlb = d["res/crlb"]  # (N, 5): σ_x, σ_y, σ_photon, σ_bg, σ_z
+    σ_x = Float64.(crlb[:, 1])
+    σ_y = Float64.(crlb[:, 2])
+    photons = Float64.(d["res/photon"])
+    bg = Float64.(d["res/bg"])
+    frame = Int.(d["res/frames"])
 
     N = length(x)
-    # Emitter2DFit field order: x, y, photons, bg, σ_x, σ_y, σ_xy, σ_photons, σ_bg, frame, dataset, track_id, id
-    emitters = [Emitter2DFit(x[i], y[i], photons[i], bg[i], σ_x[i], σ_y[i], 0.0, σ_photons[i], σ_bg[i],
-                             frame[i], dataset[i], track_id[i], id[i]) for i in 1:N]
+    emitters = [Emitter2DFit(x[i], y[i], photons[i], bg[i], σ_x[i], σ_y[i],
+                             0.0, 0.0, 0.0, frame[i], 1, 0, i) for i in 1:N]
 
-    n_datasets = d["metadata/n_datasets"]
-    n_frames = d["metadata/n_frames"]
-    camera = IdealCamera(px_edges_x, px_edges_y)
-    return BasicSMLD(emitters, camera, n_frames, n_datasets)
+    # Build camera from data extent
+    nx = round(Int, (maximum(x) - minimum(x)) / pixel_size) + 10
+    ny = round(Int, (maximum(y) - minimum(y)) / pixel_size) + 10
+    x_edges = collect(range(floor(minimum(x); digits=1), step=pixel_size, length=nx+1))
+    y_edges = collect(range(floor(minimum(y); digits=1), step=pixel_size, length=ny+1))
+    camera = IdealCamera(x_edges, y_edges)
+    return BasicSMLD(emitters, camera, maximum(frame), 1)
 end
 
-println("Loading acquisitions...")
-smld1 = load_smld_h5(joinpath(DATA_ROOT, ACQ1, "smld_final.h5"))
-smld2 = load_smld_h5(joinpath(DATA_ROOT, ACQ2, "smld_final.h5"))
-println("  ACQ1: $(length(smld1.emitters)) locs")
-println("  ACQ2: $(length(smld2.emitters)) locs")
+# Load both, then rebuild with shared camera (required for findshift)
+println("Loading 1ch and 2ch...")
+smld1_raw = load_dme_h5(CH1_PATH)
+smld2_raw = load_dme_h5(CH2_PATH)
+
+# Build common camera covering both FOVs
+pixel_size = 0.078
+all_x = vcat([e.x for e in smld1_raw.emitters], [e.x for e in smld2_raw.emitters])
+all_y = vcat([e.y for e in smld1_raw.emitters], [e.y for e in smld2_raw.emitters])
+x_min = floor(minimum(all_x); digits=1)
+y_min = floor(minimum(all_y); digits=1)
+nx = round(Int, (ceil(maximum(all_x); digits=1) - x_min) / pixel_size) + 2
+ny = round(Int, (ceil(maximum(all_y); digits=1) - y_min) / pixel_size) + 2
+shared_camera = IdealCamera(
+    collect(range(x_min, step=pixel_size, length=nx+1)),
+    collect(range(y_min, step=pixel_size, length=ny+1)))
+
+smld1 = BasicSMLD(smld1_raw.emitters, shared_camera, smld1_raw.n_frames, 1)
+smld2 = BasicSMLD(smld2_raw.emitters, shared_camera, smld2_raw.n_frames, 1)
+println("  1ch: $(length(smld1.emitters)) locs")
+println("  2ch: $(length(smld2.emitters)) locs")
 
 # ============================================================================
-# Align: shift only
+# Align
 # ============================================================================
 
-println("\n--- Shift alignment ---")
-(aligned_shift, info_shift) = align_smld([smld1, smld2]; transform=:shift, verbose=1)
-
-# ============================================================================
-# Affine: FFT-only (Fourier-Mellin, < 2s)
-# ============================================================================
-
-println("\n--- Affine alignment (FFT only, Fourier-Mellin) ---")
+println("\n--- Fourier-Mellin FFT affine ---")
 @time t_fft = DC.find_affine_fft(smld1, smld2; histbinsize=0.05)
-println("  FFT affine: θ=$(round(rad2deg(t_fft.θ); digits=4))°, s=$(round(t_fft.scale; digits=6)), shift=($(round(t_fft.tx; digits=4)), $(round(t_fft.ty; digits=4))) μm")
+println("  θ = $(round(rad2deg(t_fft.θ); digits=4))°")
+println("  scale = $(round(t_fft.scale; digits=6))")
+println("  shift = ($(round(t_fft.tx; digits=4)), $(round(t_fft.ty; digits=4))) μm")
 
-# Apply FFT affine to full data
+println("\n--- Entropy shift alignment ---")
+@time (aligned_shift, info_shift) = DC.align_smld([smld1, smld2]; transform=:shift, verbose=1)
+
+# Apply FFT affine to full data for rendering
 aligned_affine = [smld1, deepcopy(smld2)]
 DC.apply_affine_transform!(aligned_affine[2], t_fft)
-
-t = t_fft
-info_affine = (; transforms=[DC.AffineTransform2D(0.0, 1.0, 0.0, 0.0), t_fft])
-
-# ============================================================================
-# Render helper
-# ============================================================================
 
 # ============================================================================
 # Render helpers
@@ -101,26 +97,25 @@ function filter_roi(smld, xr, yr)
 end
 
 # ============================================================================
-# Find a dense 3×3 μm region for detail views
+# Find dense ROI for detail views
 # ============================================================================
 
-println("\nFinding dense region for detail renders...")
-roi_indices = DC.find_dense_roi(smld1, 5000)
+println("\nFinding dense region...")
+roi_indices = DC.find_dense_roi(smld1, 10000)
 x_roi = [smld1.emitters[i].x for i in roi_indices]
 y_roi = [smld1.emitters[i].y for i in roi_indices]
 roi_cx = (minimum(x_roi) + maximum(x_roi)) / 2
 roi_cy = (minimum(y_roi) + maximum(y_roi)) / 2
-roi_half = 1.5  # μm → 3×3 μm detail region
+roi_half = 1.5  # μm → 3×3 μm
 xr = (roi_cx - roi_half, roi_cx + roi_half)
 yr = (roi_cy - roi_half, roi_cy + roi_half)
-println("  Detail ROI: x=[$(round(xr[1];digits=2)), $(round(xr[2];digits=2))], y=[$(round(yr[1];digits=2)), $(round(yr[2];digits=2))] μm")
+println("  ROI center: ($(round(roi_cx; digits=2)), $(round(roi_cy; digits=2))) μm")
 
 # ============================================================================
-# Render: overview (full FOV, zoom=10)
+# Render
 # ============================================================================
 
 println("\n--- Rendering overview (zoom=10) ---")
-
 render([smld1, smld2]; colors=[:magenta, :green], zoom=10,
        filename=joinpath(OUTDIR, "01_before_overview.png"))
 println("  saved: 01_before_overview.png")
@@ -133,12 +128,7 @@ render([aligned_affine[1], aligned_affine[2]]; colors=[:magenta, :green], zoom=1
        filename=joinpath(OUTDIR, "03_affine_overview.png"))
 println("  saved: 03_affine_overview.png")
 
-# ============================================================================
-# Render: detail (3×3 μm ROI, 5nm pixels)
-# ============================================================================
-
-println("\n--- Rendering detail (5nm/px, 3×3μm ROI) ---")
-
+println("\n--- Rendering detail (5nm/px) ---")
 render([filter_roi(smld1, xr, yr), filter_roi(smld2, xr, yr)];
        colors=[:magenta, :green], pixel_size=5.0,
        filename=joinpath(OUTDIR, "04_before_detail.png"))
