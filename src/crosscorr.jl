@@ -167,7 +167,7 @@ function histimage2D(x::AbstractVector{T}, y::AbstractVector{T};
     ROI::AbstractVector{T}=[-1.0],
     histbinsize::Union{AbstractVector{T}, T}=1.0
 ) where {T<:Real}
-    if size(ROI, 1) == 4 && ROI[1] >= 0.0
+    if size(ROI, 1) == 4 && ROI != T[-1.0]
         x_min = ROI[1]
         x_max = ROI[2]
         y_min = ROI[3]
