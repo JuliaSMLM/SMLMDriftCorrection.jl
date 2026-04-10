@@ -725,37 +725,18 @@ function find_affine_fft(smld1::S, smld2::S;
     log_r_step = (log(r_max) - log(r_min)) / (n_radii - 1)
     scale_recovered = exp(Δlogr_px * log_r_step)
 
-    # Step 5: De-rotate/de-scale im2, then standard CC for translation
-    # Apply inverse affine to dataset2 coordinates, then findshift
-    inv_s = 1.0 / scale_recovered
-    cosθ = cos(θ_recovered)
-    sinθ = sin(θ_recovered)
+    # Step 5: Compute translation from centroids
+    # Forward model: x2 = s * R(θ) * x1 + t
+    # Centroids satisfy: c2 = s * R(θ) * c1 + t
+    # Therefore: t = c2 - s * R(θ) * c1
+    c1x, c1y = mean(x1), mean(y1)
+    c2x, c2y = mean(x2), mean(y2)
 
-    x2_corr = inv_s .* (cosθ .* x2 .+ sinθ .* y2)
-    y2_corr = inv_s .* (.-sinθ .* x2 .+ cosθ .* y2)
-
-    im2_corr = Float64.(histimage2D(x2_corr, y2_corr; ROI=ROI, histbinsize=hbs))
-
-    # Pad to same size if needed (de-rotated image may differ slightly)
-    sz1 = size(im1)
-    sz2c = size(im2_corr)
-    if sz1 != sz2c
-        common = (min(sz1[1], sz2c[1]), min(sz1[2], sz2c[2]))
-        im1_crop = im1[1:common[1], 1:common[2]]
-        im2c_crop = im2_corr[1:common[1], 1:common[2]]
-    else
-        im1_crop = im1
-        im2c_crop = im2_corr
-    end
-
-    cc_shift = crosscorr2D(im1_crop, im2c_crop)
-    mid1 = size(cc_shift, 1) ÷ 2 + 1
-    mid2 = size(cc_shift, 2) ÷ 2 + 1
-    peak_idx_s = argmax(cc_shift)
-    pi_s, pj_s = gaussian_subpixel_2d(cc_shift, peak_idx_s; halfwidth=3)
-
-    tx = (mid1 - pi_s) * histbinsize
-    ty = (mid2 - pj_s) * histbinsize
+    s = scale_recovered
+    cosθr = cos(θ_recovered)
+    sinθr = sin(θ_recovered)
+    tx = c2x - s * (cosθr * c1x - sinθr * c1y)
+    ty = c2y - s * (sinθr * c1x + cosθr * c1y)
 
     return AffineTransform2D(θ_recovered, scale_recovered, tx, ty)
 end
