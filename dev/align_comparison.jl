@@ -77,14 +77,11 @@ println("  scale = $(round(t_fft.scale; digits=6))")
 println("  shift = ($(round(t_fft.tx; digits=4)), $(round(t_fft.ty; digits=4))) μm")
 
 # ============================================================================
-# Shift-only alignment (translation from FM centroid method)
+# align_smld with :shift, :fft method
 # ============================================================================
 
-println("\n--- Shift-only (from FM translation) ---")
-shift_only = [t_fft.tx, t_fft.ty]
-println("  shift = $(round.(shift_only; digits=4)) μm")
-aligned_shift = [smld1, deepcopy(smld2)]
-DC.correctdrift!(aligned_shift[2], shift_only)
+println("\n--- align_smld (shift, fft) ---")
+@time (aligned_shift, _) = DC.align_smld([smld1, smld2]; transform=:shift, method=:fft, verbose=1)
 
 # ============================================================================
 # Apply FFT affine to full data
