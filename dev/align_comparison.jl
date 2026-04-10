@@ -9,7 +9,6 @@
 using SMLMData
 using SMLMDriftCorrection
 using SMLMRender
-using CairoMakie
 using JLD2
 
 DC = SMLMDriftCorrection
@@ -74,161 +73,85 @@ println("\n--- Shift alignment ---")
 (aligned_shift, info_shift) = align_smld([smld1, smld2]; transform=:shift, verbose=1)
 
 # ============================================================================
-# Align: affine
+# Affine: FFT-only (Fourier-Mellin, < 2s)
 # ============================================================================
 
-# ============================================================================
-# Align: affine — use maxn=50 for speed on large datasets
-# ============================================================================
+println("\n--- Affine alignment (FFT only, Fourier-Mellin) ---")
+@time t_fft = DC.find_affine_fft(smld1, smld2; histbinsize=0.05)
+println("  FFT affine: θ=$(round(rad2deg(t_fft.θ); digits=4))°, s=$(round(t_fft.scale; digits=6)), shift=($(round(t_fft.tx; digits=4)), $(round(t_fft.ty; digits=4))) μm")
 
-println("\n--- Affine alignment ---")
-@time (aligned_affine, info_affine) = align_smld([smld1, smld2]; transform=:affine, maxn=50, verbose=1)
+# Apply FFT affine to full data
+aligned_affine = [smld1, deepcopy(smld2)]
+DC.apply_affine_transform!(aligned_affine[2], t_fft)
 
-t = info_affine.transforms[2]
-println("  Affine transform:")
-println("    rotation = $(round(rad2deg(t.θ); digits=4))°")
-println("    scale    = $(round(t.scale; digits=6))")
-println("    shift    = ($(round(t.tx; digits=4)), $(round(t.ty; digits=4))) μm")
+t = t_fft
+info_affine = (; transforms=[DC.AffineTransform2D(0.0, 1.0, 0.0, 0.0), t_fft])
 
 # ============================================================================
 # Render helper
 # ============================================================================
 
-function render_overlay(smld_a, smld_b, zoom; roi=nothing)
-    if isnothing(roi)
-        (img, info) = render([smld_a, smld_b]; colors=[:magenta, :green], zoom=zoom)
-    else
-        # Multi-SMLD render doesn't support roi — filter emitters manually
-        cam_px = smld_a.camera.pixel_edges_x[2] - smld_a.camera.pixel_edges_x[1]
-        xmin = cam_px * (first(roi[1]) - 1)
-        xmax = cam_px * last(roi[1])
-        ymin = cam_px * (first(roi[2]) - 1)
-        ymax = cam_px * last(roi[2])
-        mask_a = [(e.x >= xmin && e.x <= xmax && e.y >= ymin && e.y <= ymax) for e in smld_a.emitters]
-        mask_b = [(e.x >= xmin && e.x <= xmax && e.y >= ymin && e.y <= ymax) for e in smld_b.emitters]
-        smld_a_roi = DC.filter_emitters(smld_a, mask_a)
-        smld_b_roi = DC.filter_emitters(smld_b, mask_b)
-        (img, info) = render([smld_a_roi, smld_b_roi]; colors=[:magenta, :green], pixel_size=cam_px * 1000 / zoom)
-    end
-    return img
-end
+# ============================================================================
+# Render helpers
+# ============================================================================
 
-function save_panel(img, path)
-    save_image(path, img)
-    println("  saved: $path")
+function filter_roi(smld, xr, yr)
+    mask = [(e.x >= xr[1] && e.x <= xr[2] && e.y >= yr[1] && e.y <= yr[2]) for e in smld.emitters]
+    DC.filter_emitters(smld, mask)
 end
 
 # ============================================================================
-# Determine a good ROI — find a dense region for zoomed view
+# Find a dense 3×3 μm region for detail views
 # ============================================================================
 
-# Use full FOV at moderate zoom for overview
-zoom_overview = 10
-zoom_detail = 40
-
-# Compute centroid of smld1 to pick a central ROI
-x1 = [e.x for e in smld1.emitters]
-y1 = [e.y for e in smld1.emitters]
-cx = (minimum(x1) + maximum(x1)) / 2
-cy = (minimum(y1) + maximum(y1)) / 2
-
-# Camera pixel size from edge array
-cam_px = smld1.camera.pixel_edges_x[2] - smld1.camera.pixel_edges_x[1]  # μm per camera pixel
-cx_px = round(Int, cx / cam_px)
-cy_px = round(Int, cy / cam_px)
-half_roi = 128
-roi_detail = (max(1, cx_px - half_roi):cx_px + half_roi,
-              max(1, cy_px - half_roi):cy_px + half_roi)
-
-println("\nRendering overlays (overview zoom=$(zoom_overview), detail zoom=$(zoom_detail))...")
-println("  Detail ROI (camera px): x=$(roi_detail[1]), y=$(roi_detail[2])")
-println("  Centroid: ($(round(cx; digits=2)), $(round(cy; digits=2))) μm")
+println("\nFinding dense region for detail renders...")
+roi_indices = DC.find_dense_roi(smld1, 5000)
+x_roi = [smld1.emitters[i].x for i in roi_indices]
+y_roi = [smld1.emitters[i].y for i in roi_indices]
+roi_cx = (minimum(x_roi) + maximum(x_roi)) / 2
+roi_cy = (minimum(y_roi) + maximum(y_roi)) / 2
+roi_half = 1.5  # μm → 3×3 μm detail region
+xr = (roi_cx - roi_half, roi_cx + roi_half)
+yr = (roi_cy - roi_half, roi_cy + roi_half)
+println("  Detail ROI: x=[$(round(xr[1];digits=2)), $(round(xr[2];digits=2))], y=[$(round(yr[1];digits=2)), $(round(yr[2];digits=2))] μm")
 
 # ============================================================================
-# Render: before alignment (raw)
+# Render: overview (full FOV, zoom=10)
 # ============================================================================
 
-println("\n--- Before alignment ---")
-img_before_overview = render_overlay(smld1, smld2, zoom_overview)
-save_panel(img_before_overview, joinpath(OUTDIR, "01_before_overview.png"))
+println("\n--- Rendering overview (zoom=10) ---")
 
-img_before_detail = render_overlay(smld1, smld2, zoom_detail; roi=roi_detail)
-save_panel(img_before_detail, joinpath(OUTDIR, "02_before_detail.png"))
+render([smld1, smld2]; colors=[:magenta, :green], zoom=10,
+       filename=joinpath(OUTDIR, "01_before_overview.png"))
+println("  saved: 01_before_overview.png")
 
-# ============================================================================
-# Render: after shift alignment
-# ============================================================================
+render([aligned_shift[1], aligned_shift[2]]; colors=[:magenta, :green], zoom=10,
+       filename=joinpath(OUTDIR, "02_shift_overview.png"))
+println("  saved: 02_shift_overview.png")
 
-println("\n--- After shift alignment ---")
-img_shift_overview = render_overlay(aligned_shift[1], aligned_shift[2], zoom_overview)
-save_panel(img_shift_overview, joinpath(OUTDIR, "03_shift_overview.png"))
-
-img_shift_detail = render_overlay(aligned_shift[1], aligned_shift[2], zoom_detail; roi=roi_detail)
-save_panel(img_shift_detail, joinpath(OUTDIR, "04_shift_detail.png"))
+render([aligned_affine[1], aligned_affine[2]]; colors=[:magenta, :green], zoom=10,
+       filename=joinpath(OUTDIR, "03_affine_overview.png"))
+println("  saved: 03_affine_overview.png")
 
 # ============================================================================
-# Render: after affine alignment
+# Render: detail (3×3 μm ROI, 5nm pixels)
 # ============================================================================
 
-println("\n--- After affine alignment ---")
-img_affine_overview = render_overlay(aligned_affine[1], aligned_affine[2], zoom_overview)
-save_panel(img_affine_overview, joinpath(OUTDIR, "05_affine_overview.png"))
+println("\n--- Rendering detail (5nm/px, 3×3μm ROI) ---")
 
-img_affine_detail = render_overlay(aligned_affine[1], aligned_affine[2], zoom_detail; roi=roi_detail)
-save_panel(img_affine_detail, joinpath(OUTDIR, "06_affine_detail.png"))
+render([filter_roi(smld1, xr, yr), filter_roi(smld2, xr, yr)];
+       colors=[:magenta, :green], pixel_size=5.0,
+       filename=joinpath(OUTDIR, "04_before_detail.png"))
+println("  saved: 04_before_detail.png")
 
-# ============================================================================
-# CairoMakie comparison figure
-# ============================================================================
+render([filter_roi(aligned_shift[1], xr, yr), filter_roi(aligned_shift[2], xr, yr)];
+       colors=[:magenta, :green], pixel_size=5.0,
+       filename=joinpath(OUTDIR, "05_shift_detail.png"))
+println("  saved: 05_shift_detail.png")
 
-println("\n--- Building comparison figure ---")
-
-fig = Figure(size=(1800, 1200))
-
-# Row 1: Overview
-ax1 = Axis(fig[1, 1]; title="Before alignment", aspect=DataAspect(),
-           yreversed=true, titlesize=16)
-ax2 = Axis(fig[1, 2]; title="Shift aligned", aspect=DataAspect(),
-           yreversed=true, titlesize=16)
-ax3 = Axis(fig[1, 3]; title="Affine aligned", aspect=DataAspect(),
-           yreversed=true, titlesize=16)
-
-image!(ax1, rotr90(img_before_overview))
-image!(ax2, rotr90(img_shift_overview))
-image!(ax3, rotr90(img_affine_overview))
-
-hidexdecorations!.([ax1, ax2, ax3])
-hideydecorations!.([ax1, ax2, ax3])
-
-Label(fig[1, 0], "Overview\n($(zoom_overview)×)", fontsize=14, rotation=pi/2)
-
-# Row 2: Detail
-ax4 = Axis(fig[2, 1]; aspect=DataAspect(), yreversed=true)
-ax5 = Axis(fig[2, 2]; aspect=DataAspect(), yreversed=true)
-ax6 = Axis(fig[2, 3]; aspect=DataAspect(), yreversed=true)
-
-image!(ax4, rotr90(img_before_detail))
-image!(ax5, rotr90(img_shift_detail))
-image!(ax6, rotr90(img_affine_detail))
-
-hidexdecorations!.([ax4, ax5, ax6])
-hideydecorations!.([ax4, ax5, ax6])
-
-Label(fig[2, 0], "Detail\n($(zoom_detail)×)", fontsize=14, rotation=pi/2)
-
-# Annotation
-shift_str = "Δ = ($(round(info_shift.shifts[2][1]; digits=3)), $(round(info_shift.shifts[2][2]; digits=3))) μm"
-affine_str = "θ=$(round(rad2deg(t.θ); digits=3))°, s=$(round(t.scale; digits=5))\nΔ=($(round(t.tx; digits=3)), $(round(t.ty; digits=3))) μm"
-
-Label(fig[3, 2], shift_str; fontsize=12, color=:gray50)
-Label(fig[3, 3], affine_str; fontsize=12, color=:gray50)
-
-# Color legend
-Label(fig[0, 1:3], "GATTA 20R ruler — 2025-10-23 — magenta: ACQ1, green: ACQ2 (white = overlap)",
-      fontsize=14, color=:gray30)
-
-outpath = joinpath(OUTDIR, "comparison.png")
-save(outpath, fig; px_per_unit=2)
-println("\nComparison figure saved: $outpath")
+render([filter_roi(aligned_affine[1], xr, yr), filter_roi(aligned_affine[2], xr, yr)];
+       colors=[:magenta, :green], pixel_size=5.0,
+       filename=joinpath(OUTDIR, "06_affine_detail.png"))
+println("  saved: 06_affine_detail.png")
 
 println("\nDone!")
