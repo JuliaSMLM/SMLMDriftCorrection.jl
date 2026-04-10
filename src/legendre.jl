@@ -195,16 +195,9 @@ function LegendrePolynomial(ndims::Int, ndatasets::Int, nframes::Int;
     return LegendrePolynomial(ndatasets, nframes, intra, inter)
 end
 
-# Constructor from 2D SMLD
+# Constructor from any SMLD — uses nDims() for correct 2D/3D dispatch
 function LegendrePolynomial(smld::SMLD; degree::Int=2, initialize::String="zeros", rscale=0.1)
-    return LegendrePolynomial(2, smld.n_datasets, smld.n_frames;
-                              degree=degree, initialize=initialize, rscale=rscale)
-end
-
-# Constructor from 3D SMLD
-function LegendrePolynomial(smld::BasicSMLD{Float64, Emitter3DFit{Float64}};
-                            degree::Int=2, initialize::String="zeros", rscale=0.1)
-    return LegendrePolynomial(3, smld.n_datasets, smld.n_frames;
+    return LegendrePolynomial(nDims(smld), smld.n_datasets, smld.n_frames;
                               degree=degree, initialize=initialize, rscale=rscale)
 end
 
