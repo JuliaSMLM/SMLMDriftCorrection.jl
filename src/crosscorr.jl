@@ -292,12 +292,13 @@ false peaks at large shifts.
 """
 function crosscorr2D(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
 ) where {T<:Real}
-    # Zero-pad to 2x size to eliminate cyclic artifacts
-    sz1, sz2 = size(im1)
+    # Pad to common size then 2x to eliminate cyclic artifacts
+    sz1 = max(size(im1, 1), size(im2, 1))
+    sz2 = max(size(im1, 2), size(im2, 2))
     im1_pad = zeros(T, 2*sz1, 2*sz2)
     im2_pad = zeros(T, 2*sz1, 2*sz2)
-    im1_pad[1:sz1, 1:sz2] .= im1
-    im2_pad[1:sz1, 1:sz2] .= im2
+    im1_pad[1:size(im1,1), 1:size(im1,2)] .= im1
+    im2_pad[1:size(im2,1), 1:size(im2,2)] .= im2
 
     # Compute the cross-correlation
     cc = FourierTools.ccorr(im1_pad, im2_pad; centered=true)
