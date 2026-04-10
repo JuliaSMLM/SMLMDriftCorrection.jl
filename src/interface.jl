@@ -78,18 +78,19 @@ function driftcorrect(smld::SMLD;
     auto_roi::Bool = false,
     σ_loc::Float64 = 0.010,
     σ_target::Float64 = 0.001,
-    roi_safety_factor::Float64 = 4.0)
+    roi_safety_factor::Float64 = 4.0,
+    shift_scale::Float64 = 1.0)
 
     config = DriftConfig(; quality, degree, dataset_mode, chunk_frames, n_chunks,
         maxn, max_iterations, convergence_tol, warm_start, verbose,
-        auto_roi, σ_loc, σ_target, roi_safety_factor)
+        auto_roi, σ_loc, σ_target, roi_safety_factor, shift_scale)
     return driftcorrect(smld, config)
 end
 
 function driftcorrect(smld::SMLD, config::DriftConfig)
     (; quality, degree, dataset_mode, chunk_frames, n_chunks,
        maxn, max_iterations, convergence_tol, warm_start, verbose,
-       auto_roi, σ_loc, σ_target, roi_safety_factor) = config
+       auto_roi, σ_loc, σ_target, roi_safety_factor, shift_scale) = config
 
     t_start = time_ns()
 
@@ -154,10 +155,10 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
     if quality == :fft
         result = _driftcorrect_fft!(driftmodel, smld_estimation, dataset_mode, verbose)
     elseif quality == :singlepass
-        result = _driftcorrect_singlepass!(driftmodel, smld_estimation, dataset_mode, maxn, verbose)
+        result = _driftcorrect_singlepass!(driftmodel, smld_estimation, dataset_mode, maxn, verbose, shift_scale)
     else  # :iterative
         result = _driftcorrect_iterative!(driftmodel, smld_estimation, dataset_mode, maxn,
-                                          max_iterations, convergence_tol, verbose)
+                                          max_iterations, convergence_tol, verbose, shift_scale)
     end
 
     # Apply corrections to get final SMLD
@@ -165,6 +166,16 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
 
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
+
+    # Compute residual drift diagnostic (intra + inter)
+    _K = min(20, max(1, length(smld_corrected.emitters) ÷ max(1, smld_corrected.n_datasets) - 1))
+    _diag_intra = position_frame_correlation(smld_corrected; K=_K, mode=:intra)
+    _diag_inter = position_frame_correlation(smld_corrected; K=_K, mode=:inter)
+    residual_corr = (
+        intra_summary = _diag_intra.summary,
+        intra_per_dataset = [(dataset=e.dataset, n_locs=e.n_locs, corr_x=e.corr_x, corr_y=e.corr_y, corr_z=e.corr_z) for e in _diag_intra.per_dataset],
+        inter = (corr_x=_diag_inter.corr_x, corr_y=_diag_inter.corr_y, corr_z=_diag_inter.corr_z),
+    )
 
     elapsed_s = (time_ns() - t_start) / 1e9
 
@@ -176,7 +187,8 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
         result.converged,
         final_entropy,
         result.history,
-        roi_indices
+        roi_indices,
+        residual_corr
     )
 
     return (smld_corrected, info)
@@ -218,6 +230,16 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
 
+    # Compute residual drift diagnostic (intra + inter)
+    _K = min(20, max(1, length(smld_corrected.emitters) ÷ max(1, smld_corrected.n_datasets) - 1))
+    _diag_intra = position_frame_correlation(smld_corrected; K=_K, mode=:intra)
+    _diag_inter = position_frame_correlation(smld_corrected; K=_K, mode=:inter)
+    residual_corr = (
+        intra_summary = _diag_intra.summary,
+        intra_per_dataset = [(dataset=e.dataset, n_locs=e.n_locs, corr_x=e.corr_x, corr_y=e.corr_y, corr_z=e.corr_z) for e in _diag_intra.per_dataset],
+        inter = (corr_x=_diag_inter.corr_x, corr_y=_diag_inter.corr_y, corr_z=_diag_inter.corr_z),
+    )
+
     elapsed_s = (time_ns() - t_start) / 1e9
 
     new_info = DriftInfo(
@@ -228,7 +250,8 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
         iter_result.converged,
         final_entropy,
         iter_result.history,
-        info.roi_indices  # Preserve ROI from original call
+        info.roi_indices,  # Preserve ROI from original call
+        residual_corr
     )
 
     return (smld_corrected, new_info)
@@ -371,7 +394,8 @@ Singlepass quality tier - entropy-based intra and inter correction.
 Matches original algorithm: intra first, then inter vs DS1, then inter vs earlier.
 """
 function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
-                                    dataset_mode::Symbol, maxn::Int, verbose::Int)
+                                    dataset_mode::Symbol, maxn::Int, verbose::Int,
+                                    shift_scale::Float64=1.0)
     if verbose > 0
         @info("SMLMDriftCorrection: singlepass mode")
     end
@@ -392,9 +416,14 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
 
     # Step 2: Inter-dataset alignment
     # Both modes use entropy optimization - datasets image the same FOV/structures
+    n_dims = model.intra[1].ndims
     reg_lambda = 0.0
     warmstart_values = Vector{Vector{Float64}}()
-    if dataset_mode == :continuous
+    if dataset_mode == :registered
+        # Registered mode: mild L2 regularization toward zero for first pass
+        reg_lambda = 1.0 / shift_scale^2
+        warmstart_values = [zeros(n_dims) for _ in 1:smld.n_datasets]
+    elseif dataset_mode == :continuous
         # Continuous mode: initialize inter-shifts from polynomial endpoints, then optimize
         _warmstart_inter_continuous!(model, smld, verbose)
         # Estimate endpoint uncertainty and regularize around warmstart
@@ -412,6 +441,14 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
             precomputed_corrected = precomputed,
             regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
             regularization_lambda = reg_lambda)
+    end
+
+    # Update regularization for second pass using first-pass results
+    if dataset_mode == :registered && smld.n_datasets > 3
+        reg_lambda, warmstart_values = _estimate_registered_lambda(model, smld, verbose)
+    elseif dataset_mode == :registered
+        # Too few datasets for robust statistics — keep first-pass values as targets
+        warmstart_values = [copy(model.inter[nn].dm) for nn in 1:smld.n_datasets]
     end
 
     if verbose > 0
@@ -438,13 +475,13 @@ Iterative quality tier - full intra↔inter convergence loop.
 function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
                                    dataset_mode::Symbol, maxn::Int,
                                    max_iterations::Int, convergence_tol::Float64,
-                                   verbose::Int)
+                                   verbose::Int, shift_scale::Float64=1.0)
     if verbose > 0
         @info("SMLMDriftCorrection: iterative mode (max_iterations=$max_iterations, tol=$convergence_tol)")
     end
 
     # First run singlepass to initialize
-    _driftcorrect_singlepass!(model, smld, dataset_mode, maxn, verbose)
+    _driftcorrect_singlepass!(model, smld, dataset_mode, maxn, verbose, shift_scale)
 
     # Compute initial entropy
     smld_corrected = correctdrift(smld, model)
@@ -457,7 +494,23 @@ function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
 
     # Continue with iterative refinement
     result = _driftcorrect_iterate!(model, smld, dataset_mode, maxn, max_iterations - 1,
-                                     convergence_tol, verbose, 1, history)
+                                     convergence_tol, verbose, 1, history, shift_scale)
+
+    # Automatic warm-start retry if not converged: the iterative loop can get
+    # stuck in a local minimum where intra and inter fight each other. Restarting
+    # from the current model often allows the loop to converge to a much better
+    # optimum (observed empirically: 150nm RMSD improvement on stress tests).
+    max_retries = 3
+    retry = 0
+    while !result.converged && retry < max_retries
+        retry += 1
+        if verbose > 0
+            @info("SMLMDriftCorrection: not converged after $(result.iterations) iterations — auto warm-start retry $retry/$max_retries")
+        end
+        result = _driftcorrect_iterate!(model, smld, dataset_mode, maxn, max_iterations,
+                                         convergence_tol, verbose,
+                                         result.iterations, copy(result.history), shift_scale)
+    end
 
     return result
 end
@@ -468,7 +521,8 @@ Core iterative refinement loop - used by both :iterative and continuation.
 function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
                                  dataset_mode::Symbol, maxn::Int, max_iterations::Int,
                                  convergence_tol::Float64, verbose::Int,
-                                 starting_iteration::Int, history::Vector{Float64})
+                                 starting_iteration::Int, history::Vector{Float64},
+                                 shift_scale::Float64=1.0)
 
     n_datasets = smld.n_datasets
     n_dims = model.intra[1].ndims
@@ -491,7 +545,15 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         # Both modes use entropy optimization - datasets image the same FOV/structures
         reg_lambda = 0.0
         warmstart_values = Vector{Vector{Float64}}()
-        if dataset_mode == :continuous
+        if dataset_mode == :registered
+            # Registered mode: adaptive regularization from current shift distribution
+            if n_datasets > 3
+                reg_lambda, warmstart_values = _estimate_registered_lambda(model, smld, verbose > 1 ? verbose : 0)
+            else
+                reg_lambda = 1.0 / shift_scale^2
+                warmstart_values = [copy(model.inter[nn].dm) for nn in 1:n_datasets]
+            end
+        elseif dataset_mode == :continuous
             # Continuous mode: initialize from polynomial endpoints before optimization
             _warmstart_inter_continuous!(model, smld, verbose > 1 ? verbose : 0)
             reg_lambda = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
@@ -632,6 +694,76 @@ function _estimate_continuous_lambda(model::LegendrePolynomial, n_frames::Int, v
     end
 
     return λ
+end
+
+"""
+Estimate regularization lambda for registered mode from the distribution of
+effective shifts at t=1 (inter + startpoint_drift) across datasets.
+
+After the first inter-dataset pass, outlier-robust spread of effective shifts
+gives the expected scale. Returns (λ, warmstart_values) for the second pass.
+"""
+function _estimate_registered_lambda(model::LegendrePolynomial, smld::SMLD, verbose::Int)
+    ndims = model.intra[1].ndims
+    n_datasets = model.ndatasets
+
+    # Effective shift at t=1 for each dataset: inter + startpoint_drift(intra)
+    effective_shifts = Vector{Vector{Float64}}(undef, n_datasets)
+    for nn in 1:n_datasets
+        sp = startpoint_drift(model.intra[nn])
+        effective_shifts[nn] = model.inter[nn].dm .+ sp
+    end
+
+    # Collect per-dimension values from datasets 2..N
+    all_vals = [Float64[effective_shifts[nn][d] for nn in 2:n_datasets] for d in 1:ndims]
+
+    # IQR-based outlier detection, per dimension
+    # Track which datasets are outliers in ANY dimension
+    is_outlier = falses(n_datasets)
+    σ_vals = Float64[]
+    median_shift = zeros(ndims)
+    for (d, vals) in enumerate(all_vals)
+        q1, q3 = quantile(vals, 0.25), quantile(vals, 0.75)
+        iqr = q3 - q1
+        mask = (vals .>= q1 - 1.5 * iqr) .& (vals .<= q3 + 1.5 * iqr)
+        clean = vals[mask]
+        median_shift[d] = median(vals[mask])
+        # Mark outlier datasets (offset by 1 since vals is for datasets 2..N)
+        for (i, v) in enumerate(vals)
+            if !mask[i]
+                is_outlier[i + 1] = true
+            end
+        end
+        if length(clean) >= 2
+            push!(σ_vals, std(clean))
+        else
+            push!(σ_vals, std(vals))
+        end
+    end
+
+    σ = max(mean(σ_vals), 0.010)  # floor at 10nm
+    λ = 1.0 / σ^2
+
+    n_outliers = count(is_outlier)
+    if verbose > 0
+        @info("SMLMDriftCorrection: registered regularization σ=$(round(σ*1000, digits=1))nm, λ=$(round(λ, digits=1)), outliers=$n_outliers/$(n_datasets-1)")
+    end
+
+    # Targets: first-pass values for non-outliers, median shift for outliers
+    # This pulls outlier datasets toward the population center in the second pass
+    warmstart_values = Vector{Vector{Float64}}(undef, n_datasets)
+    warmstart_values[1] = zeros(ndims)  # DS1 is reference
+    for nn in 2:n_datasets
+        if is_outlier[nn]
+            # Outlier: regularize toward median effective shift, converted back to inter-shift
+            sp = startpoint_drift(model.intra[nn])
+            warmstart_values[nn] = median_shift .- sp
+        else
+            warmstart_values[nn] = copy(model.inter[nn].dm)
+        end
+    end
+
+    return λ, warmstart_values
 end
 
 """

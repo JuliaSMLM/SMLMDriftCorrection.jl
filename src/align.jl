@@ -1,18 +1,18 @@
-# Rigid-shift alignment of independent SMLDs
+# Alignment of independent SMLDs (shift or affine transform)
 
 """
     align_smld(smlds; kwargs...) -> (Vector{<:SMLD}, AlignInfo)
     align_smld(smlds, config::AlignConfig) -> (Vector{<:SMLD}, AlignInfo)
 
-Align a vector of independent SMLD structures to a common reference (the first)
-using rigid shifts. Each SMLD is assumed to be an independent acquisition of the
-same FOV/structure.
+Align a vector of independent SMLD structures to a common reference (the first).
+Each SMLD is assumed to be an independent acquisition of the same FOV/structure.
 
 # Arguments
 - `smlds`: Vector of SMLD structures (>= 2 required)
 
 # Keyword Arguments
 - `method=:entropy`: `:entropy` (CC initial guess + entropy refinement) or `:fft` (CC only)
+- `transform=:shift`: `:shift` (translation only) or `:affine` (rotation + scale + translation)
 - `maxn=100`: Maximum neighbors for entropy calculation
 - `histbinsize=0.05`: Histogram bin size (μm) for cross-correlation
 - `verbose=0`: Verbosity: 0=quiet, 1=info
@@ -20,12 +20,18 @@ same FOV/structure.
 # Returns
 Tuple `(aligned_smlds, info::AlignInfo)` where:
 - `aligned_smlds`: Vector of aligned SMLDs (first is unchanged)
-- `info.shifts[i]`: shift applied to `smlds[i]` (`shifts[1]` = zeros)
+- `info.shifts[i]`: translation component for `smlds[i]` (`shifts[1]` = zeros)
+- `info.transforms[i]`: full transform (ShiftTransform or AffineTransform2D/3D)
 
 # Example
 ```julia
+# Shift-only (default)
 (aligned, info) = align_smld(smlds)
 info.shifts  # [zeros(2), [dx2, dy2], [dx3, dy3], ...]
+
+# Affine (rotation + scale + translation)
+(aligned, info) = align_smld(smlds; transform=:affine)
+info.transforms[2]  # AffineTransform2D(θ, scale, tx, ty)
 ```
 """
 function align_smld(smlds::Vector{<:SMLD}; kwargs...)
@@ -51,20 +57,32 @@ function align_smld(smlds::Vector{<:SMLD}, config::AlignConfig)
     end
 
     config.method in (:entropy, :fft) || error("align_smld: unknown method $(config.method), expected :entropy or :fft")
+    config.transform in (:shift, :affine) || error("align_smld: unknown transform $(config.transform), expected :shift or :affine")
 
-    # Compute shifts (threaded, each independent)
+    if config.transform == :shift
+        return _align_shift(smlds, N, ndims_ref, config, t0)
+    else  # :affine — always uses shift-field FFT method
+        return _align_affine_fft(smlds, N, ndims_ref, config, t0)
+    end
+end
+
+# ============================================================================
+# Shift-only alignment (original behavior)
+# ============================================================================
+
+function _align_shift(smlds, N, ndims_ref, config, t0)
     shifts = Vector{Vector{Float64}}(undef, N)
     shifts[1] = zeros(ndims_ref)
 
     if config.method == :fft
         _align_fft!(shifts, smlds, ndims_ref, config)
-    else  # :entropy
+    else
         _align_entropy!(shifts, smlds, ndims_ref, config)
     end
 
-    # Apply shifts: deepcopy and shift each non-reference SMLD
+    # Apply shifts
     aligned = Vector{typeof(smlds[1])}(undef, N)
-    aligned[1] = smlds[1]  # reference unchanged
+    aligned[1] = smlds[1]
     for i in 2:N
         aligned[i] = deepcopy(smlds[i])
         correctdrift!(aligned[i], shifts[i])
@@ -72,13 +90,83 @@ function align_smld(smlds::Vector{<:SMLD}, config::AlignConfig)
 
     elapsed = time() - t0
     if config.verbose >= 1
-        println("align_smld: aligned $N SMLDs ($(config.method)) in $(round(elapsed; digits=2))s")
+        println("align_smld: aligned $N SMLDs ($(config.method), shift) in $(round(elapsed; digits=2))s")
         for i in 2:N
             println("  smlds[$i]: shift = $(round.(shifts[i]; digits=4))")
         end
     end
 
-    info = AlignInfo(shifts, elapsed, config.method, :cpu)
+    transforms = AbstractAlignTransform[ShiftTransform(s) for s in shifts]
+    info = AlignInfo(shifts, transforms, elapsed, config.method, config.transform, :cpu)
+    return (aligned, info)
+end
+
+# ============================================================================
+# FFT affine: shift-field method (sub-region CC + affine fit)
+# ============================================================================
+
+function _align_affine_fft(smlds, N, ndims_ref, config, t0)
+    ndims_ref == 2 || error("align_smld: transform=:affine with method=:fft only supports 2D")
+
+    shifts = Vector{Vector{Float64}}(undef, N)
+    shifts[1] = zeros(ndims_ref)
+    transforms = Vector{AbstractAlignTransform}(undef, N)
+    transforms[1] = AffineTransform2D(0.0, 1.0, 0.0, 0.0)
+    aligned = Vector{typeof(smlds[1])}(undef, N)
+    aligned[1] = smlds[1]
+
+    for i in 2:N
+        # Pass 1: global shift + affine from shift field
+        result = find_affine_shift_field(smlds[1], smlds[i];
+                    histbinsize=config.histbinsize, min_locs=200)
+        a, b, c, d, e, f = result.a, result.b, result.c, result.d, result.e, result.f
+
+        aligned[i] = deepcopy(smlds[i])
+        correctdrift!(aligned[i], result.global_shift)
+        for nn in eachindex(aligned[i].emitters)
+            x = aligned[i].emitters[nn].x; y = aligned[i].emitters[nn].y
+            aligned[i].emitters[nn].x = x - (a*x + b*y + c)
+            aligned[i].emitters[nn].y = y - (d*x + e*y + f)
+        end
+
+        if config.verbose >= 1
+            θ1 = atan((d - b) / 2)
+            println("  smlds[$i] pass1: θ=$(round(rad2deg(θ1); digits=3))°, sx=$(round(1+a; digits=5)), sy=$(round(1+e; digits=5)), tiles=$(result.n_tiles), rms=$(round(result.rms_residual*1000; digits=1))nm")
+        end
+
+        # Pass 2: refine on corrected data (residual should be small)
+        result2 = find_affine_shift_field(smlds[1], aligned[i];
+                    histbinsize=config.histbinsize, min_locs=200)
+        a2, b2, c2, d2, e2, f2 = result2.a, result2.b, result2.c, result2.d, result2.e, result2.f
+
+        # Apply global shift residual + affine residual
+        correctdrift!(aligned[i], result2.global_shift)
+        for nn in eachindex(aligned[i].emitters)
+            x = aligned[i].emitters[nn].x; y = aligned[i].emitters[nn].y
+            aligned[i].emitters[nn].x = x - (a2*x + b2*y + c2)
+            aligned[i].emitters[nn].y = y - (d2*x + e2*y + f2)
+        end
+
+        if config.verbose >= 1
+            println("  smlds[$i] pass2: rms=$(round(result2.rms_residual*1000; digits=1))nm")
+        end
+
+        # Total shift at centroid
+        cx = mean(em.x for em in smlds[i].emitters)
+        cy = mean(em.y for em in smlds[i].emitters)
+        gs = result.global_shift .+ result2.global_shift
+        total_a = a + a2; total_e = e + e2
+        shifts[i] = [gs[1] + a*cx + b*cy + c, gs[2] + d*cx + e*cy + f]
+
+        θ_fit = atan(((d + d2) - (b + b2)) / 2)
+        s_fit = sqrt(abs((1 + total_a) * (1 + total_e)))
+        transforms[i] = AffineTransform2D(θ_fit, s_fit, shifts[i][1], shifts[i][2])
+    end
+
+    elapsed = time() - t0
+    config.verbose >= 1 && println("align_smld: aligned $N SMLDs (fft, affine) in $(round(elapsed; digits=2))s")
+
+    info = AlignInfo(shifts, transforms, elapsed, config.method, config.transform, :cpu)
     return (aligned, info)
 end
 
@@ -91,7 +179,7 @@ function _align_fft!(shifts, smlds, ndims_ref, config)
     end
 end
 
-# --- Entropy method: CC initial guess + regularized entropy refinement ---
+# --- Entropy method (shift): CC initial guess + regularized entropy refinement ---
 
 function _align_entropy!(shifts, smlds, ndims_ref, config)
     N = length(smlds)
@@ -174,3 +262,4 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
         shifts[i] = Float64.(res.minimizer)
     end
 end
+

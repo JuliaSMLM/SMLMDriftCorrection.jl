@@ -347,9 +347,15 @@ using Random
         @testset "Type hierarchy" begin
             @test DC.AlignConfig <: DC.AbstractSMLMConfig
             @test DC.AlignInfo <: DC.AbstractSMLMInfo
+            @test DC.ShiftTransform <: DC.AbstractAlignTransform
+            @test DC.AffineTransform2D <: DC.AbstractAlignTransform
+            @test DC.AffineTransform3D <: DC.AbstractAlignTransform
             config = DC.AlignConfig(method=:fft, maxn=50)
             @test config.method == :fft
             @test config.maxn == 50
+            @test config.transform == :shift
+            config_aff = DC.AlignConfig(transform=:affine)
+            @test config_aff.transform == :affine
         end
 
         # --- Build shifted SMLDs from smld_noisy (2D) ---
@@ -375,11 +381,14 @@ using Random
             @test length(aligned) == 3
             @test info isa DC.AlignInfo
             @test info.method == :entropy
+            @test info.transform == :shift
             @test info.backend == :cpu
             @test info.elapsed_s > 0
             @test info.shifts[1] == [0.0, 0.0]
+            @test info.transforms[1] isa DC.ShiftTransform
             for k in 2:3
                 @test isapprox(info.shifts[k], true_shifts_2d[k]; atol=0.050)
+                @test info.transforms[k] isa DC.ShiftTransform
             end
         end
 
@@ -448,6 +457,56 @@ using Random
 
             # Bad method errors
             @test_throws ErrorException DC.align_smld(smlds_2d; method=:bad)
+
+            # Bad transform errors
+            @test_throws ErrorException DC.align_smld(smlds_2d; transform=:bad)
+
+        end
+
+        # --- Affine 2D: known rotation + scale + shift (shift-field method) ---
+        @testset "Affine 2D" begin
+            # Apply known affine: 3° rotation, 1.02 scale, (0.3, -0.2) shift
+            true_θ = deg2rad(3.0)
+            true_s = 1.02
+            true_tx = 0.3
+            true_ty = -0.2
+            cosθ = cos(true_θ)
+            sinθ = sin(true_θ)
+
+            smld_affine = deepcopy(smld_base)
+            for nn in eachindex(smld_affine.emitters)
+                x = smld_affine.emitters[nn].x
+                y = smld_affine.emitters[nn].y
+                smld_affine.emitters[nn].x = true_s * (cosθ * x - sinθ * y) + true_tx
+                smld_affine.emitters[nn].y = true_s * (sinθ * x + cosθ * y) + true_ty
+            end
+
+            smlds_aff = [smld_base, smld_affine]
+            (aligned, info) = DC.align_smld(smlds_aff; transform=:affine, verbose=1)
+
+            @test info isa DC.AlignInfo
+            @test info.transform == :affine
+            @test info.transforms[1] isa DC.AffineTransform2D
+            @test info.transforms[2] isa DC.AffineTransform2D
+
+            # Verify correction quality: measure residual shift between aligned data
+            # The affine correction should bring the data back close to smld_base
+            x_base = [e.x for e in smld_base.emitters]
+            y_base = [e.y for e in smld_base.emitters]
+            x_aligned = [e.x for e in aligned[2].emitters]
+            y_aligned = [e.y for e in aligned[2].emitters]
+            rmsd = sqrt(sum((x_aligned .- x_base).^2 .+ (y_aligned .- y_base).^2) / length(x_base))
+            @test rmsd < 0.050  # 50nm RMSD tolerance
+        end
+
+        # --- Affine 2D: shift-only data recovers near-identity ---
+        @testset "Affine 2D identity" begin
+            (aligned, info) = DC.align_smld(smlds_2d; transform=:affine)
+            @test info.transform == :affine
+            # With shift-only data, affine should recover the shifts
+            for k in 2:3
+                @test isapprox(info.shifts[k], true_shifts_2d[k]; atol=0.15)
+            end
         end
     end
 
@@ -480,5 +539,92 @@ using Random
         # Test auto_roi with 3D data
         (smld_roi3, info_roi3) = DC.driftcorrect(smld_drift3; auto_roi=true)
         @test info_roi3 isa DC.DriftInfo
+    end
+
+    # ========== position_frame_correlation ==========
+    # Smoke test for the diagnostic function. Wrapped in isdefined so this
+    # testset is skipped gracefully if the function hasn't been merged yet.
+    if isdefined(SMLMDriftCorrection, :position_frame_correlation)
+        @testset "position_frame_correlation" begin
+            # Build a small synthetic SMLD specifically for this test
+            # (3 datasets, 500 frames, density ~10) to keep things fast.
+            Random.seed!(7)
+            params_pfc = StaticSMLMConfig(
+                30.0,    # density (higher for enough locs)
+                0.13,    # σ_psf
+                30,      # minphotons
+                2,       # ndatasets
+                2000,    # nframes
+                50.0,    # framerate
+                2,       # ndims (2D)
+                [0.0, 1.0]
+            )
+            (smld_pfc, _) = simulate(
+                params_pfc;
+                pattern=Nmer2D(n=6, d=0.2),
+                molecule=GenericFluor(; photons=5000.0, k_on=0.05, k_off=50.0),
+                camera=IdealCamera(1:64, 1:64, 0.1)
+            )
+
+            # Apply a known random drift large enough to dominate noise
+            Random.seed!(321)
+            drift_pfc = DC.LegendrePolynomial(smld_pfc; degree=2,
+                                              initialize="random", rscale=0.3)
+            drift_pfc.inter[1].dm .= 0.0
+            smld_drifted_pfc = DC.applydrift(smld_pfc, drift_pfc)
+
+            # Drift-correct
+            (smld_corr_pfc, _info_pfc) = DC.driftcorrect(smld_drifted_pfc)
+
+            # --- Intra mode ---
+            res_drifted = SMLMDriftCorrection.position_frame_correlation(
+                smld_drifted_pfc; K=20, mode=:intra)
+            res_corrected = SMLMDriftCorrection.position_frame_correlation(
+                smld_corr_pfc; K=20, mode=:intra)
+
+            # Shape checks
+            @test res_drifted.mode == :intra
+            @test res_corrected.mode == :intra
+            @test res_drifted.K == 20
+            @test length(res_drifted.per_dataset) == 2
+            @test length(res_corrected.per_dataset) == 2
+
+            for entry in res_drifted.per_dataset
+                @test 0.0 <= abs(entry.corr_x) <= 1.0
+                @test 0.0 <= abs(entry.corr_y) <= 1.0
+                @test entry.corr_z === nothing  # 2D
+                @test entry.residuals_z === nothing
+                @test length(entry.residuals_x) == entry.n_locs
+                @test length(entry.residuals_y) == entry.n_locs
+                @test length(entry.frames) == entry.n_locs
+            end
+
+            # Summary checks
+            @test 0.0 <= res_drifted.summary.mean_abs_corr_x <= 1.0
+            @test 0.0 <= res_drifted.summary.mean_abs_corr_y <= 1.0
+            @test res_drifted.summary.mean_abs_corr_z === nothing
+            @test 0.0 <= res_corrected.summary.mean_abs_corr_x <= 1.0
+            @test 0.0 <= res_corrected.summary.mean_abs_corr_y <= 1.0
+
+            # Hypothesis: drifted data should show stronger combined
+            # position-frame correlation than corrected data. Check the sum
+            # of |corr_x| and |corr_y| to avoid per-axis noise flipping the sign.
+            drifted_total = res_drifted.summary.mean_abs_corr_x + res_drifted.summary.mean_abs_corr_y
+            corrected_total = res_corrected.summary.mean_abs_corr_x + res_corrected.summary.mean_abs_corr_y
+            print("position_frame_correlation: |corr_x|+|corr_y| drifted=$drifted_total corrected=$corrected_total\n")
+            @test drifted_total > corrected_total
+
+            # --- Inter mode ---
+            res_inter = SMLMDriftCorrection.position_frame_correlation(
+                smld_drifted_pfc; K=20, mode=:inter)
+            @test res_inter.mode == :inter
+            @test res_inter.K == 20
+            @test 0.0 <= abs(res_inter.corr_x) <= 1.0
+            @test 0.0 <= abs(res_inter.corr_y) <= 1.0
+            @test res_inter.corr_z === nothing
+            @test res_inter.residuals_z === nothing
+            @test length(res_inter.residuals_x) == length(res_inter.dataset_indices)
+            @test length(res_inter.residuals_y) == length(res_inter.dataset_indices)
+        end
     end
 end
