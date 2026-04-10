@@ -50,8 +50,13 @@ InterShift (per-dataset constant shift)
 DriftConfig <: AbstractSMLMConfig (input config, @kwdef)
 DriftInfo{M} <: AbstractSMLMInfo (output struct with model, timing, convergence, roi_indices)
 
+AbstractAlignTransform
+├── ShiftTransform (pure translation, default)
+├── AffineTransform2D (rotation + uniform scale + translation, 4 params)
+└── AffineTransform3D (Euler rotation + uniform scale + translation, 7 params)
+
 AlignConfig <: AbstractSMLMConfig (input config for align_smld, @kwdef)
-AlignInfo <: AbstractSMLMInfo (output struct with shifts, timing)
+AlignInfo <: AbstractSMLMInfo (output struct with shifts, transforms, timing)
 ```
 
 ### Key Data Flow
@@ -73,8 +78,9 @@ AlignInfo <: AbstractSMLMInfo (output struct with shifts, timing)
 - `utilities.jl`: `filter_emitters()`, `chunk_smld()`, `drift_trajectory()`
 - `crosscorr.jl`: Cross-correlation helpers (`findshift`, `histimage2D`, `crosscorr2D`)
 - `roi_selection.jl`: Auto-ROI subsampling (`calculate_n_locs_required`, `find_dense_roi`)
-- `align.jl`: `align_smld()` for rigid-shift alignment of independent SMLDs
-- `typedefs.jl`: Abstract types, `InterShift`, `DriftInfo`, `AlignConfig`, `AlignInfo`
+- `affine.jl`: Affine (similarity) transform functions: `apply_affine_2d/3d`, `correct_affine_2d/3d`, `apply_affine_transform!`
+- `align.jl`: `align_smld()` for alignment of independent SMLDs (shift or affine transform)
+- `typedefs.jl`: Abstract types, `InterShift`, `DriftInfo`, `AlignConfig`, `AlignInfo`, `AbstractAlignTransform`, `ShiftTransform`, `AffineTransform2D/3D`
 
 ### Threading
 
@@ -169,8 +175,13 @@ info.shifts  # shift applied to each SMLD
 # FFT-only (faster, less accurate)
 (aligned, info) = align_smld(smlds; method=:fft)
 
+# Affine alignment (rotation + scale + translation)
+(aligned, info) = align_smld(smlds; transform=:affine)
+info.transforms[2]  # AffineTransform2D(θ, scale, tx, ty)
+info.shifts[2]      # translation component [tx, ty]
+
 # Config struct form
-config = AlignConfig(method=:entropy, maxn=100)
+config = AlignConfig(method=:entropy, transform=:affine, maxn=100)
 (aligned, info) = align_smld(smlds, config)
 ```
 
@@ -192,6 +203,7 @@ smld_roi = filter_emitters(smld, mask)
 - `max_iterations=10`: Maximum iterations for `:iterative` mode
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start=nothing`: Previous model for warm starting optimization
+- `shift_scale=1.0`: Expected inter-shift scale (μm) for registered mode L2 regularization (λ=1/σ²)
 - `verbose=0`: 0=quiet, 1=info, 2=debug
 
 ### Auto-ROI Parameters
@@ -202,6 +214,15 @@ smld_roi = filter_emitters(smld, mask)
 - `roi_safety_factor=4.0`: Safety multiplier for required localizations
 
 When `auto_roi=true`, selects a contiguous rectangular region from the densest part of the FOV. This preserves blink pairs from the same emitters which is essential for entropy-based optimization.
+
+### Alignment Parameters (align_smld)
+
+- `method=:entropy`: `:entropy` (CC + entropy refinement) or `:fft` (CC only)
+- `transform=:shift`: `:shift` (translation only) or `:affine` (rotation + scale + translation)
+- `maxn=100`: Maximum neighbors for entropy calculation
+- `histbinsize=0.05`: Histogram bin size (μm) for cross-correlation
+
+Note: `transform=:affine` requires `method=:entropy` (FFT can only recover translation). The affine transform stores forward parameters (how target differs from reference); `AffineTransform2D` has fields `θ` (radians), `scale`, `tx`, `ty`. The correction applies the inverse automatically.
 
 ## Units
 

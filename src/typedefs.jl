@@ -6,6 +6,47 @@ abstract type AbstractIntraDrift end
 
 abstract type AbstractIntraInter <: AbstractDriftModel end
 
+abstract type AbstractAlignTransform end
+
+"""
+    ShiftTransform <: AbstractAlignTransform
+
+Pure translation alignment (current default behavior).
+"""
+struct ShiftTransform <: AbstractAlignTransform
+    shift::Vector{Float64}
+end
+
+"""
+    AffineTransform2D <: AbstractAlignTransform
+
+2D similarity transform: rotation + uniform scale + translation.
+Parameters: [θ_rot, scale, tx, ty]
+Transform: [x'; y'] = s * R(θ) * [x; y] + [tx; ty]
+"""
+struct AffineTransform2D <: AbstractAlignTransform
+    θ::Float64       # rotation angle (radians)
+    scale::Float64   # uniform scale factor
+    tx::Float64      # x translation
+    ty::Float64      # y translation
+end
+
+"""
+    AffineTransform3D <: AbstractAlignTransform
+
+3D similarity transform: Euler rotation + uniform scale + translation.
+Parameters: [θx, θy, θz, scale, tx, ty, tz]
+"""
+struct AffineTransform3D <: AbstractAlignTransform
+    θx::Float64      # rotation around x-axis (radians)
+    θy::Float64      # rotation around y-axis (radians)
+    θz::Float64      # rotation around z-axis (radians)
+    scale::Float64   # uniform scale factor
+    tx::Float64      # x translation
+    ty::Float64      # y translation
+    tz::Float64      # z translation
+end
+
 mutable struct InterShift
     ndims::Int
     dm::Vector{Float64}
@@ -65,6 +106,7 @@ julia> config.convergence_tol
     σ_loc::Float64 = 0.010
     σ_target::Float64 = 0.001
     roi_safety_factor::Float64 = 4.0
+    shift_scale::Float64 = 1.0
 end
 
 """
@@ -82,6 +124,11 @@ Supports warm start via `info.model`.
 - `entropy::Float64`: Final entropy value after correction
 - `history::Vector{Float64}`: Entropy per iteration (empty for :fft)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subsampling (nothing if not used)
+- `residual_correlation::NamedTuple`: Position-frame correlation diagnostic on corrected data.
+  - `intra_summary`: `(mean_abs_corr_x, mean_abs_corr_y, mean_abs_corr_z)` — per-dataset average
+  - `intra_per_dataset`: vector of `(dataset, n_locs, corr_x, corr_y, corr_z)` — flag bad datasets
+  - `inter`: `(corr_x, corr_y, corr_z)` — cross-dataset alignment quality
+  Low values (~0.01) indicate drift is well-corrected; high values indicate residual drift.
 
 # Usage
 ```julia
@@ -91,6 +138,9 @@ info.entropy      # final value
 info.elapsed_s    # timing
 plot(info.history)  # diagnostics
 info.roi_indices  # ROI used for estimation (nothing if auto_roi=false)
+info.residual_correlation.intra_summary.mean_abs_corr_y  # overall residual
+info.residual_correlation.intra_per_dataset[5].corr_y    # dataset 5 residual
+info.residual_correlation.inter.corr_y                   # inter-dataset alignment
 
 # Warm start from previous result
 (smld2, info2) = driftcorrect(smld2; warm_start=info.model)
@@ -105,6 +155,7 @@ struct DriftInfo{M<:AbstractIntraInter} <: AbstractSMLMInfo
     entropy::Float64
     history::Vector{Float64}
     roi_indices::Union{Nothing, Vector{Int}}
+    residual_correlation::NamedTuple
 end
 
 """
@@ -117,12 +168,14 @@ Configuration for rigid-shift alignment of independent SMLDs.
 | Field | Default | Description |
 |:------|:--------|:------------|
 | `method` | `:entropy` | Alignment method: `:entropy` (CC + entropy refinement) or `:fft` (CC only) |
+| `transform` | `:shift` | Transform model: `:shift` (translation only) or `:affine` (rotation + scale + translation) |
 | `maxn` | `100` | Maximum neighbors for entropy calculation |
 | `histbinsize` | `0.05` | Histogram bin size (μm) for cross-correlation |
 | `verbose` | `0` | Verbosity level: 0=quiet, 1=info |
 """
 @kwdef struct AlignConfig <: AbstractSMLMConfig
     method::Symbol = :entropy
+    transform::Symbol = :shift
     maxn::Int = 100
     histbinsize::Float64 = 0.05
     verbose::Int = 0
@@ -135,13 +188,17 @@ Result metadata from `align_smld`.
 
 # Fields
 - `shifts::Vector{Vector{Float64}}`: Recovered shift for each SMLD (shifts[1] = zeros)
+- `transforms::Vector{<:AbstractAlignTransform}`: Full transform for each SMLD (ShiftTransform for :shift, AffineTransform2D/3D for :affine)
 - `elapsed_s::Float64`: Wall time in seconds
 - `method::Symbol`: Method used (`:entropy` or `:fft`)
+- `transform::Symbol`: Transform model used (`:shift` or `:affine`)
 - `backend::Symbol`: Computation backend (`:cpu`)
 """
 struct AlignInfo <: AbstractSMLMInfo
     shifts::Vector{Vector{Float64}}
+    transforms::Vector{<:AbstractAlignTransform}
     elapsed_s::Float64
     method::Symbol
+    transform::Symbol
     backend::Symbol
 end
