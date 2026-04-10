@@ -570,33 +570,31 @@ function findshift_damped(smld1::T, smld2::T;
 end
 
 # ============================================================================
-# Shift-field affine: sub-region CC shifts + least-squares affine fit
+# Shift-field affine: 5×5 grid CC shifts + weighted least-squares affine fit
 # ============================================================================
 
 """
-    find_affine_shift_field(smld1, smld2; histbinsize=0.05, min_locs=200,
-                            n_tiles_target=30, tile_range=(1.0, 5.0)) -> (a,b,c,d,e,f)
+    find_affine_shift_field(smld1, smld2; histbinsize=0.05, grid_n=5,
+                            sub_histbinsize=0.02, min_locs=100) -> NamedTuple
 
 Recover a full 2D affine transform between two SMLDs using local
-cross-correlation shifts measured on a grid of sub-regions.
+cross-correlation shifts measured on a grid of sub-regions, weighted
+by CC quality and localization density.
 
 Algorithm:
 1. Global CC shift to coarsely align
-2. Compute overlap density from histograms to find regions with signal in both channels
-3. Select spatially distributed tiles with sufficient localizations
-4. CC each tile to measure local shifts
-5. Robust least-squares fit: Δx = a*x + b*y + c,  Δy = d*x + e*y + f
+2. Divide overlapping FOV into grid_n × grid_n tiles
+3. For each tile: CC shift + quality metrics (peak CC value, loc count)
+4. Weighted least-squares affine fit: Δx = a*x + b*y + c,  Δy = d*x + e*y + f
+   Weight = normalized_cc_peak × min(n1, n2) / max_locs
 
-Returns a NamedTuple `(a, b, c, d, e, f, global_shift, n_tiles, rms_residual)`.
-The full correction for a point (x,y) after global shift is:
-  x_corrected = x - (a*x + b*y + c)
-  y_corrected = y - (d*x + e*y + f)
+Returns a NamedTuple with affine params and diagnostics.
 """
 function find_affine_shift_field(smld1::S, smld2::S;
         histbinsize::Real=0.05,
-        min_locs::Int=200,
-        n_tiles_target::Int=30,
-        tile_range::Tuple{Float64,Float64}=(1.0, 5.0)) where {S<:SMLD}
+        sub_histbinsize::Real=0.02,
+        grid_n::Int=5,
+        min_locs::Int=100) where {S<:SMLD}
 
     nDims(smld1) == 2 || error("find_affine_shift_field: only 2D supported")
 
@@ -605,7 +603,7 @@ function find_affine_shift_field(smld1::S, smld2::S;
     smld2_shifted = deepcopy(smld2)
     correctdrift!(smld2_shifted, global_shift)
 
-    # --- Step 2: adaptive tile size ---
+    # --- Step 2: overlapping FOV ---
     x1 = [e.x for e in smld1.emitters]; y1 = [e.y for e in smld1.emitters]
     x2 = [e.x for e in smld2_shifted.emitters]; y2 = [e.y for e in smld2_shifted.emitters]
 
@@ -613,141 +611,88 @@ function find_affine_shift_field(smld1::S, smld2::S;
     fov_xmax = min(maximum(x1), maximum(x2))
     fov_ymin = max(minimum(y1), minimum(y2))
     fov_ymax = min(maximum(y1), maximum(y2))
-    fov_area = (fov_xmax - fov_xmin) * (fov_ymax - fov_ymin)
 
-    # Target ~min_locs per tile per channel
-    density_1 = length(x1) / fov_area
-    density_2 = length(x2) / fov_area
-    min_density = min(density_1, density_2)
-    tile_side = clamp(sqrt(min_locs / min_density), tile_range[1], tile_range[2])
-
-    # --- Step 3: generate tile grid and score by overlap ---
-    nx_tiles = max(1, floor(Int, (fov_xmax - fov_xmin) / tile_side))
-    ny_tiles = max(1, floor(Int, (fov_ymax - fov_ymin) / tile_side))
-
-    # Histogram for overlap scoring (coarser bins for speed)
-    score_binsize = max(histbinsize, tile_side / 20)
-    ROI = float([fov_xmin, fov_xmax, fov_ymin, fov_ymax])
-    im1 = histimage2D(x1, y1; ROI=ROI, histbinsize=Float64(score_binsize))
-    im2 = histimage2D(x2, y2; ROI=ROI, histbinsize=Float64(score_binsize))
-    # Pad to common size
-    sz = (max(size(im1, 1), size(im2, 1)), max(size(im1, 2), size(im2, 2)))
-    im1_p = zeros(eltype(im1), sz); im1_p[1:size(im1,1), 1:size(im1,2)] .= im1
-    im2_p = zeros(eltype(im2), sz); im2_p[1:size(im2,1), 1:size(im2,2)] .= im2
-    overlap = sqrt.(Float64.(im1_p) .* Float64.(im2_p))
-
-    # Score each tile
-    tile_info = Vector{NamedTuple{(:cx,:cy,:xr,:yr,:score,:n1,:n2), Tuple{Float64,Float64,Tuple{Float64,Float64},Tuple{Float64,Float64},Float64,Int,Int}}}()
-    for ix in 0:nx_tiles-1, iy in 0:ny_tiles-1
-        xlo = fov_xmin + ix * tile_side
-        xhi = xlo + tile_side
-        ylo = fov_ymin + iy * tile_side
-        yhi = ylo + tile_side
-
-        # Count locs in each channel
-        n1 = count(i -> x1[i] >= xlo && x1[i] < xhi && y1[i] >= ylo && y1[i] < yhi, eachindex(x1))
-        n2 = count(i -> x2[i] >= xlo && x2[i] < xhi && y2[i] >= ylo && y2[i] < yhi, eachindex(x2))
-
-        # Overlap score from histogram
-        px_lo_x = max(1, round(Int, (xlo - fov_xmin) / score_binsize) + 1)
-        px_hi_x = min(sz[1], round(Int, (xhi - fov_xmin) / score_binsize))
-        px_lo_y = max(1, round(Int, (ylo - fov_ymin) / score_binsize) + 1)
-        px_hi_y = min(sz[2], round(Int, (yhi - fov_ymin) / score_binsize))
-        score = (px_hi_x >= px_lo_x && px_hi_y >= px_lo_y) ?
-                sum(view(overlap, px_lo_x:px_hi_x, px_lo_y:px_hi_y)) : 0.0
-
-        push!(tile_info, (cx=(xlo+xhi)/2, cy=(ylo+yhi)/2,
-                          xr=(xlo, xhi), yr=(ylo, yhi),
-                          score=score, n1=n1, n2=n2))
-    end
-
-    # Filter by minimum locs and sort by score
-    valid = filter(t -> t.n1 >= min_locs && t.n2 >= min_locs, tile_info)
-    sort!(valid, by=t -> -t.score)
-
-    # --- Step 4: select spatially distributed tiles ---
-    selected = _select_distributed_tiles(valid, n_tiles_target)
-
-    length(selected) < 4 && error("find_affine_shift_field: only $(length(selected)) valid tiles (need ≥4)")
-
-    # --- Step 5: CC each tile ---
+    tile_w = (fov_xmax - fov_xmin) / grid_n
+    tile_h = (fov_ymax - fov_ymin) / grid_n
     pixelsize = smld1.camera.pixel_edges_x[2] - smld1.camera.pixel_edges_x[1]
+    hbs = Float64(sub_histbinsize)
+
+    # --- Step 3: CC each tile with quality ---
     tile_cx = Float64[]; tile_cy = Float64[]
     tile_dx = Float64[]; tile_dy = Float64[]
+    tile_weights = Float64[]
 
-    for t in selected
-        # Build sub-camera for this tile
-        xr, yr = t.xr, t.yr
-        sub_nx = round(Int, (xr[2] - xr[1]) / pixelsize) + 2
-        sub_ny = round(Int, (yr[2] - yr[1]) / pixelsize) + 2
+    for ix in 0:grid_n-1, iy in 0:grid_n-1
+        xlo = fov_xmin + ix * tile_w
+        xhi = xlo + tile_w
+        ylo = fov_ymin + iy * tile_h
+        yhi = ylo + tile_h
+
+        # Filter emitters to tile
+        mask1 = [(e.x >= xlo && e.x < xhi && e.y >= ylo && e.y < yhi) for e in smld1.emitters]
+        mask2 = [(e.x >= xlo && e.x < xhi && e.y >= ylo && e.y < yhi) for e in smld2_shifted.emitters]
+        n1 = count(mask1); n2 = count(mask2)
+        (n1 < min_locs || n2 < min_locs) && continue
+
+        # Build sub-camera and SMLDs
+        sub_nx = round(Int, (xhi - xlo) / pixelsize) + 2
+        sub_ny = round(Int, (yhi - ylo) / pixelsize) + 2
         sub_cam = IdealCamera(
-            collect(range(xr[1], step=pixelsize, length=sub_nx + 1)),
-            collect(range(yr[1], step=pixelsize, length=sub_ny + 1)))
-
-        mask1 = [(e.x >= xr[1] && e.x < xr[2] && e.y >= yr[1] && e.y < yr[2]) for e in smld1.emitters]
-        mask2 = [(e.x >= xr[1] && e.x < xr[2] && e.y >= yr[1] && e.y < yr[2]) for e in smld2_shifted.emitters]
+            collect(range(xlo, step=pixelsize, length=sub_nx + 1)),
+            collect(range(ylo, step=pixelsize, length=sub_ny + 1)))
         sub1 = BasicSMLD(smld1.emitters[mask1], sub_cam, smld1.n_frames, 1)
         sub2 = BasicSMLD(smld2_shifted.emitters[mask2], sub_cam, smld2_shifted.n_frames, 1)
 
-        shift_local = try
-            findshift(sub1, sub2; histbinsize=histbinsize)
-        catch
-            continue
-        end
+        # Histogram + CC
+        sub_x1 = [e.x for e in sub1.emitters]; sub_y1 = [e.y for e in sub1.emitters]
+        sub_x2 = [e.x for e in sub2.emitters]; sub_y2 = [e.y for e in sub2.emitters]
+        sub_ROI = float([xlo, xhi, ylo, yhi])
+        im_a = histimage2D(sub_x1, sub_y1; ROI=sub_ROI, histbinsize=hbs)
+        im_b = histimage2D(sub_x2, sub_y2; ROI=sub_ROI, histbinsize=hbs)
+        cc = crosscorr2D(im_a, im_b)
 
-        push!(tile_cx, t.cx); push!(tile_cy, t.cy)
+        # Peak and quality
+        peak_idx = argmax(cc)
+        peak_val = cc[peak_idx]
+
+        # Normalized CC: peak / sqrt(sum(im_a²) * sum(im_b²))
+        norm_a = sqrt(Float64(sum(x -> x^2, im_a)))
+        norm_b = sqrt(Float64(sum(x -> x^2, im_b)))
+        cc_quality = (norm_a > 0 && norm_b > 0) ? peak_val / (norm_a * norm_b) : 0.0
+        cc_quality = clamp(cc_quality, 0.0, 1.0)
+
+        # Subpixel shift
+        mid1 = size(cc, 1) ÷ 2 + 1; mid2 = size(cc, 2) ÷ 2 + 1
+        pi, pj = gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
+        shift_local = hbs .* [mid1 - pi, mid2 - pj]
+
+        # Weight: CC quality × relative loc count
+        w = cc_quality * sqrt(min(n1, n2))
+
+        push!(tile_cx, (xlo + xhi) / 2); push!(tile_cy, (ylo + yhi) / 2)
         push!(tile_dx, shift_local[1]); push!(tile_dy, shift_local[2])
+        push!(tile_weights, w)
     end
 
-    n_measured = length(tile_dx)
-    n_measured < 4 && error("find_affine_shift_field: only $n_measured successful tile shifts (need ≥4)")
+    n_tiles = length(tile_dx)
+    n_tiles < 4 && error("find_affine_shift_field: only $n_tiles valid tiles (need ≥4)")
 
-    # --- Step 6: robust affine fit with outlier rejection ---
-    a, b, c, d, e, f, rms = _robust_affine_fit(tile_cx, tile_cy, tile_dx, tile_dy)
+    # --- Step 4: weighted affine fit with outlier rejection ---
+    a, b, c, d, e, f, rms = _weighted_affine_fit(tile_cx, tile_cy, tile_dx, tile_dy, tile_weights)
 
     return (a=a, b=b, c=c, d=d, e=e, f=f,
-            global_shift=global_shift, n_tiles=n_measured, rms_residual=rms)
+            global_shift=global_shift, n_tiles=n_tiles, rms_residual=rms,
+            tile_cx=tile_cx, tile_cy=tile_cy, tile_dx=tile_dx, tile_dy=tile_dy,
+            tile_weights=tile_weights)
 end
 
 """
-Select spatially distributed tiles: greedy farthest-point sampling.
+Weighted affine fit with iterative outlier rejection.
+Fits Δx = a*x + b*y + c, Δy = d*x + e*y + f using weights.
 """
-function _select_distributed_tiles(candidates, n_target)
-    isempty(candidates) && return typeof(candidates)()
-    n_target = min(n_target, length(candidates))
-
-    selected_idx = [1]  # start with highest-scored tile
-
-    for _ in 2:n_target
-        best_dist = -1.0
-        best_idx = -1
-        for (j, t) in enumerate(candidates)
-            j in selected_idx && continue
-            # Min distance to any already-selected tile
-            min_d = minimum(sqrt((t.cx - candidates[k].cx)^2 + (t.cy - candidates[k].cy)^2)
-                           for k in selected_idx)
-            # Weight by score to prefer dense tiles
-            weighted = min_d * sqrt(t.score + 1)
-            if weighted > best_dist
-                best_dist = weighted
-                best_idx = j
-            end
-        end
-        best_idx == -1 && break
-        push!(selected_idx, best_idx)
-    end
-
-    return [candidates[i] for i in selected_idx]
-end
-
-"""
-Robust affine fit with iterative outlier rejection.
-Fits Δx = a*x + b*y + c, Δy = d*x + e*y + f.
-"""
-function _robust_affine_fit(cx, cy, dx, dy; max_iter=3, outlier_sigma=3.0)
+function _weighted_affine_fit(cx, cy, dx, dy, weights; max_iter=3, outlier_sigma=3.0)
     N = length(cx)
     mask = trues(N)
-
     a, b, c, d, e, f = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     rms = Inf
 
@@ -756,25 +701,32 @@ function _robust_affine_fit(cx, cy, dx, dy; max_iter=3, outlier_sigma=3.0)
         n = length(idx)
         n < 4 && break
 
+        # Build weighted system: W^½ A p = W^½ b
         A = zeros(2n, 6)
         bv = zeros(2n)
+        W = zeros(2n)
         for (ki, i) in enumerate(idx)
+            w = weights[i]
             A[ki, 1] = cx[i]; A[ki, 2] = cy[i]; A[ki, 3] = 1.0
             A[n+ki, 4] = cx[i]; A[n+ki, 5] = cy[i]; A[n+ki, 6] = 1.0
             bv[ki] = dx[i]; bv[n+ki] = dy[i]
+            W[ki] = w; W[n+ki] = w
         end
 
-        params = A \ bv
+        # Apply weights
+        Wsqrt = sqrt.(W)
+        Aw = Wsqrt .* A
+        bw = Wsqrt .* bv
+
+        params = Aw \ bw
         a, b, c, d, e, f = params
 
-        # Compute residuals
+        # Residuals
         res_x = [dx[i] - (a*cx[i] + b*cy[i] + c) for i in 1:N]
         res_y = [dy[i] - (d*cx[i] + e*cy[i] + f) for i in 1:N]
         res_mag = sqrt.(res_x.^2 .+ res_y.^2)
-
         rms = sqrt(mean(res_mag[mask].^2))
 
-        # Reject outliers
         if iter < max_iter
             threshold = outlier_sigma * rms
             for i in 1:N
