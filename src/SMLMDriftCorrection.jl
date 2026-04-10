@@ -9,6 +9,7 @@ using Statistics
 using StatsFuns
 
 include("typedefs.jl")
+include("affine.jl")
 include("cost_entropy.jl")
 include("costfuns.jl")
 include("crosscorr.jl")
@@ -28,6 +29,10 @@ export drift_trajectory
 export align_smld
 export AlignConfig
 export AlignInfo
+export AbstractAlignTransform
+export ShiftTransform
+export AffineTransform2D
+export AffineTransform3D
 export position_frame_correlation
 
 end
