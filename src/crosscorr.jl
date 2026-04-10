@@ -636,7 +636,7 @@ function find_affine_shift_field(smld1::S, smld2::S;
         histbinsize::Real=0.05,
         sub_histbinsize::Real=0.005,
         grid_n::Int=5,
-        min_locs::Int=100) where {S<:SMLD}
+        min_locs::Int=30) where {S<:SMLD}
 
     nDims(smld1) == 2 || error("find_affine_shift_field: only 2D supported")
 
@@ -654,8 +654,15 @@ function find_affine_shift_field(smld1::S, smld2::S;
     fov_ymin = max(minimum(y1), minimum(y2))
     fov_ymax = min(maximum(y1), maximum(y2))
 
-    tile_w = (fov_xmax - fov_xmin) / grid_n
-    tile_h = (fov_ymax - fov_ymin) / grid_n
+    # Auto-reduce grid for small datasets to ensure enough locs per tile
+    min_total = min(length(x1), length(x2))
+    effective_grid_n = grid_n
+    while effective_grid_n > 2 && min_total / (effective_grid_n^2) < min_locs
+        effective_grid_n -= 1
+    end
+
+    tile_w = (fov_xmax - fov_xmin) / effective_grid_n
+    tile_h = (fov_ymax - fov_ymin) / effective_grid_n
     pixelsize = smld1.camera.pixel_edges_x[2] - smld1.camera.pixel_edges_x[1]
     hbs = Float64(sub_histbinsize)
 
@@ -664,7 +671,7 @@ function find_affine_shift_field(smld1::S, smld2::S;
     tile_dx = Float64[]; tile_dy = Float64[]
     tile_weights = Float64[]
 
-    for ix in 0:grid_n-1, iy in 0:grid_n-1
+    for ix in 0:effective_grid_n-1, iy in 0:effective_grid_n-1
         xlo = fov_xmin + ix * tile_w
         xhi = xlo + tile_w
         ylo = fov_ymin + iy * tile_h
