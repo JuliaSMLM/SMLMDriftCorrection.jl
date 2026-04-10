@@ -160,34 +160,51 @@ function _align_affine_fft(smlds, N, ndims_ref, config, t0)
     aligned[1] = smlds[1]
 
     for i in 2:N
+        # Pass 1: global shift + affine from shift field
         result = find_affine_shift_field(smlds[1], smlds[i];
                     histbinsize=config.histbinsize, min_locs=200)
         a, b, c, d, e, f = result.a, result.b, result.c, result.d, result.e, result.f
 
-        # Apply: global shift then affine correction
         aligned[i] = deepcopy(smlds[i])
         correctdrift!(aligned[i], result.global_shift)
         for nn in eachindex(aligned[i].emitters)
-            x = aligned[i].emitters[nn].x
-            y = aligned[i].emitters[nn].y
+            x = aligned[i].emitters[nn].x; y = aligned[i].emitters[nn].y
             aligned[i].emitters[nn].x = x - (a*x + b*y + c)
             aligned[i].emitters[nn].y = y - (d*x + e*y + f)
         end
 
-        # Total shift at centroid for backward-compat shifts field
-        cx = mean(em.x for em in smlds[i].emitters)
-        cy = mean(em.y for em in smlds[i].emitters)
-        gs = result.global_shift
-        shifts[i] = [gs[1] + a*cx + b*cy + c, gs[2] + d*cx + e*cy + f]
+        if config.verbose >= 1
+            θ1 = atan((d - b) / 2)
+            println("  smlds[$i] pass1: θ=$(round(rad2deg(θ1); digits=3))°, sx=$(round(1+a; digits=5)), sy=$(round(1+e; digits=5)), tiles=$(result.n_tiles), rms=$(round(result.rms_residual*1000; digits=1))nm")
+        end
 
-        # Decompose for AffineTransform2D
-        θ_fit = atan((d - b) / 2)
-        s_fit = sqrt(abs((1 + a) * (1 + e)))
-        transforms[i] = AffineTransform2D(θ_fit, s_fit, shifts[i][1], shifts[i][2])
+        # Pass 2: refine on corrected data (residual should be small)
+        result2 = find_affine_shift_field(smlds[1], aligned[i];
+                    histbinsize=config.histbinsize, min_locs=200)
+        a2, b2, c2, d2, e2, f2 = result2.a, result2.b, result2.c, result2.d, result2.e, result2.f
+
+        # Apply global shift residual + affine residual
+        correctdrift!(aligned[i], result2.global_shift)
+        for nn in eachindex(aligned[i].emitters)
+            x = aligned[i].emitters[nn].x; y = aligned[i].emitters[nn].y
+            aligned[i].emitters[nn].x = x - (a2*x + b2*y + c2)
+            aligned[i].emitters[nn].y = y - (d2*x + e2*y + f2)
+        end
 
         if config.verbose >= 1
-            println("  smlds[$i]: θ=$(round(rad2deg(θ_fit); digits=3))°, sx=$(round(1+a; digits=5)), sy=$(round(1+e; digits=5)), shift=$(round.(shifts[i]; digits=4)), tiles=$(result.n_tiles), rms=$(round(result.rms_residual*1000; digits=1))nm")
+            println("  smlds[$i] pass2: rms=$(round(result2.rms_residual*1000; digits=1))nm")
         end
+
+        # Total shift at centroid
+        cx = mean(em.x for em in smlds[i].emitters)
+        cy = mean(em.y for em in smlds[i].emitters)
+        gs = result.global_shift .+ result2.global_shift
+        total_a = a + a2; total_e = e + e2
+        shifts[i] = [gs[1] + a*cx + b*cy + c, gs[2] + d*cx + e*cy + f]
+
+        θ_fit = atan(((d + d2) - (b + b2)) / 2)
+        s_fit = sqrt(abs((1 + total_a) * (1 + total_e)))
+        transforms[i] = AffineTransform2D(θ_fit, s_fit, shifts[i][1], shifts[i][2])
     end
 
     elapsed = time() - t0

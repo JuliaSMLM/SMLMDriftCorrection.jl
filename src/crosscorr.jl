@@ -592,7 +592,7 @@ Returns a NamedTuple with affine params and diagnostics.
 """
 function find_affine_shift_field(smld1::S, smld2::S;
         histbinsize::Real=0.05,
-        sub_histbinsize::Real=0.02,
+        sub_histbinsize::Real=0.005,
         grid_n::Int=5,
         min_locs::Int=100) where {S<:SMLD}
 
