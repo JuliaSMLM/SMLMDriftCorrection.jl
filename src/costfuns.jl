@@ -514,3 +514,233 @@ function costfun_entropy_inter_3D_merged(θ,
 
     return entropy_HD(σ_x_n, σ_y_n, σ_z_n) - out / N_n
 end
+
+# ============================================================================
+# Affine entropy cost functions for align_smld
+# ============================================================================
+
+"""
+    costfun_entropy_affine_2D_merged(θ, x_n, y_n, σ_x_n, σ_y_n,
+                                      x_ref, y_ref, σ_x_ref, σ_y_ref,
+                                      maxn; kwargs...)
+
+Entropy cost for 2D affine alignment. θ = [θ_rot, scale, tx, ty].
+Applies similarity transform to dataset_n, merges with reference, computes entropy.
+
+Same adaptive neighbor rebuilding and entropy computation as
+`costfun_entropy_inter_2D_merged`, but uses affine transform instead of shift.
+Rebuild threshold accounts for rotation/scale via `fov_radius`.
+"""
+function costfun_entropy_affine_2D_merged(θ,
+    x_n::Vector{T}, y_n::Vector{T}, σ_x_n::Vector{T}, σ_y_n::Vector{T},
+    x_ref::Vector{T}, y_ref::Vector{T}, σ_x_ref::Vector{T}, σ_y_ref::Vector{T},
+    maxn::Int;
+    x_work::Vector{T}=similar(x_n),
+    y_work::Vector{T}=similar(y_n),
+    data_combined::Matrix{T}=Matrix{T}(undef, 2, length(x_n)+length(x_ref)),
+    state::Union{InterNeighborState{T}, Nothing}=nothing,
+    last_params::Union{Vector{T}, Nothing}=nothing,
+    fov_radius::T=T(5)) where {T<:Real}
+
+    # Apply INVERSE affine to dataset_n (correction direction: target → reference space)
+    # θ = [θ_rot, scale, tx, ty] describes the forward transform (ref → target)
+    correct_affine_2d!(x_work, y_work, θ, x_n, y_n)
+
+    N_n = length(x_n)
+    N_ref = length(x_ref)
+    N_combined = N_n + N_ref
+
+    # Inverse affine scales coordinates by 1/s, so σ must scale correspondingly
+    inv_s = one(T) / abs(θ[2])
+
+    # Build combined coordinate matrix for KDTree
+    @inbounds for i in 1:N_n
+        data_combined[1, i] = x_work[i]
+        data_combined[2, i] = y_work[i]
+    end
+    @inbounds for i in 1:N_ref
+        data_combined[1, N_n + i] = x_ref[i]
+        data_combined[2, N_n + i] = y_ref[i]
+    end
+
+    k = min(maxn, N_combined - 1)
+
+    # Estimate max coordinate displacement from all parameter changes:
+    # Δtranslation + fov_radius * (|Δθ| + |Δscale|)
+    need_rebuild = state === nothing || state.needs_initial_build
+    if !need_rebuild && last_params !== nothing
+        Δt = sqrt((θ[3] - last_params[3])^2 + (θ[4] - last_params[4])^2)
+        Δrot = fov_radius * abs(θ[1] - last_params[1])
+        Δscale = fov_radius * abs(θ[2] - last_params[2])
+        need_rebuild = (Δt + Δrot + Δscale) > state.rebuild_threshold
+    elseif !need_rebuild
+        # Fallback: translation-only check (backward compat)
+        need_rebuild = sqrt((θ[3] - state.last_shift[1])^2 + (θ[4] - state.last_shift[2])^2) > state.rebuild_threshold
+    end
+
+    local idxs
+    if need_rebuild
+        kdtree = KDTree(data_combined; leafsize=10)
+        query_points = view(data_combined, :, 1:N_n)
+        idxs, _ = knn(kdtree, query_points, k + 1, true)
+
+        if state !== nothing
+            @inbounds for i in 1:N_n
+                idx_i = idxs[i]
+                for j in 1:k
+                    state.neighbor_indices[j, i] = idx_i[j+1]  # skip self
+                end
+            end
+            state.last_shift[1] = θ[3]
+            state.last_shift[2] = θ[4]
+            state.rebuild_count += 1
+            state.needs_initial_build = false
+        end
+        if last_params !== nothing
+            last_params .= θ
+        end
+    end
+
+    # Compute entropy contribution from dataset_n points only
+    # σ for corrected dataset_n points is scaled by 1/|s|
+    log_k = log(T(k))
+    kldiv_buf = state !== nothing ? state.kldiv : Vector{T}(undef, k)
+    out = T(0)
+
+    @inbounds for i in 1:N_n
+        xi, yi = x_work[i], y_work[i]
+        sxi, syi = σ_x_n[i] * inv_s, σ_y_n[i] * inv_s
+
+        for j in 1:k
+            jj = state !== nothing ? state.neighbor_indices[j, i] : idxs[i][j+1]
+            if jj <= N_n
+                xj, yj = x_work[jj], y_work[jj]
+                sxj, syj = σ_x_n[jj] * inv_s, σ_y_n[jj] * inv_s
+            else
+                ref_idx = jj - N_n
+                xj, yj = x_ref[ref_idx], y_ref[ref_idx]
+                sxj, syj = σ_x_ref[ref_idx], σ_y_ref[ref_idx]
+            end
+            kldiv_buf[j] = -divKL_2D(xi, yi, sxi, syi, xj, yj, sxj, syj)
+        end
+
+        out += _logsumexp(kldiv_buf, k) - log_k
+    end
+
+    # entropy_HD uses original σ (constant baseline for optimization).
+    # The σ scaling in divKL terms above already properly accounts for scale.
+    return entropy_HD(σ_x_n, σ_y_n) - out / N_n
+end
+
+"""
+    costfun_entropy_affine_3D_merged(θ, x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
+                                      x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
+                                      maxn; kwargs...)
+
+Entropy cost for 3D affine alignment. θ = [θx, θy, θz, scale, tx, ty, tz].
+
+Same adaptive neighbor rebuilding and entropy computation as
+`costfun_entropy_inter_3D_merged`, but uses affine transform instead of shift.
+Rebuild threshold accounts for rotation/scale via `fov_radius`.
+"""
+function costfun_entropy_affine_3D_merged(θ,
+    x_n::Vector{T}, y_n::Vector{T}, z_n::Vector{T},
+    σ_x_n::Vector{T}, σ_y_n::Vector{T}, σ_z_n::Vector{T},
+    x_ref::Vector{T}, y_ref::Vector{T}, z_ref::Vector{T},
+    σ_x_ref::Vector{T}, σ_y_ref::Vector{T}, σ_z_ref::Vector{T},
+    maxn::Int;
+    x_work::Vector{T}=similar(x_n),
+    y_work::Vector{T}=similar(y_n),
+    z_work::Vector{T}=similar(z_n),
+    data_combined::Matrix{T}=Matrix{T}(undef, 3, length(x_n)+length(x_ref)),
+    state::Union{InterNeighborState{T}, Nothing}=nothing,
+    last_params::Union{Vector{T}, Nothing}=nothing,
+    fov_radius::T=T(5)) where {T<:Real}
+
+    # Apply INVERSE affine to dataset_n (correction direction: target → reference space)
+    correct_affine_3d!(x_work, y_work, z_work, θ, x_n, y_n, z_n)
+
+    N_n = length(x_n)
+    N_ref = length(x_ref)
+    N_combined = N_n + N_ref
+
+    # Inverse affine scales coordinates by 1/s, so σ must scale correspondingly
+    inv_s = one(T) / abs(θ[4])
+
+    # Build combined coordinate matrix for KDTree
+    @inbounds for i in 1:N_n
+        data_combined[1, i] = x_work[i]
+        data_combined[2, i] = y_work[i]
+        data_combined[3, i] = z_work[i]
+    end
+    @inbounds for i in 1:N_ref
+        data_combined[1, N_n + i] = x_ref[i]
+        data_combined[2, N_n + i] = y_ref[i]
+        data_combined[3, N_n + i] = z_ref[i]
+    end
+
+    k = min(maxn, N_combined - 1)
+
+    # Estimate max coordinate displacement from all parameter changes
+    need_rebuild = state === nothing || state.needs_initial_build
+    if !need_rebuild && last_params !== nothing
+        Δt = sqrt((θ[5] - last_params[5])^2 + (θ[6] - last_params[6])^2 + (θ[7] - last_params[7])^2)
+        Δrot = fov_radius * sqrt((θ[1] - last_params[1])^2 + (θ[2] - last_params[2])^2 + (θ[3] - last_params[3])^2)
+        Δscale = fov_radius * abs(θ[4] - last_params[4])
+        need_rebuild = (Δt + Δrot + Δscale) > state.rebuild_threshold
+    elseif !need_rebuild
+        need_rebuild = sqrt((θ[5] - state.last_shift[1])^2 + (θ[6] - state.last_shift[2])^2 + (θ[7] - state.last_shift[3])^2) > state.rebuild_threshold
+    end
+
+    local idxs
+    if need_rebuild
+        kdtree = KDTree(data_combined; leafsize=10)
+        query_points = view(data_combined, :, 1:N_n)
+        idxs, _ = knn(kdtree, query_points, k + 1, true)
+
+        if state !== nothing
+            @inbounds for i in 1:N_n
+                idx_i = idxs[i]
+                for j in 1:k
+                    state.neighbor_indices[j, i] = idx_i[j+1]
+                end
+            end
+            state.last_shift[1] = θ[5]
+            state.last_shift[2] = θ[6]
+            state.last_shift[3] = θ[7]
+            state.rebuild_count += 1
+            state.needs_initial_build = false
+        end
+        if last_params !== nothing
+            last_params .= θ
+        end
+    end
+
+    # Compute entropy contribution from dataset_n points only
+    # σ for corrected dataset_n points is scaled by 1/|s|
+    log_k = log(T(k))
+    kldiv_buf = state !== nothing ? state.kldiv : Vector{T}(undef, k)
+    out = T(0)
+
+    @inbounds for i in 1:N_n
+        xi, yi, zi = x_work[i], y_work[i], z_work[i]
+        sxi, syi, szi = σ_x_n[i] * inv_s, σ_y_n[i] * inv_s, σ_z_n[i] * inv_s
+
+        for j in 1:k
+            jj = state !== nothing ? state.neighbor_indices[j, i] : idxs[i][j+1]
+            if jj <= N_n
+                xj, yj, zj = x_work[jj], y_work[jj], z_work[jj]
+                sxj, syj, szj = σ_x_n[jj] * inv_s, σ_y_n[jj] * inv_s, σ_z_n[jj] * inv_s
+            else
+                ref_idx = jj - N_n
+                xj, yj, zj = x_ref[ref_idx], y_ref[ref_idx], z_ref[ref_idx]
+                sxj, syj, szj = σ_x_ref[ref_idx], σ_y_ref[ref_idx], σ_z_ref[ref_idx]
+            end
+            kldiv_buf[j] = -divKL_3D(xi, yi, zi, sxi, syi, szi, xj, yj, zj, sxj, syj, szj)
+        end
+
+        out += _logsumexp(kldiv_buf, k) - log_k
+    end
+
+    return entropy_HD(σ_x_n, σ_y_n, σ_z_n) - out / N_n
+end

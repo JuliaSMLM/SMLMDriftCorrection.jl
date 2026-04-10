@@ -6,6 +6,47 @@ abstract type AbstractIntraDrift end
 
 abstract type AbstractIntraInter <: AbstractDriftModel end
 
+abstract type AbstractAlignTransform end
+
+"""
+    ShiftTransform <: AbstractAlignTransform
+
+Pure translation alignment (current default behavior).
+"""
+struct ShiftTransform <: AbstractAlignTransform
+    shift::Vector{Float64}
+end
+
+"""
+    AffineTransform2D <: AbstractAlignTransform
+
+2D similarity transform: rotation + uniform scale + translation.
+Parameters: [θ_rot, scale, tx, ty]
+Transform: [x'; y'] = s * R(θ) * [x; y] + [tx; ty]
+"""
+struct AffineTransform2D <: AbstractAlignTransform
+    θ::Float64       # rotation angle (radians)
+    scale::Float64   # uniform scale factor
+    tx::Float64      # x translation
+    ty::Float64      # y translation
+end
+
+"""
+    AffineTransform3D <: AbstractAlignTransform
+
+3D similarity transform: Euler rotation + uniform scale + translation.
+Parameters: [θx, θy, θz, scale, tx, ty, tz]
+"""
+struct AffineTransform3D <: AbstractAlignTransform
+    θx::Float64      # rotation around x-axis (radians)
+    θy::Float64      # rotation around y-axis (radians)
+    θz::Float64      # rotation around z-axis (radians)
+    scale::Float64   # uniform scale factor
+    tx::Float64      # x translation
+    ty::Float64      # y translation
+    tz::Float64      # z translation
+end
+
 mutable struct InterShift
     ndims::Int
     dm::Vector{Float64}
@@ -127,12 +168,14 @@ Configuration for rigid-shift alignment of independent SMLDs.
 | Field | Default | Description |
 |:------|:--------|:------------|
 | `method` | `:entropy` | Alignment method: `:entropy` (CC + entropy refinement) or `:fft` (CC only) |
+| `transform` | `:shift` | Transform model: `:shift` (translation only) or `:affine` (rotation + scale + translation) |
 | `maxn` | `100` | Maximum neighbors for entropy calculation |
 | `histbinsize` | `0.05` | Histogram bin size (μm) for cross-correlation |
 | `verbose` | `0` | Verbosity level: 0=quiet, 1=info |
 """
 @kwdef struct AlignConfig <: AbstractSMLMConfig
     method::Symbol = :entropy
+    transform::Symbol = :shift
     maxn::Int = 100
     histbinsize::Float64 = 0.05
     verbose::Int = 0
@@ -145,13 +188,17 @@ Result metadata from `align_smld`.
 
 # Fields
 - `shifts::Vector{Vector{Float64}}`: Recovered shift for each SMLD (shifts[1] = zeros)
+- `transforms::Vector{<:AbstractAlignTransform}`: Full transform for each SMLD (ShiftTransform for :shift, AffineTransform2D/3D for :affine)
 - `elapsed_s::Float64`: Wall time in seconds
 - `method::Symbol`: Method used (`:entropy` or `:fft`)
+- `transform::Symbol`: Transform model used (`:shift` or `:affine`)
 - `backend::Symbol`: Computation backend (`:cpu`)
 """
 struct AlignInfo <: AbstractSMLMInfo
     shifts::Vector{Vector{Float64}}
+    transforms::Vector{<:AbstractAlignTransform}
     elapsed_s::Float64
     method::Symbol
+    transform::Symbol
     backend::Symbol
 end
