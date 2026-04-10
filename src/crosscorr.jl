@@ -567,3 +567,195 @@ function findshift_damped(smld1::T, smld2::T;
 
     return shift
 end
+
+# ============================================================================
+# Fourier-Mellin: recover rotation + scale + shift via FFT
+# ============================================================================
+
+"""
+    _logpolar_transform(mag::Matrix, n_angles, n_radii; r_min_frac=0.02, r_max_frac=0.45)
+
+Reproject a centered magnitude spectrum to log-polar coordinates.
+Returns a (n_angles × n_radii) matrix where:
+- Row index = angle (0 to 2π)
+- Col index = log(radius) from r_min to r_max
+
+Uses bilinear interpolation for subpixel sampling.
+"""
+function _logpolar_transform(mag::Matrix{T}, n_angles::Int, n_radii::Int;
+                              r_min_frac::Float64=0.02, r_max_frac::Float64=0.45) where {T<:Real}
+    nr, nc = size(mag)
+    cy, cx = nr ÷ 2 + 1, nc ÷ 2 + 1
+    r_max = r_max_frac * min(nr, nc)
+    r_min = max(r_min_frac * min(nr, nc), 2.0)
+    log_r_min = log(r_min)
+    log_r_max = log(r_max)
+
+    lp = zeros(T, n_angles, n_radii)
+
+    @inbounds for ai in 1:n_angles
+        θ = 2π * (ai - 1) / n_angles
+        cosθ = cos(θ)
+        sinθ = sin(θ)
+        for ri in 1:n_radii
+            r = exp(log_r_min + (ri - 1) * (log_r_max - log_r_min) / (n_radii - 1))
+            # Sample point in centered spectrum
+            fy = cy + r * cosθ
+            fx = cx + r * sinθ
+
+            # Bilinear interpolation
+            iy = floor(Int, fy)
+            ix = floor(Int, fx)
+            if iy >= 1 && iy < nr && ix >= 1 && ix < nc
+                dy = fy - iy
+                dx = fx - ix
+                lp[ai, ri] = (1 - dy) * (1 - dx) * mag[iy, ix] +
+                             dy * (1 - dx) * mag[iy+1, ix] +
+                             (1 - dy) * dx * mag[iy, ix+1] +
+                             dy * dx * mag[iy+1, ix+1]
+            end
+        end
+    end
+    return lp
+end
+
+"""
+    _highpass_filter!(mag, sigma_frac=0.05)
+
+Apply a Gaussian high-pass filter to suppress the DC/low-frequency peak
+in the magnitude spectrum that would dominate the log-polar CC.
+"""
+function _highpass_filter!(mag::Matrix{T}; sigma_frac::Float64=0.05) where {T<:Real}
+    nr, nc = size(mag)
+    cy, cx = nr ÷ 2 + 1, nc ÷ 2 + 1
+    σ = sigma_frac * min(nr, nc)
+    σ2 = 2 * σ^2
+    @inbounds for j in 1:nc, i in 1:nr
+        r2 = (i - cy)^2 + (j - cx)^2
+        mag[i, j] *= (1 - exp(-r2 / σ2))
+    end
+end
+
+"""
+    find_affine_fft(smld1, smld2; histbinsize=0.05, max_rotation=10.0) -> AffineTransform2D
+
+Recover 2D similarity transform (rotation + scale + translation) between two
+SMLDs using the Fourier-Mellin approach:
+
+1. Histogram both datasets → 2D images
+2. FFT → magnitude spectra (translation-invariant)
+3. Log-polar reprojection of magnitude spectra
+4. Cross-correlate log-polar images → rotation and scale
+5. De-rotate/de-scale dataset2, cross-correlate → translation
+
+Returns an `AffineTransform2D(θ, scale, tx, ty)`.
+
+This is a one-pass FFT method — fast (< 1s for any dataset size) but less
+accurate than entropy-based refinement. Use as initial guess for entropy
+optimization or as standalone fast alignment.
+"""
+function find_affine_fft(smld1::S, smld2::S;
+                          histbinsize::Real=0.05,
+                          max_rotation::Real=10.0) where {S<:SMLD}
+
+    isempty(smld1.emitters) && error("find_affine_fft: smld1 has no emitters")
+    isempty(smld2.emitters) && error("find_affine_fft: smld2 has no emitters")
+    nDims(smld1) == 2 || error("find_affine_fft: only 2D supported")
+
+    coord_type = typeof(smld1.emitters[1].x)
+    hbs = coord_type(histbinsize)
+
+    # Step 1: Build histogram images on shared ROI
+    ROI = float([smld1.camera.pixel_edges_x[1],
+                 smld1.camera.pixel_edges_x[end],
+                 smld1.camera.pixel_edges_y[1],
+                 smld1.camera.pixel_edges_y[end]])
+
+    x1 = [e.x for e in smld1.emitters]
+    y1 = [e.y for e in smld1.emitters]
+    x2 = [e.x for e in smld2.emitters]
+    y2 = [e.y for e in smld2.emitters]
+
+    im1 = Float64.(histimage2D(x1, y1; ROI=ROI, histbinsize=hbs))
+    im2 = Float64.(histimage2D(x2, y2; ROI=ROI, histbinsize=hbs))
+
+    # Step 2: FFT → magnitude spectra (translation-invariant)
+    F1 = fftshift(fft(im1))
+    F2 = fftshift(fft(im2))
+    mag1 = abs.(F1)
+    mag2 = abs.(F2)
+
+    # High-pass filter to suppress DC peak
+    _highpass_filter!(mag1)
+    _highpass_filter!(mag2)
+
+    # Step 3: Log-polar reprojection
+    n_angles = 360
+    n_radii = 128
+    lp1 = _logpolar_transform(mag1, n_angles, n_radii)
+    lp2 = _logpolar_transform(mag2, n_angles, n_radii)
+
+    # Step 4: Cross-correlate log-polar images → (Δangle, Δlog_radius)
+    cc_lp = crosscorr2D(lp1, lp2)
+
+    # Mask to max_rotation range: only consider angles within ±max_rotation°
+    max_angle_px = round(Int, max_rotation / (360.0 / n_angles))
+    cc_mid1 = size(cc_lp, 1) ÷ 2 + 1
+    cc_mid2 = size(cc_lp, 2) ÷ 2 + 1
+    # Zero out rows outside ±max_rotation (angle is row axis)
+    for i in 1:size(cc_lp, 1)
+        if abs(i - cc_mid1) > max_angle_px
+            cc_lp[i, :] .= 0.0
+        end
+    end
+
+    peak_idx = argmax(cc_lp)
+    peak_i, peak_j = gaussian_subpixel_2d(cc_lp, peak_idx; halfwidth=3)
+
+    # Convert peak to rotation and scale
+    Δangle_px = cc_mid1 - peak_i
+    Δlogr_px = cc_mid2 - peak_j
+
+    θ_recovered = Δangle_px * (2π / n_angles)
+
+    # Scale from log-radius shift
+    nr, nc = size(mag1)
+    r_max = 0.45 * min(nr, nc)
+    r_min = max(0.02 * min(nr, nc), 2.0)
+    log_r_step = (log(r_max) - log(r_min)) / (n_radii - 1)
+    scale_recovered = exp(Δlogr_px * log_r_step)
+
+    # Step 5: De-rotate/de-scale im2, then standard CC for translation
+    # Apply inverse affine to dataset2 coordinates, then findshift
+    inv_s = 1.0 / scale_recovered
+    cosθ = cos(θ_recovered)
+    sinθ = sin(θ_recovered)
+
+    x2_corr = inv_s .* (cosθ .* x2 .+ sinθ .* y2)
+    y2_corr = inv_s .* (.-sinθ .* x2 .+ cosθ .* y2)
+
+    im2_corr = Float64.(histimage2D(x2_corr, y2_corr; ROI=ROI, histbinsize=hbs))
+
+    # Pad to same size if needed (de-rotated image may differ slightly)
+    sz1 = size(im1)
+    sz2c = size(im2_corr)
+    if sz1 != sz2c
+        common = (min(sz1[1], sz2c[1]), min(sz1[2], sz2c[2]))
+        im1_crop = im1[1:common[1], 1:common[2]]
+        im2c_crop = im2_corr[1:common[1], 1:common[2]]
+    else
+        im1_crop = im1
+        im2c_crop = im2_corr
+    end
+
+    cc_shift = crosscorr2D(im1_crop, im2c_crop)
+    mid1 = size(cc_shift, 1) ÷ 2 + 1
+    mid2 = size(cc_shift, 2) ÷ 2 + 1
+    peak_idx_s = argmax(cc_shift)
+    pi_s, pj_s = gaussian_subpixel_2d(cc_shift, peak_idx_s; halfwidth=3)
+
+    tx = (mid1 - pi_s) * histbinsize
+    ty = (mid2 - pj_s) * histbinsize
+
+    return AffineTransform2D(θ_recovered, scale_recovered, tx, ty)
+end

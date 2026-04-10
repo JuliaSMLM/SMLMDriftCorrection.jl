@@ -268,18 +268,8 @@ function _align_entropy_affine!(shifts, transforms, smlds, ndims_ref, config)
             σ_z_i = Float64[e.σ_z for e in emitters_i]
         end
 
-        # CC initial guess for translation component
-        θ_cc_shift = zeros(Float64, ndims_ref)
-        try
-            cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize))
-            if maximum(abs.(cc_result)) < 5.0
-                θ_cc_shift = cc_result
-            end
-        catch
-            # Keep zero initialization
-        end
-
-        # Build affine parameter vector: identity transform + CC translation
+        # Fourier-Mellin initial guess for 2D (rotation + scale + translation)
+        # Falls back to CC shift-only for 3D
         x_work = similar(x_i)
         y_work = similar(y_i)
         k = min(config.maxn, N_i + N_ref - 1)
@@ -289,8 +279,13 @@ function _align_entropy_affine!(shifts, transforms, smlds, ndims_ref, config)
         fov_radius = max(maximum(x_i) - minimum(x_i), maximum(y_i) - minimum(y_i)) / 2
 
         if ndims_ref == 2
-            # θ = [θ_rot, scale, tx, ty]
-            θ0 = Float64[0.0, 1.0, θ_cc_shift[1], θ_cc_shift[2]]
+            # Use Fourier-Mellin for full affine initial guess
+            t_init = try
+                find_affine_fft(smlds[1], smlds[i]; histbinsize=config.histbinsize)
+            catch
+                AffineTransform2D(0.0, 1.0, 0.0, 0.0)
+            end
+            θ0 = Float64[t_init.θ, t_init.scale, t_init.tx, t_init.ty]
             last_params = fill(Inf, 4)  # force initial rebuild
 
             data_combined = Matrix{Float64}(undef, 2, N_i + N_ref)
@@ -323,7 +318,14 @@ function _align_entropy_affine!(shifts, transforms, smlds, ndims_ref, config)
             shifts[i] = [θ_opt[3], θ_opt[4]]
             transforms[i] = AffineTransform2D(θ_opt[1], θ_opt[2], θ_opt[3], θ_opt[4])
         else  # 3D
-            # θ = [θx, θy, θz, scale, tx, ty, tz]
+            # CC shift for translation init (Fourier-Mellin is 2D only)
+            θ_cc_shift = zeros(Float64, 3)
+            try
+                cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize))
+                if maximum(abs.(cc_result)) < 5.0
+                    θ_cc_shift = cc_result
+                end
+            catch; end
             θ0 = Float64[0.0, 0.0, 0.0, 1.0, θ_cc_shift[1], θ_cc_shift[2], θ_cc_shift[3]]
 
             z_work = similar(z_i)
