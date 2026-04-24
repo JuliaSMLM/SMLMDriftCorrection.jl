@@ -39,13 +39,24 @@ using Printf
 using Statistics
 
 const DC = SMLMDriftCorrection
-const SCENARIO = :hexabody
 
-# Default path into the hexabody pipeline. Overridable so the script stays
-# portable if the tree gets moved.
-const HEXABODY_BASE = "/home/kalidke/julia_shared_dev/papers/paper-genmab-hexabody/data/results/juliasmlm/2024-05-26_HeLa_SaturatingIgG10min+C1q/HeLa_IgG1-2F8-RGY-AF647_5ugml_10min+C1q/Cell_01_bagol"
-const HEXABODY_INPUT = joinpath(HEXABODY_BASE, "03_frameconnect/smld_combined.jld2")
-const HEXABODY_REFERENCE = joinpath(HEXABODY_BASE, "04_driftcorrect/smld_corrected.jld2")
+# Default condition tree (paper-genmab-hexabody, HeLa SaturatingIgG10min+C1q, RGY).
+# Overridable via kwargs so the script stays portable if the tree moves.
+const HEXABODY_CONDITION = "/home/kalidke/julia_shared_dev/papers/paper-genmab-hexabody/data/results/juliasmlm/2024-05-26_HeLa_SaturatingIgG10min+C1q/HeLa_IgG1-2F8-RGY-AF647_5ugml_10min+C1q"
+const HEXABODY_DEFAULT_CELL = "Cell_01_bagol"
+
+hexabody_input(cell, condition=HEXABODY_CONDITION) =
+    joinpath(condition, cell, "03_frameconnect/smld_combined.jld2")
+hexabody_reference(cell, condition=HEXABODY_CONDITION) =
+    joinpath(condition, cell, "04_driftcorrect/smld_corrected.jld2")
+
+# Back-compat constants — Cell_01 RGY.
+const HEXABODY_INPUT = hexabody_input(HEXABODY_DEFAULT_CELL)
+const HEXABODY_REFERENCE = hexabody_reference(HEXABODY_DEFAULT_CELL)
+
+# Output directory: dev/output/hexabody_<cell-slug>/
+scenario_symbol(cell::AbstractString) =
+    Symbol("hexabody_" * replace(lowercase(cell), r"_bagol$" => "", "_" => ""))
 
 """
     load_hexabody(; input=HEXABODY_INPUT)
@@ -162,14 +173,15 @@ end
 # ---------------------------------------------------------------------------
 
 function save_hexabody_renders(dir::AbstractString, smld_drifted, smld_corrected)
-    # Gaussian — canonical paper-genmab-hexabody render config
+    # Gaussian — canonical paper-genmab-hexabody 05_render config:
+    #   GaussianRender, zoom=20, inferno, n_sigmas=3, use_localization_precision,
+    #   integral, clip 0.99, 3 μm scalebar.
     gconf = (strategy = GaussianRender(n_sigmas = 3.0,
                                        use_localization_precision = true,
                                        normalization = :integral),
              zoom = 20, colormap = :inferno, clip_percentile = 0.99,
              scalebar = true, scalebar_length = 3.0,
              scalebar_position = :br, scalebar_color = :white)
-
     for (label, smld) in (("drifted", smld_drifted), ("corrected", smld_corrected))
         result = render(smld; gconf...)
         fname = "render_$(label)_gaussian_20x.png"
@@ -177,30 +189,33 @@ function save_hexabody_renders(dir::AbstractString, smld_drifted, smld_corrected
         println("  Saved: $fname")
     end
 
-    # Histogram — requested explicitly in this scenario. Two flavors at zoom=10
-    # (100 nm bins, ~2-3 locs/bin across this FOV):
-    #   intensity/inferno: pure loc density — shows structure clearly
-    #   color_by absolute_frame/turbo: temporal smear — drifted shows rainbow
-    #     streaks where the same emitter blinks in different frames at different
-    #     pixel positions; corrected collapses to near-constant color per spot.
+    # Histogram — canonical STEP 06 "temporal smear" config per genmab
+    # (SMLMAnalysis src/config.jl:192): HistogramRender, zoom=10, turbo,
+    # color_by=:absolute_frame, clip_percentile=nothing (critical — the default
+    # 0.99 crushes the frame-axis colour range), scalebar=true.
+    # Drifted shows rainbow streaks where the same emitter blinks across
+    # different frames at different pixel positions; corrected collapses to
+    # a near-constant color per structure.
+    hconf = (strategy = HistogramRender(), zoom = 10,
+             colormap = :turbo, color_by = :absolute_frame,
+             clip_percentile = nothing, scalebar = true,
+             scalebar_length = 3.0, scalebar_position = :br,
+             scalebar_color = :white)
     for (label, smld) in (("drifted", smld_drifted), ("corrected", smld_corrected))
-        # Intensity
-        res_i = render(smld; strategy = HistogramRender(), zoom = 10,
-                       colormap = :inferno, clip_percentile = 0.99)
-        save_image(joinpath(dir, "render_$(label)_histogram_10x.png"), res_i[1])
-        println("  Saved: render_$(label)_histogram_10x.png")
-
-        # Temporal
-        res_t = render(smld; strategy = HistogramRender(), zoom = 10,
-                       color_by = :absolute_frame, colormap = :turbo)
-        save_image(joinpath(dir, "render_$(label)_histogram_10x_time.png"), res_t[1])
-        println("  Saved: render_$(label)_histogram_10x_time.png")
+        result = render(smld; hconf...)
+        fname = "render_$(label)_histogram_10x.png"
+        save_image(joinpath(dir, fname), result[1])
+        println("  Saved: $fname")
     end
 
-    # Extra circle render at high zoom — useful for inspecting whether pairs of
-    # blinks from the same underlying molecule have been collapsed.
+    # Circles — paired temporal view at finer zoom. Useful for inspecting
+    # whether pairs of blinks from the same underlying molecule have been
+    # collapsed. Matches SMLMAnalysis src/config.jl:194.
     cconf = (strategy = CircleRender(), zoom = 50,
-             color_by = :absolute_frame, colormap = :turbo)
+             color_by = :absolute_frame, colormap = :turbo,
+             clip_percentile = nothing, scalebar = true,
+             scalebar_length = 3.0, scalebar_position = :br,
+             scalebar_color = :white)
     for (label, smld) in (("drifted", smld_drifted), ("corrected", smld_corrected))
         result = render(smld; cconf...)
         fname = "render_$(label)_circles_50x.png"
@@ -278,14 +293,15 @@ function write_info_toml(dir::AbstractString, info::DC.DriftInfo, elapsed::Real,
 end
 
 function write_stats_md(dir::AbstractString, info::DC.DriftInfo, elapsed::Real,
-                         rmsd_vs_ref::Real, config::DC.DriftConfig)
+                         rmsd_vs_ref::Real, config::DC.DriftConfig,
+                         cell::AbstractString)
     rc = info.residual_correlation
     n_ds = info.model.ndatasets
     inter_mags_nm = [1000 * sqrt(sum(info.model.inter[ds].dm .^ 2)) for ds in 1:n_ds]
 
     path = joinpath(dir, "stats.md")
     open(path, "w") do io
-        println(io, "# Drift Correction Stats: RGY Hexabody Cell_01 (HeLa)")
+        println(io, "# Drift Correction Stats: RGY Hexabody $(cell) (HeLa)")
         println(io)
         println(io, "## Summary")
         println(io, "- **Mode**: $(config.dataset_mode)")
@@ -370,8 +386,10 @@ output suite (tomls, plots, renders) into `dev/output/hexabody/`.
 NamedTuple with `smld_corrected`, `info`, `elapsed`, `rmsd_vs_reference`, `output_dir`.
 """
 function run_hexabody_diagnostics(;
-        input::AbstractString = HEXABODY_INPUT,
-        reference::AbstractString = HEXABODY_REFERENCE,
+        cell::AbstractString = HEXABODY_DEFAULT_CELL,
+        condition::AbstractString = HEXABODY_CONDITION,
+        input::AbstractString = hexabody_input(cell, condition),
+        reference::AbstractString = hexabody_reference(cell, condition),
         quality::Symbol = :iterative,
         degree::Int = 3,
         dataset_mode::Symbol = :registered,
@@ -385,8 +403,10 @@ function run_hexabody_diagnostics(;
         save_outputs::Bool = true,
         clean_output::Bool = true)
 
+    scenario = scenario_symbol(cell)
+
     println("=" ^ 72)
-    println("RGY HEXABODY DRIFT CORRECTION STRESS TEST")
+    println("RGY HEXABODY DRIFT CORRECTION STRESS TEST — $(cell)")
     println("=" ^ 72)
 
     println("\n[1/5] Loading pre-driftcorrect SMLD")
@@ -452,14 +472,14 @@ function run_hexabody_diagnostics(;
     # -----------------------------------------------------------------------
     # [5/5] Full output suite
     # -----------------------------------------------------------------------
-    output_dir = joinpath(@__DIR__, "output", string(SCENARIO))
+    output_dir = joinpath(@__DIR__, "output", string(scenario))
     if save_outputs
         println("\n[5/5] Writing output suite → $(output_dir)")
-        dir = DiagnosticHelpers.ensure_output_dir(SCENARIO; clean = clean_output)
+        dir = DiagnosticHelpers.ensure_output_dir(scenario; clean = clean_output)
 
         write_config_toml(dir, config)
         write_info_toml(dir, info, t_correct, input, reference, rmsd_vs_ref)
-        write_stats_md(dir, info, t_correct, rmsd_vs_ref, config)
+        write_stats_md(dir, info, t_correct, rmsd_vs_ref, config, cell)
 
         fig_drift = plot_recovered_drift(info.model)
         save(joinpath(dir, "drift_trajectory.png"), fig_drift)
