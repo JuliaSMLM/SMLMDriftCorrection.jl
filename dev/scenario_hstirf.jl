@@ -23,6 +23,64 @@ Pkg.activate(@__DIR__)
 # render suite). They take paths + info + config so they're scenario-agnostic.
 include("scenario_hexabody.jl")
 
+# Override the Gaussian render helper for HS-TIRF: PAINT data has heavy-tailed
+# intensities (bright nanoruler spots vastly outshine isolated locs). Raise the
+# clip to 0.999 so the bright spots retain internal shading, then apply a mild
+# γ=0.7 post-process to lift the mid-range without brightening the inferno
+# colormap’s near-zero background — plus a small intensity floor that snaps
+# empty pixels to true black.
+function save_hexabody_renders(dir::AbstractString, smld_drifted, smld_corrected)
+    gconf = (strategy = GaussianRender(n_sigmas = 3.0,
+                                       use_localization_precision = true,
+                                       normalization = :integral),
+             zoom = 20, colormap = :inferno, clip_percentile = 0.999,
+             scalebar = true, scalebar_length = 3.0,
+             scalebar_position = :br, scalebar_color = :white)
+    γ = 0.7
+    floor_intensity = 0.03
+    for (label, smld) in (("drifted", smld_drifted), ("corrected", smld_corrected))
+        result = render(smld; gconf...)
+        img = result[1]
+        T = eltype(img)
+        @inbounds for i in eachindex(img)
+            p = img[i]
+            m = max(p.r, p.g, p.b)
+            if m < floor_intensity
+                img[i] = T(0.0, 0.0, 0.0)
+            else
+                img[i] = T(min(max(p.r, 0.0)^γ, 1.0),
+                           min(max(p.g, 0.0)^γ, 1.0),
+                           min(max(p.b, 0.0)^γ, 1.0))
+            end
+        end
+        fname = "render_$(label)_gaussian_20x.png"
+        save_image(joinpath(dir, fname), img)
+        println("  Saved: $fname  (clip=0.999, γ=0.7, floor=0.03)")
+    end
+
+    # Histogram (temporal smear) — genmab’s canonical STEP 06 config, unchanged
+    for (label, smld) in (("drifted", smld_drifted), ("corrected", smld_corrected))
+        result = render(smld; strategy = HistogramRender(), zoom = 10,
+                        colormap = :turbo, color_by = :absolute_frame,
+                        clip_percentile = nothing, scalebar = true,
+                        scalebar_length = 3.0, scalebar_position = :br,
+                        scalebar_color = :white)
+        save_image(joinpath(dir, "render_$(label)_histogram_10x.png"), result[1])
+        println("  Saved: render_$(label)_histogram_10x.png")
+    end
+
+    # Circles at zoom=50 — unchanged
+    for (label, smld) in (("drifted", smld_drifted), ("corrected", smld_corrected))
+        result = render(smld; strategy = CircleRender(), zoom = 50,
+                        color_by = :absolute_frame, colormap = :turbo,
+                        clip_percentile = nothing, scalebar = true,
+                        scalebar_length = 3.0, scalebar_position = :br,
+                        scalebar_color = :white)
+        save_image(joinpath(dir, "render_$(label)_circles_50x.png"), result[1])
+        println("  Saved: render_$(label)_circles_50x.png")
+    end
+end
+
 const HSTIRF_BASE = "/home/kalidke/julia_shared_dev/projects/project-hs-tirf/data/srdata/results_continuous"
 const HSTIRF_INPUT = joinpath(HSTIRF_BASE, "03_frameconnect/smld_combined.jld2")
 const HSTIRF_REFERENCE = joinpath(HSTIRF_BASE, "04_driftcorrect/smld_corrected.jld2")
