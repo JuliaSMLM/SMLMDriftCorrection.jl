@@ -92,24 +92,36 @@ function correctdrift!(smld::SMLD, shift::Vector{Float64})
 end
 
 """
-    findintra!(intra, smld, dataset, maxn; skip_init=false)
+    findintra!(intra, smld, dataset, maxn; skip_init=false, ref_coords=nothing)
 
 Find and correct intra-dataset drift using entropy minimization with
 adaptive KDTree neighbor rebuilding.
 
-Uses KL divergence entropy cost function with adaptive neighbor tracking.
 Each `optimize(...)` call sees a frozen KDTree, so the objective is deterministic
 for Nelder-Mead. Rebuilds happen in an outer loop, triggered only when the drift
 polynomial has moved by more than `rebuild_threshold` (μm) since the last rebuild.
 
+Two modes:
+- **Per-dataset** (default): Neighbors come from this dataset only. Correct for
+  iteration 1 when inter is not yet populated.
+- **Merged-cloud** (when `ref_coords` is passed): Neighbors come from the combined
+  cloud of this dataset + all other (already-corrected) datasets. Used for
+  iteration 2+ to anchor intra against the same structural scaffold that
+  `findinter!` uses — stops intra ↔ inter from chasing each other in a limit
+  cycle when drift is small.
+
 # Keyword Arguments
-- `skip_init=false`: If true, skip random initialization (use when warmstarted externally)
+- `skip_init=false`: skip random re-init (warm-started externally)
+- `ref_coords=nothing`: `NamedTuple` of other-dataset coords — `(x, y, σ_x, σ_y)`
+  for 2D or `(x, y, z, σ_x, σ_y, σ_z)` for 3D. All must be fully-corrected
+  coordinates in the common frame.
 """
 function findintra!(intra::AbstractIntraDrift,
     smld::SMLD,
     dataset::Int,
     maxn::Int;
-    skip_init::Bool = false)
+    skip_init::Bool = false,
+    ref_coords::Union{Nothing, NamedTuple} = nothing)
 
     idx = [e.dataset for e in smld.emitters] .== dataset
     emitters = smld.emitters[idx]
@@ -146,30 +158,102 @@ function findintra!(intra::AbstractIntraDrift,
     y_work = similar(y)
     z_work = intra.ndims == 3 ? similar(z) : Float64[]
 
-    # Adaptive entropy cost function
-    k = min(maxn, N - 1)
-    rebuild_threshold = 0.1  # μm (100nm) - rebuild when drift changes significantly
-    state = NeighborState(N, k, rebuild_threshold)
+    rebuild_threshold = 0.1  # μm (100 nm) — rebuild when drift changes significantly
 
-    if intra.ndims == 2
-        build_neighbors!(state, x, y)
-        state.last_rebuild_drift = 0.0  # initial build was from uncorrected coords (drift=0)
-        myfun = θ -> costfun_entropy_intra_2D_adaptive(θ, x, y, σ_x, σ_y, framenum, maxn, intra,
-                                                       state, nframes;
-                                                       x_work=x_work, y_work=y_work)
-    else # 3D
-        build_neighbors!(state, x, y, z)
-        state.last_rebuild_drift = 0.0
-        myfun = θ -> costfun_entropy_intra_3D_adaptive(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra,
-                                                       state, nframes;
-                                                       x_work=x_work, y_work=y_work, z_work=z_work)
+    if ref_coords === nothing
+        # -------- per-dataset adaptive path (iteration 1 / no ref) --------
+        k = min(maxn, N - 1)
+        state = NeighborState(N, k, rebuild_threshold)
+
+        if intra.ndims == 2
+            build_neighbors!(state, x, y)
+            state.last_rebuild_drift = 0.0
+            myfun = θ -> costfun_entropy_intra_2D_adaptive(θ, x, y, σ_x, σ_y, framenum, maxn, intra,
+                                                           state, nframes;
+                                                           x_work=x_work, y_work=y_work)
+        else
+            build_neighbors!(state, x, y, z)
+            state.last_rebuild_drift = 0.0
+            myfun = θ -> costfun_entropy_intra_3D_adaptive(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra,
+                                                           state, nframes;
+                                                           x_work=x_work, y_work=y_work, z_work=z_work)
+        end
+
+        state.allow_rebuild = false
+        opt = Optim.Options(iterations=10000, f_abstol=1e-2, x_abstol=1e-4, show_trace=false)
+        max_outer = 3
+        local res
+        for _ in 1:max_outer
+            res = optimize(myfun, θ0, opt)
+            theta2intra!(intra, res.minimizer)
+            θ0 = res.minimizer
+
+            new_drift = max_drift_magnitude(intra, nframes)
+            if abs(new_drift - state.last_rebuild_drift) < state.rebuild_threshold
+                break
+            end
+
+            @inbounds for i in 1:N
+                x_work[i] = correctdrift(x[i], framenum[i], intra.dm[1])
+                y_work[i] = correctdrift(y[i], framenum[i], intra.dm[2])
+            end
+            if intra.ndims == 2
+                build_neighbors!(state, x_work, y_work)
+            else
+                @inbounds for i in 1:N
+                    z_work[i] = correctdrift(z[i], framenum[i], intra.dm[3])
+                end
+                build_neighbors!(state, x_work, y_work, z_work)
+            end
+            state.last_rebuild_drift = new_drift
+        end
+        theta2intra!(intra, res.minimizer)
+        return
     end
 
-    # Freeze state during each optimize(): BFGS/Nelder-Mead see a deterministic objective.
-    # The outer loop checks whether the drift has moved far enough to warrant rebuilding
-    # the KDTree from corrected coords, and re-runs optimize if so. A small cap prevents
-    # rare oscillation; in practice convergence is reached in 1-2 outer iterations.
+    # ---------------- merged-cloud path (iteration 2+) ----------------
+    x_ref = ref_coords.x
+    y_ref = ref_coords.y
+    σ_x_ref = ref_coords.σ_x
+    σ_y_ref = ref_coords.σ_y
+    if intra.ndims == 3
+        z_ref = ref_coords.z
+        σ_z_ref = ref_coords.σ_z
+    end
+    N_ref = length(x_ref)
+    if N_ref == 0
+        # No reference available — fall back to per-dataset
+        return findintra!(intra, smld, dataset, maxn; skip_init=true)
+    end
+
+    k = min(maxn, N + N_ref - 1)
+    state = NeighborState(N, k, rebuild_threshold)
+    # Force the first cost evaluation to rebuild (sentinel: abs(0 - Inf) > threshold).
+    state.last_rebuild_drift = Inf
+
+    if intra.ndims == 2
+        data_combined = Matrix{Float64}(undef, 2, N + N_ref)
+        myfun = θ -> costfun_entropy_intra_2D_merged(θ,
+            x, y, σ_x, σ_y, framenum,
+            x_ref, y_ref, σ_x_ref, σ_y_ref,
+            maxn, intra, nframes;
+            x_work=x_work, y_work=y_work,
+            data_combined=data_combined, state=state)
+    else
+        data_combined = Matrix{Float64}(undef, 3, N + N_ref)
+        myfun = θ -> costfun_entropy_intra_3D_merged(θ,
+            x, y, z, σ_x, σ_y, σ_z, framenum,
+            x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
+            maxn, intra, nframes;
+            x_work=x_work, y_work=y_work, z_work=z_work,
+            data_combined=data_combined, state=state)
+    end
+
+    # Trigger the initial KDTree build while allow_rebuild=true, then freeze.
+    state.allow_rebuild = true
+    myfun(θ0)
     state.allow_rebuild = false
+
     opt = Optim.Options(iterations=10000, f_abstol=1e-2, x_abstol=1e-4, show_trace=false)
     max_outer = 3
     local res
@@ -183,20 +267,10 @@ function findintra!(intra::AbstractIntraDrift,
             break
         end
 
-        # Rebuild neighbors from corrected coords at current drift
-        @inbounds for i in 1:N
-            x_work[i] = correctdrift(x[i], framenum[i], intra.dm[1])
-            y_work[i] = correctdrift(y[i], framenum[i], intra.dm[2])
-        end
-        if intra.ndims == 2
-            build_neighbors!(state, x_work, y_work)
-        else
-            @inbounds for i in 1:N
-                z_work[i] = correctdrift(z[i], framenum[i], intra.dm[3])
-            end
-            build_neighbors!(state, x_work, y_work, z_work)
-        end
-        state.last_rebuild_drift = new_drift
+        # Force one rebuild at current θ0, then refreeze for the next optimize pass.
+        state.allow_rebuild = true
+        myfun(θ0)
+        state.allow_rebuild = false
     end
     theta2intra!(intra, res.minimizer)
 end
