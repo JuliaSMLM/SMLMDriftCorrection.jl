@@ -128,7 +128,8 @@ function findintra!(intra::AbstractIntraDrift,
     dataset::Int,
     maxn::Int;
     skip_init::Bool = false,
-    ref_coords::Union{Nothing, NamedTuple} = nothing)
+    ref_coords::Union{Nothing, NamedTuple} = nothing,
+    boundary_prior::Union{Nothing, NamedTuple} = nothing)
 
     idx = [e.dataset for e in smld.emitters] .== dataset
     emitters = smld.emitters[idx]
@@ -271,19 +272,54 @@ function findintra!(intra::AbstractIntraDrift,
     # last_drift_vecs initialised to +Inf so first cost eval always rebuilds.
 
     if intra.ndims == 2
-        myfun = θ -> costfun_entropy_intra_2D_merged(θ,
+        base_cost = θ -> costfun_entropy_intra_2D_merged(θ,
             x, y, σ_x, σ_y, framenum,
             σ_x_ref, σ_y_ref,
             maxn, intra, nframes,
             data_combined, state;
             x_work=x_work, y_work=y_work)
     else
-        myfun = θ -> costfun_entropy_intra_3D_merged(θ,
+        base_cost = θ -> costfun_entropy_intra_3D_merged(θ,
             x, y, z, σ_x, σ_y, σ_z, framenum,
             σ_x_ref, σ_y_ref, σ_z_ref,
             maxn, intra, nframes,
             data_combined, state;
             x_work=x_work, y_work=y_work, z_work=z_work)
+    end
+
+    # Soft boundary prior (only for :continuous mode — caller decides):
+    # cost += λ · (||intra(1) - start_target||² + ||intra(N) - end_target||²)
+    # Pulls the polynomial endpoints toward values consistent with neighboring
+    # chunks' current inter+intra, keeping the intra fit MAP-consistent with
+    # what findinter/warmstart will apply next. Either target may be `nothing`
+    # (no term) — chunk 1 has no left neighbour, chunk N has no right neighbour.
+    # Without this prior on :continuous, merged-cloud intra can find polynomials
+    # whose endpoints are far from the warmstart chain → catastrophic DS7-style
+    # blow-up on sparse data (see hs-tirf Gattaquant stress test).
+    myfun = if boundary_prior === nothing
+        base_cost
+    else
+        let prior = boundary_prior, intra_ref = intra, N_frames = nframes
+            θ -> begin
+                c = base_cost(θ)
+                λ = prior.λ
+                st = prior.start_target
+                en = prior.end_target
+                if st !== nothing
+                    @inbounds for dim in 1:intra_ref.ndims
+                        d = evaluate_at_frame(intra_ref.dm[dim], 1) - st[dim]
+                        c += λ * d * d
+                    end
+                end
+                if en !== nothing
+                    @inbounds for dim in 1:intra_ref.ndims
+                        d = evaluate_at_frame(intra_ref.dm[dim], N_frames) - en[dim]
+                        c += λ * d * d
+                    end
+                end
+                c
+            end
+        end
     end
 
     # Trigger the initial KDTree build while allow_rebuild=true, then freeze.

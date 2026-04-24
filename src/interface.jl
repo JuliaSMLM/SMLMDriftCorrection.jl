@@ -571,6 +571,64 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         z_all   = n_dims == 3 ? Float64[e.z   for e in smld_full.emitters] : Float64[]
         σ_z_all = n_dims == 3 ? Float64[e.σ_z for e in smld_full.emitters] : Float64[]
 
+        # :continuous mode: compute soft endpoint prior for each chunk's intra fit.
+        # Formulation is in TOTAL-DRIFT coordinates (matches findinter/warmstart
+        # semantics). For chunk n, the total drift at frame f is `inter[n] + intra[n](f)`.
+        # Continuity says drift at chunk n's first frame should equal drift at chunk
+        # n-1's last frame. During the intra fit for chunk n, inter[n] is held at its
+        # current value — so expressing the prior as "target for intra[n](1)" means
+        # `target = total_end_{n-1} - inter[n]` where `total_end_{n-1} = inter[n-1] +
+        # intra[n-1](N_frames)`. Analogous for the endpoint.
+        #
+        # λ scale: the θ-dependent entropy cost is `entropy_HD - out/N_n` where
+        # entropy_HD is θ-independent and `out/N_n` is per-locus averaged. So the
+        # θ-varying part is O(1) per evaluation, not O(N_n). The prior is also O(1)
+        # per endpoint, so using `λ = 1/σ²` with σ from _estimate_continuous_lambda
+        # (typical boundary-gap uncertainty, few nm) puts a ~1-unit penalty at the
+        # σ level and a ~10-100× penalty at 10-100 nm deviation — comparable to
+        # per-iteration entropy changes. We do NOT divide λ by N_n: the prior lives
+        # at the same scale as the optimization-relevant entropy term.
+        #
+        # Without this prior, merged-cloud intra on sparse data can drift into
+        # polynomials whose endpoints don't match the warmstart chain, producing
+        # DS7-style chunk-boundary blow-ups (see hs-tirf Gattaquant stress test).
+        boundary_priors = nothing
+        if dataset_mode == :continuous
+            λ_boundary = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
+            start_targets = Vector{Union{Nothing, Vector{Float64}}}(undef, n_datasets)
+            end_targets   = Vector{Union{Nothing, Vector{Float64}}}(undef, n_datasets)
+            for n in 1:n_datasets
+                # Startpoint target: target value for intra[n](1).
+                # Chunk 1 anchors origin — total drift at (DS=1, frame=1) = 0 after
+                # normalization, so intra[1](1) ≈ -inter[1].
+                if n == 1
+                    start_targets[1] = [-model.inter[1].dm[d] for d in 1:n_dims]
+                else
+                    # total_end_{n-1} = inter[n-1] + intra[n-1](N);  target for
+                    # intra[n](1) is total_end_{n-1} - inter[n].
+                    start_targets[n] = [model.inter[n-1].dm[d] +
+                                        evaluate_at_frame(model.intra[n-1].dm[d], smld.n_frames) -
+                                        model.inter[n].dm[d]
+                                        for d in 1:n_dims]
+                end
+                # Endpoint target: target value for intra[n](N). No constraint for
+                # the last chunk (nothing to chain into).
+                if n == n_datasets
+                    end_targets[n] = nothing
+                else
+                    # total_start_{n+1} = inter[n+1] + intra[n+1](1);  target for
+                    # intra[n](N) is total_start_{n+1} - inter[n].
+                    end_targets[n] = [model.inter[n+1].dm[d] +
+                                      evaluate_at_frame(model.intra[n+1].dm[d], 1) -
+                                      model.inter[n].dm[d]
+                                      for d in 1:n_dims]
+                end
+            end
+            boundary_priors = (start_targets = start_targets,
+                               end_targets = end_targets,
+                               λ = λ_boundary)
+        end
+
         Threads.@threads for nn = 1:n_datasets
             ref = if n_dims == 2
                 (x_all = x_all, y_all = y_all,
@@ -581,8 +639,46 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
                  σ_x_all = σ_x_all, σ_y_all = σ_y_all, σ_z_all = σ_z_all,
                  ds_all = ds_all, exclude_dataset = nn)
             end
+            prior = if boundary_priors === nothing
+                nothing
+            else
+                (start_target = boundary_priors.start_targets[nn],
+                 end_target   = boundary_priors.end_targets[nn],
+                 λ            = boundary_priors.λ)
+            end
             findintra!(model.intra[nn], smld_shifted, nn, maxn;
-                       skip_init=true, ref_coords=ref)
+                       skip_init=true, ref_coords=ref, boundary_prior=prior)
+        end
+
+        # :continuous diagnostic: after the intra pass, report the residual
+        # boundary gaps in nm — max across chunks and per-chunk list if verbose≥2.
+        # A well-controlled run should show residuals of O(σ_endpoint) ≈ few nm.
+        # Large sustained residuals on one boundary indicate the prior is being
+        # overruled by the entropy cost (e.g. DS6→DS7 of hs-tirf in the
+        # pre-prior run showed ~1900 nm gaps).
+        if dataset_mode == :continuous && verbose > 0
+            max_gap_nm = 0.0
+            worst_boundary = 0
+            for n in 1:(n_datasets - 1)
+                gap2 = 0.0
+                for d in 1:n_dims
+                    end_n = model.inter[n].dm[d] +
+                            evaluate_at_frame(model.intra[n].dm[d], smld.n_frames)
+                    start_np1 = model.inter[n+1].dm[d] +
+                                evaluate_at_frame(model.intra[n+1].dm[d], 1)
+                    gap2 += (start_np1 - end_n)^2
+                end
+                gap_nm = 1000 * sqrt(gap2)
+                if gap_nm > max_gap_nm
+                    max_gap_nm = gap_nm
+                    worst_boundary = n
+                end
+                if verbose > 1
+                    @info("SMLMDriftCorrection: boundary $(n)→$(n+1) gap = $(round(gap_nm, digits=2)) nm")
+                end
+            end
+            @info("SMLMDriftCorrection: iter $iteration continuous-boundary max gap " *
+                  "= $(round(max_gap_nm, digits=2)) nm at DS$(worst_boundary)→DS$(worst_boundary+1)")
         end
 
         # Update inter-shifts
