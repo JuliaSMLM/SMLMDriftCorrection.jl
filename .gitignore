@@ -17,3 +17,4 @@ src/SAVE/SMLMDriftCorrection.jl
 src/SAVE/typedefs.jl
 examples/output/
 dev/output/
+.codex
