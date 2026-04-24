@@ -552,37 +552,43 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         # skip_init=true: model already has coefficients from previous iteration/singlepass;
         # re-randomizing would discard the progress we're trying to refine.
         #
-        # Merged-cloud intra: in iteration 2+ the inter model is populated, so every
-        # dataset has a fully-corrected snapshot available. Pass the other datasets'
-        # corrected coords as `ref_coords` — intra now fits against the same structural
-        # scaffold that findinter! uses, which breaks the intra ↔ inter limit cycle
-        # that blocks convergence on cells with small inter-shifts.
-        #
-        # Memory: we pass ONE set of full arrays (no per-dataset mask copies). Each
-        # findintra! thread filters inline and allocates only the ref-filtered σ
-        # arrays + data_combined it actually uses.
+        # Merged-cloud intra is used ONLY for :registered mode. In registered mode
+        # datasets are independent acquisitions of the same FOV, so the cross-dataset
+        # scaffold IS the signal and merged-cloud intra breaks the intra ↔ inter
+        # limit cycle observed on small-inter-shift cells (e.g. RGY Cell_10).
+        # For :continuous mode the datasets are time chunks of one acquisition;
+        # the polynomial-endpoint-chaining warmstart already couples chunks, and
+        # adding merged-cloud on top makes each intra optimize() ~10× slower without
+        # clear benefit (observed on the hs-tirf Gattaquant dataset).
         smld_shifted = apply_inter_only(smld, model)
-        smld_full = correctdrift(smld, model)
-        x_all   = Float64[e.x   for e in smld_full.emitters]
-        y_all   = Float64[e.y   for e in smld_full.emitters]
-        σ_x_all = Float64[e.σ_x for e in smld_full.emitters]
-        σ_y_all = Float64[e.σ_y for e in smld_full.emitters]
-        ds_all  = Int[e.dataset for e in smld_full.emitters]
-        z_all   = n_dims == 3 ? Float64[e.z   for e in smld_full.emitters] : Float64[]
-        σ_z_all = n_dims == 3 ? Float64[e.σ_z for e in smld_full.emitters] : Float64[]
+        if dataset_mode == :registered
+            smld_full = correctdrift(smld, model)
+            x_all   = Float64[e.x   for e in smld_full.emitters]
+            y_all   = Float64[e.y   for e in smld_full.emitters]
+            σ_x_all = Float64[e.σ_x for e in smld_full.emitters]
+            σ_y_all = Float64[e.σ_y for e in smld_full.emitters]
+            ds_all  = Int[e.dataset for e in smld_full.emitters]
+            z_all   = n_dims == 3 ? Float64[e.z   for e in smld_full.emitters] : Float64[]
+            σ_z_all = n_dims == 3 ? Float64[e.σ_z for e in smld_full.emitters] : Float64[]
 
-        Threads.@threads for nn = 1:n_datasets
-            ref = if n_dims == 2
-                (x_all = x_all, y_all = y_all,
-                 σ_x_all = σ_x_all, σ_y_all = σ_y_all,
-                 ds_all = ds_all, exclude_dataset = nn)
-            else
-                (x_all = x_all, y_all = y_all, z_all = z_all,
-                 σ_x_all = σ_x_all, σ_y_all = σ_y_all, σ_z_all = σ_z_all,
-                 ds_all = ds_all, exclude_dataset = nn)
+            Threads.@threads for nn = 1:n_datasets
+                ref = if n_dims == 2
+                    (x_all = x_all, y_all = y_all,
+                     σ_x_all = σ_x_all, σ_y_all = σ_y_all,
+                     ds_all = ds_all, exclude_dataset = nn)
+                else
+                    (x_all = x_all, y_all = y_all, z_all = z_all,
+                     σ_x_all = σ_x_all, σ_y_all = σ_y_all, σ_z_all = σ_z_all,
+                     ds_all = ds_all, exclude_dataset = nn)
+                end
+                findintra!(model.intra[nn], smld_shifted, nn, maxn;
+                           skip_init=true, ref_coords=ref)
             end
-            findintra!(model.intra[nn], smld_shifted, nn, maxn;
-                       skip_init=true, ref_coords=ref)
+        else
+            # :continuous (or any other mode) — original per-dataset intra path.
+            Threads.@threads for nn = 1:n_datasets
+                findintra!(model.intra[nn], smld_shifted, nn, maxn; skip_init=true)
+            end
         end
 
         # Update inter-shifts
