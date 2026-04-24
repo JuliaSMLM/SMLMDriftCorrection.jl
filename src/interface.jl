@@ -541,12 +541,38 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         # Store current inter-shifts
         inter_old = [copy(model.inter[n].dm) for n in 1:n_datasets]
 
-        # Re-run intra with inter applied (shifted coordinates)
+        # Re-run intra with inter applied (shifted coordinates).
         # skip_init=true: model already has coefficients from previous iteration/singlepass;
         # re-randomizing would discard the progress we're trying to refine.
+        #
+        # Merged-cloud intra: in iteration 2+ the inter model is populated, so every
+        # dataset has a fully-corrected snapshot available. Pass the other datasets'
+        # corrected coords as `ref_coords` — intra now fits against the same structural
+        # scaffold that findinter! uses, which breaks the intra ↔ inter limit cycle
+        # that blocks convergence on cells with small inter-shifts.
         smld_shifted = apply_inter_only(smld, model)
+        smld_full = correctdrift(smld, model)
+        x_all   = Float64[e.x   for e in smld_full.emitters]
+        y_all   = Float64[e.y   for e in smld_full.emitters]
+        σ_x_all = Float64[e.σ_x for e in smld_full.emitters]
+        σ_y_all = Float64[e.σ_y for e in smld_full.emitters]
+        ds_all  = Int[e.dataset for e in smld_full.emitters]
+        if n_dims == 3
+            z_all   = Float64[e.z   for e in smld_full.emitters]
+            σ_z_all = Float64[e.σ_z for e in smld_full.emitters]
+        end
+
         Threads.@threads for nn = 1:n_datasets
-            findintra!(model.intra[nn], smld_shifted, nn, maxn; skip_init=true)
+            mask = ds_all .!= nn
+            ref = if n_dims == 2
+                (x = x_all[mask], y = y_all[mask],
+                 σ_x = σ_x_all[mask], σ_y = σ_y_all[mask])
+            else
+                (x = x_all[mask], y = y_all[mask], z = z_all[mask],
+                 σ_x = σ_x_all[mask], σ_y = σ_y_all[mask], σ_z = σ_z_all[mask])
+            end
+            findintra!(model.intra[nn], smld_shifted, nn, maxn;
+                       skip_init=true, ref_coords=ref)
         end
 
         # Update inter-shifts

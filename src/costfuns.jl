@@ -277,6 +277,187 @@ function costfun_entropy_intra_3D_adaptive(θ, x::Vector{T}, y::Vector{T}, z::Ve
 end
 
 # ============================================================================
+# Intra-dataset entropy cost — merged-cloud variant for iteration 2+
+# ============================================================================
+# Probe: dataset_n points corrected by the intra polynomial under optimization.
+# Reference: all other datasets, already fully drift-corrected (inter + intra
+#            applied before findintra! is called, so they're a fixed scaffold
+#            in the common frame).
+# This mirrors costfun_entropy_inter_2D_merged — the KDTree is built over the
+# combined (probe ∪ reference) cloud and the probe's nearest neighbors can be
+# either other probe points (coords vary with θ) or reference points (fixed).
+# Using the merged cloud stops intra ↔ inter from chasing each other in a
+# limit cycle: intra now sees the same structural scaffold that findinter! sees.
+#
+# Rebuild is gated on state.allow_rebuild — findintra! freezes the state
+# during each optimize() call and drives rebuilds from an outer loop.
+# Caller must set state.last_rebuild_drift = Inf before the first call so
+# the initial build fires.
+
+"""
+INTRA-ENTROPY merged-cloud (2D) — iteration 2+ intra fit against all datasets.
+"""
+function costfun_entropy_intra_2D_merged(θ,
+    x_n::Vector{T}, y_n::Vector{T}, σ_x_n::Vector{T}, σ_y_n::Vector{T},
+    framenum_n::Vector{Int},
+    x_ref::Vector{T}, y_ref::Vector{T}, σ_x_ref::Vector{T}, σ_y_ref::Vector{T},
+    maxn::Int, intra::AbstractIntraDrift, nframes::Int;
+    x_work::Vector{T} = similar(x_n),
+    y_work::Vector{T} = similar(y_n),
+    data_combined::Matrix{T} = Matrix{T}(undef, 2, length(x_n) + length(x_ref)),
+    state::NeighborState{T}) where {T<:Real}
+
+    theta2intra!(intra, θ)
+    N_n = length(x_n)
+    N_ref = length(x_ref)
+    N_combined = N_n + N_ref
+
+    @inbounds for i in 1:N_n
+        x_work[i] = correctdrift(x_n[i], framenum_n[i], intra.dm[1])
+        y_work[i] = correctdrift(y_n[i], framenum_n[i], intra.dm[2])
+    end
+
+    @inbounds for i in 1:N_n
+        data_combined[1, i] = x_work[i]
+        data_combined[2, i] = y_work[i]
+    end
+    @inbounds for i in 1:N_ref
+        data_combined[1, N_n + i] = x_ref[i]
+        data_combined[2, N_n + i] = y_ref[i]
+    end
+
+    k = min(maxn, N_combined - 1)
+
+    current_drift = max_drift_magnitude(intra, nframes)
+    need_rebuild = state.allow_rebuild &&
+                   abs(current_drift - state.last_rebuild_drift) > state.rebuild_threshold
+
+    if need_rebuild
+        kdtree = KDTree(data_combined; leafsize = 10)
+        query_points = view(data_combined, :, 1:N_n)
+        idxs, _ = knn(kdtree, query_points, k + 1, true)
+        @inbounds for i in 1:N_n
+            idx_i = idxs[i]
+            for j in 1:k
+                state.neighbor_indices[j, i] = idx_i[j + 1]  # skip self
+            end
+        end
+        state.last_rebuild_drift = current_drift
+        state.rebuild_count += 1
+    end
+
+    log_k = log(T(k))
+    out = T(0)
+
+    @inbounds for i in 1:N_n
+        xi, yi = x_work[i], y_work[i]
+        sxi, syi = σ_x_n[i], σ_y_n[i]
+
+        for j in 1:k
+            jj = state.neighbor_indices[j, i]
+            if jj <= N_n
+                xj, yj = x_work[jj], y_work[jj]
+                sxj, syj = σ_x_n[jj], σ_y_n[jj]
+            else
+                ref_idx = jj - N_n
+                xj, yj = x_ref[ref_idx], y_ref[ref_idx]
+                sxj, syj = σ_x_ref[ref_idx], σ_y_ref[ref_idx]
+            end
+            state.kldiv[j] = -divKL_2D(xi, yi, sxi, syi, xj, yj, sxj, syj)
+        end
+
+        out += _logsumexp(state.kldiv, k) - log_k
+    end
+
+    return entropy_HD(σ_x_n, σ_y_n) - out / N_n
+end
+
+"""
+INTRA-ENTROPY merged-cloud (3D) — iteration 2+ intra fit against all datasets.
+"""
+function costfun_entropy_intra_3D_merged(θ,
+    x_n::Vector{T}, y_n::Vector{T}, z_n::Vector{T},
+    σ_x_n::Vector{T}, σ_y_n::Vector{T}, σ_z_n::Vector{T},
+    framenum_n::Vector{Int},
+    x_ref::Vector{T}, y_ref::Vector{T}, z_ref::Vector{T},
+    σ_x_ref::Vector{T}, σ_y_ref::Vector{T}, σ_z_ref::Vector{T},
+    maxn::Int, intra::AbstractIntraDrift, nframes::Int;
+    x_work::Vector{T} = similar(x_n),
+    y_work::Vector{T} = similar(y_n),
+    z_work::Vector{T} = similar(z_n),
+    data_combined::Matrix{T} = Matrix{T}(undef, 3, length(x_n) + length(x_ref)),
+    state::NeighborState{T}) where {T<:Real}
+
+    theta2intra!(intra, θ)
+    N_n = length(x_n)
+    N_ref = length(x_ref)
+    N_combined = N_n + N_ref
+
+    @inbounds for i in 1:N_n
+        x_work[i] = correctdrift(x_n[i], framenum_n[i], intra.dm[1])
+        y_work[i] = correctdrift(y_n[i], framenum_n[i], intra.dm[2])
+        z_work[i] = correctdrift(z_n[i], framenum_n[i], intra.dm[3])
+    end
+
+    @inbounds for i in 1:N_n
+        data_combined[1, i] = x_work[i]
+        data_combined[2, i] = y_work[i]
+        data_combined[3, i] = z_work[i]
+    end
+    @inbounds for i in 1:N_ref
+        data_combined[1, N_n + i] = x_ref[i]
+        data_combined[2, N_n + i] = y_ref[i]
+        data_combined[3, N_n + i] = z_ref[i]
+    end
+
+    k = min(maxn, N_combined - 1)
+
+    current_drift = max_drift_magnitude(intra, nframes)
+    need_rebuild = state.allow_rebuild &&
+                   abs(current_drift - state.last_rebuild_drift) > state.rebuild_threshold
+
+    if need_rebuild
+        kdtree = KDTree(data_combined; leafsize = 10)
+        query_points = view(data_combined, :, 1:N_n)
+        idxs, _ = knn(kdtree, query_points, k + 1, true)
+        @inbounds for i in 1:N_n
+            idx_i = idxs[i]
+            for j in 1:k
+                state.neighbor_indices[j, i] = idx_i[j + 1]
+            end
+        end
+        state.last_rebuild_drift = current_drift
+        state.rebuild_count += 1
+    end
+
+    log_k = log(T(k))
+    out = T(0)
+
+    @inbounds for i in 1:N_n
+        xi, yi, zi = x_work[i], y_work[i], z_work[i]
+        sxi, syi, szi = σ_x_n[i], σ_y_n[i], σ_z_n[i]
+
+        for j in 1:k
+            jj = state.neighbor_indices[j, i]
+            if jj <= N_n
+                xj, yj, zj = x_work[jj], y_work[jj], z_work[jj]
+                sxj, syj, szj = σ_x_n[jj], σ_y_n[jj], σ_z_n[jj]
+            else
+                ref_idx = jj - N_n
+                xj, yj, zj = x_ref[ref_idx], y_ref[ref_idx], z_ref[ref_idx]
+                sxj, syj, szj = σ_x_ref[ref_idx], σ_y_ref[ref_idx], σ_z_ref[ref_idx]
+            end
+            state.kldiv[j] = -divKL_3D(xi, yi, zi, sxi, syi, szi,
+                                       xj, yj, zj, sxj, syj, szj)
+        end
+
+        out += _logsumexp(state.kldiv, k) - log_k
+    end
+
+    return entropy_HD(σ_x_n, σ_y_n, σ_z_n) - out / N_n
+end
+
+# ============================================================================
 # Inter-dataset entropy cost functions (optimized merged cloud approach)
 # ============================================================================
 
