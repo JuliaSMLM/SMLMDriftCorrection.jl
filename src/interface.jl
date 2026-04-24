@@ -538,8 +538,15 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
     for iter = 1:max_iterations
         iteration += 1
 
-        # Store current inter-shifts
+        # Snapshot BOTH inter-shifts and intra drift vectors at [1, mid, end]
+        # before the pass. Convergence check below uses the max of their deltas,
+        # because the merged-cloud intra can move intra materially and inter-only
+        # convergence would declare convergence prematurely.
         inter_old = [copy(model.inter[n].dm) for n in 1:n_datasets]
+        intra_old_vecs = [Matrix{Float64}(undef, n_dims, 3) for _ in 1:n_datasets]
+        for n in 1:n_datasets
+            drift_vecs!(intra_old_vecs[n], model.intra[n], smld.n_frames)
+        end
 
         # Re-run intra with inter applied (shifted coordinates).
         # skip_init=true: model already has coefficients from previous iteration/singlepass;
@@ -550,6 +557,10 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         # corrected coords as `ref_coords` — intra now fits against the same structural
         # scaffold that findinter! uses, which breaks the intra ↔ inter limit cycle
         # that blocks convergence on cells with small inter-shifts.
+        #
+        # Memory: we pass ONE set of full arrays (no per-dataset mask copies). Each
+        # findintra! thread filters inline and allocates only the ref-filtered σ
+        # arrays + data_combined it actually uses.
         smld_shifted = apply_inter_only(smld, model)
         smld_full = correctdrift(smld, model)
         x_all   = Float64[e.x   for e in smld_full.emitters]
@@ -557,19 +568,18 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         σ_x_all = Float64[e.σ_x for e in smld_full.emitters]
         σ_y_all = Float64[e.σ_y for e in smld_full.emitters]
         ds_all  = Int[e.dataset for e in smld_full.emitters]
-        if n_dims == 3
-            z_all   = Float64[e.z   for e in smld_full.emitters]
-            σ_z_all = Float64[e.σ_z for e in smld_full.emitters]
-        end
+        z_all   = n_dims == 3 ? Float64[e.z   for e in smld_full.emitters] : Float64[]
+        σ_z_all = n_dims == 3 ? Float64[e.σ_z for e in smld_full.emitters] : Float64[]
 
         Threads.@threads for nn = 1:n_datasets
-            mask = ds_all .!= nn
             ref = if n_dims == 2
-                (x = x_all[mask], y = y_all[mask],
-                 σ_x = σ_x_all[mask], σ_y = σ_y_all[mask])
+                (x_all = x_all, y_all = y_all,
+                 σ_x_all = σ_x_all, σ_y_all = σ_y_all,
+                 ds_all = ds_all, exclude_dataset = nn)
             else
-                (x = x_all[mask], y = y_all[mask], z = z_all[mask],
-                 σ_x = σ_x_all[mask], σ_y = σ_y_all[mask], σ_z = σ_z_all[mask])
+                (x_all = x_all, y_all = y_all, z_all = z_all,
+                 σ_x_all = σ_x_all, σ_y_all = σ_y_all, σ_z_all = σ_z_all,
+                 ds_all = ds_all, exclude_dataset = nn)
             end
             findintra!(model.intra[nn], smld_shifted, nn, maxn;
                        skip_init=true, ref_coords=ref)
@@ -614,17 +624,34 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         current_entropy = _compute_entropy(smld_corrected, maxn)
         push!(history, current_entropy)
 
-        # Check convergence
-        max_change = _max_inter_change(inter_old, model.inter)
+        # Convergence criterion now considers BOTH inter-shift movement and
+        # intra drift-vector movement at test frames [1, mid, end]. Declaring
+        # convergence on inter-only lets the merged-cloud intra sneak through
+        # with material intra drift still in flight. Log the two components
+        # separately so reports can show whether convergence is joint.
+        inter_delta = _max_inter_change(inter_old, model.inter)
+        intra_delta = 0.0
+        scratch = Matrix{Float64}(undef, n_dims, 3)
+        for n in 1:n_datasets
+            drift_vecs!(scratch, model.intra[n], smld.n_frames)
+            d = max_drift_vec_delta(scratch, intra_old_vecs[n])
+            if d > intra_delta
+                intra_delta = d
+            end
+        end
+        max_change = max(inter_delta, intra_delta)
 
         if verbose > 0
-            @info("SMLMDriftCorrection: iteration $iteration, entropy=$current_entropy, max_shift_change=$max_change")
+            @info("SMLMDriftCorrection: iteration $iteration, entropy=$current_entropy, " *
+                  "max_shift_change=$max_change (inter=$(round(inter_delta, sigdigits=3)) " *
+                  "intra=$(round(intra_delta, sigdigits=3)))")
         end
 
         if max_change < convergence_tol
             converged = true
             if verbose > 0
-                @info("SMLMDriftCorrection: converged after $iteration iterations")
+                @info("SMLMDriftCorrection: converged after $iteration iterations " *
+                      "(inter=$(round(inter_delta, sigdigits=3)), intra=$(round(intra_delta, sigdigits=3)))")
             end
             break
         end
