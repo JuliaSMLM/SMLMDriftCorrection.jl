@@ -541,6 +541,60 @@ using Random
         @test info_roi3 isa DC.DriftInfo
     end
 
+    # ========== Edge-case guards ==========
+    @testset "Edge-case guards" begin
+        # normalize_frame with n_frames=1 should not throw DivideError / DomainError
+        @test DC.normalize_frame(1, 1) == 0.0
+        # Legendre polynomial evaluation at a single-frame collapse is finite
+        poly_1f = DC.LegendrePoly1D(2, 1)
+        poly_1f.coefficients .= [0.5, 0.25]
+        @test isfinite(DC.evaluate_at_frame(poly_1f, 1))
+
+        # compute_chunk_params: n_chunks > n_frames should be capped, not 0-sized
+        p1 = DC.compute_chunk_params(10; n_chunks=20)
+        @test p1.n_chunks <= 10
+        @test p1.frames_per_chunk >= 1
+
+        # compute_chunk_params: chunk_frames > n_frames should collapse to 1 chunk
+        p2 = DC.compute_chunk_params(10; chunk_frames=100)
+        @test p2.n_chunks == 1
+        @test p2.frames_per_chunk == 10
+
+        # compute_chunk_params: single-frame input should not divide by zero
+        p3 = DC.compute_chunk_params(1)
+        @test p3.n_chunks == 1
+        @test p3.frames_per_chunk >= 1
+
+        # findshift_damped: σ_px floor prevents collapse when prior_sigma ≈ 0
+        smld_small = DC.filter_emitters(smld_noisy,
+            [e.dataset == 1 for e in smld_noisy.emitters])
+        shift_zero_sigma = DC.findshift_damped(smld_small, smld_small;
+            histbinsize=0.10, prior_shift=[0.0, 0.0], prior_sigma=0.0)
+        @test all(isfinite, shift_zero_sigma)
+
+        # findshift_damped: known shift + non-zero prior recovers approximately
+        shift_imposed_damped = [0.5, -0.3]
+        smld_shifted_d = deepcopy(smld_small)
+        for nn in eachindex(smld_shifted_d.emitters)
+            smld_shifted_d.emitters[nn].x += shift_imposed_damped[1]
+            smld_shifted_d.emitters[nn].y += shift_imposed_damped[2]
+        end
+        # Prior centered near the true shift → damping does not reject the true peak
+        shift_damped = DC.findshift_damped(smld_small, smld_shifted_d;
+            histbinsize=0.10, prior_shift=shift_imposed_damped, prior_sigma=1.0)
+        @test isapprox(shift_damped, shift_imposed_damped; atol=0.15)
+
+        # filter_emitters to an empty mask + driftcorrect-style helpers must not crash
+        empty_mask = falses(length(smld_small.emitters))
+        smld_empty = DC.filter_emitters(smld_small, empty_mask)
+        @test isempty(smld_empty.emitters)
+
+        # findintra! on a dataset with zero emitters is a no-op
+        model_check = DC.LegendrePolynomial(smld_small; degree=2)
+        # Build a model scoped to a bogus dataset index so the per-dataset filter is empty
+        @test_nowarn DC.findintra!(model_check.intra[1], smld_empty, 1, 50)
+    end
+
     # ========== position_frame_correlation ==========
     # Smoke test for the diagnostic function. Wrapped in isdefined so this
     # testset is skipped gracefully if the function hasn't been merged yet.

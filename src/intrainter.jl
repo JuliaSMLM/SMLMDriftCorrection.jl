@@ -98,7 +98,9 @@ Find and correct intra-dataset drift using entropy minimization with
 adaptive KDTree neighbor rebuilding.
 
 Uses KL divergence entropy cost function with adaptive neighbor tracking.
-Only rebuilds neighbors when drift changes by more than 0.5 μm.
+Each `optimize(...)` call sees a frozen KDTree, so the objective is deterministic
+for Nelder-Mead. Rebuilds happen in an outer loop, triggered only when the drift
+polynomial has moved by more than `rebuild_threshold` (μm) since the last rebuild.
 
 # Keyword Arguments
 - `skip_init=false`: If true, skip random initialization (use when warmstarted externally)
@@ -112,6 +114,11 @@ function findintra!(intra::AbstractIntraDrift,
     idx = [e.dataset for e in smld.emitters] .== dataset
     emitters = smld.emitters[idx]
     N = length(emitters)
+
+    # Guard against degenerate per-dataset subsets (empty, or too few points for KNN)
+    if N < 2
+        return
+    end
 
     # Extract vectors directly
     x = Float64[e.x for e in emitters]
@@ -137,6 +144,7 @@ function findintra!(intra::AbstractIntraDrift,
     # Pre-allocate work arrays
     x_work = similar(x)
     y_work = similar(y)
+    z_work = intra.ndims == 3 ? similar(z) : Float64[]
 
     # Adaptive entropy cost function
     k = min(maxn, N - 1)
@@ -145,20 +153,51 @@ function findintra!(intra::AbstractIntraDrift,
 
     if intra.ndims == 2
         build_neighbors!(state, x, y)
+        state.last_rebuild_drift = 0.0  # initial build was from uncorrected coords (drift=0)
         myfun = θ -> costfun_entropy_intra_2D_adaptive(θ, x, y, σ_x, σ_y, framenum, maxn, intra,
                                                        state, nframes;
                                                        x_work=x_work, y_work=y_work)
     else # 3D
-        z_work = similar(z)
         build_neighbors!(state, x, y, z)
+        state.last_rebuild_drift = 0.0
         myfun = θ -> costfun_entropy_intra_3D_adaptive(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra,
                                                        state, nframes;
                                                        x_work=x_work, y_work=y_work, z_work=z_work)
     end
 
-    # Optimize with Nelder-Mead (robust to noisy entropy landscape)
+    # Freeze state during each optimize(): BFGS/Nelder-Mead see a deterministic objective.
+    # The outer loop checks whether the drift has moved far enough to warrant rebuilding
+    # the KDTree from corrected coords, and re-runs optimize if so. A small cap prevents
+    # rare oscillation; in practice convergence is reached in 1-2 outer iterations.
+    state.allow_rebuild = false
     opt = Optim.Options(iterations=10000, f_abstol=1e-2, x_abstol=1e-4, show_trace=false)
-    res = optimize(myfun, θ0, opt)
+    max_outer = 3
+    local res
+    for _ in 1:max_outer
+        res = optimize(myfun, θ0, opt)
+        theta2intra!(intra, res.minimizer)
+        θ0 = res.minimizer
+
+        new_drift = max_drift_magnitude(intra, nframes)
+        if abs(new_drift - state.last_rebuild_drift) < state.rebuild_threshold
+            break
+        end
+
+        # Rebuild neighbors from corrected coords at current drift
+        @inbounds for i in 1:N
+            x_work[i] = correctdrift(x[i], framenum[i], intra.dm[1])
+            y_work[i] = correctdrift(y[i], framenum[i], intra.dm[2])
+        end
+        if intra.ndims == 2
+            build_neighbors!(state, x_work, y_work)
+        else
+            @inbounds for i in 1:N
+                z_work[i] = correctdrift(z[i], framenum[i], intra.dm[3])
+            end
+            build_neighbors!(state, x_work, y_work, z_work)
+        end
+        state.last_rebuild_drift = new_drift
+    end
     theta2intra!(intra, res.minimizer)
 end
 
@@ -232,6 +271,13 @@ function findinter!(dm::AbstractIntraInter,
     # Extract CORRECTED coords from reference datasets
     idx_ref = [e.dataset in ref_datasets for e in smld_corrected.emitters]
     emitters_ref = smld_corrected.emitters[idx_ref]
+
+    # Guard against empty dataset_n or empty reference set (e.g., filtered-out
+    # dataset, or a ref_datasets list with no surviving emitters). Without this
+    # guard the KDTree build would throw on 0 points.
+    if length(emitters_n) == 0 || length(emitters_ref) == 0
+        return 0.0
+    end
 
     x_ref = Float64[e.x for e in emitters_ref]
     y_ref = Float64[e.y for e in emitters_ref]
@@ -319,10 +365,40 @@ function findinter!(dm::AbstractIntraInter,
         myfun = entropy_cost
     end
 
-    # Optimize with gradient-based method for better convergence
-    # BFGS handles flat entropy landscapes better than Nelder-Mead (2x slower but ~4x more accurate)
+    # Optimize with gradient-based method for better convergence.
+    # BFGS handles flat entropy landscapes better than Nelder-Mead (2x slower but ~4x more accurate).
+    #
+    # Determinism: each optimize() call sees a frozen KDTree. The outer loop rebuilds
+    # neighbors only between optimize() calls, after the shift has moved beyond
+    # rebuild_threshold. This keeps BFGS's gradient approximation consistent — the
+    # function is not mutating underneath the optimizer.
     opt = Optim.Options(iterations=10000, g_abstol=1e-8, show_trace=false)
-    res = optimize(myfun, θ0, BFGS())
+    # Trigger the initial KDTree build at θ0 while allow_rebuild=true, then freeze.
+    state.allow_rebuild = true
+    entropy_cost(θ0)
+    state.allow_rebuild = false
+
+    max_outer = 3
+    local res
+    for _ in 1:max_outer
+        res = optimize(myfun, θ0, BFGS())
+        theta2inter!(inter, res.minimizer)
+        θ0 = res.minimizer
+
+        # Check shift change from last rebuild
+        Δ2 = 0.0
+        for dim in 1:n_dims
+            Δ2 += (θ0[dim] - state.last_shift[dim])^2
+        end
+        if sqrt(Δ2) < state.rebuild_threshold
+            break
+        end
+
+        # Force one rebuild at current θ0, then freeze for the next optimize pass
+        state.allow_rebuild = true
+        entropy_cost(θ0)
+        state.allow_rebuild = false
+    end
     theta2inter!(inter, res.minimizer)
     return res.minimum
 end
