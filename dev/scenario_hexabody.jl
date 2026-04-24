@@ -404,10 +404,24 @@ function run_hexabody_diagnostics(;
         clean_output::Bool = true)
 
     scenario = scenario_symbol(cell)
+    output_dir = joinpath(@__DIR__, "output", string(scenario))
 
     println("=" ^ 72)
     println("RGY HEXABODY DRIFT CORRECTION STRESS TEST — $(cell)")
     println("=" ^ 72)
+
+    # Wipe stale outputs at the start (not the end) so a failed run can't leave
+    # a mix of current + stale files behind. `clean_output=false` keeps them.
+    if save_outputs && clean_output
+        if isdir(output_dir)
+            n_removed = 0
+            for f in readdir(output_dir)
+                rm(joinpath(output_dir, f); force=true)
+                n_removed += 1
+            end
+            println("\n[0/5] Cleaned $(n_removed) stale files from $(output_dir)")
+        end
+    end
 
     println("\n[1/5] Loading pre-driftcorrect SMLD")
     @printf("  path: %s\n", input)
@@ -472,10 +486,11 @@ function run_hexabody_diagnostics(;
     # -----------------------------------------------------------------------
     # [5/5] Full output suite
     # -----------------------------------------------------------------------
-    output_dir = joinpath(@__DIR__, "output", string(scenario))
     if save_outputs
         println("\n[5/5] Writing output suite → $(output_dir)")
-        dir = DiagnosticHelpers.ensure_output_dir(scenario; clean = clean_output)
+        # clean=false here — we already cleaned at step [0/5]; just make sure
+        # the directory exists.
+        dir = DiagnosticHelpers.ensure_output_dir(scenario; clean=false)
 
         write_config_toml(dir, config)
         write_info_toml(dir, info, t_correct, input, reference, rmsd_vs_ref)
