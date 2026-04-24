@@ -100,6 +100,9 @@ adaptive KDTree neighbor rebuilding.
 Each `optimize(...)` call sees a frozen KDTree, so the objective is deterministic
 for Nelder-Mead. Rebuilds happen in an outer loop, triggered only when the drift
 polynomial has moved by more than `rebuild_threshold` (μm) since the last rebuild.
+Rebuild gating uses drift **vectors** at test frames `[1, mid, end]` (see
+`drift_vecs!` / `max_drift_vec_delta` in costfuns.jl), so direction/sign changes
+at the same magnitude still trigger a rebuild.
 
 Two modes:
 - **Per-dataset** (default): Neighbors come from this dataset only. Correct for
@@ -112,9 +115,13 @@ Two modes:
 
 # Keyword Arguments
 - `skip_init=false`: skip random re-init (warm-started externally)
-- `ref_coords=nothing`: `NamedTuple` of other-dataset coords — `(x, y, σ_x, σ_y)`
-  for 2D or `(x, y, z, σ_x, σ_y, σ_z)` for 3D. All must be fully-corrected
-  coordinates in the common frame.
+- `ref_coords=nothing`: `NamedTuple` with full-array handoff (one allocation
+  per caller, no per-dataset copies).
+    - 2D: `(x_all, y_all, σ_x_all, σ_y_all, ds_all, exclude_dataset)`
+    - 3D: `(x_all, y_all, z_all, σ_x_all, σ_y_all, σ_z_all, ds_all, exclude_dataset)`
+  All coordinate arrays are fully-corrected in the common frame; `ds_all` is
+  the dataset id per element; `exclude_dataset` is the dataset to *exclude*
+  from the reference (the one being optimized).
 """
 function findintra!(intra::AbstractIntraDrift,
     smld::SMLD,
@@ -163,17 +170,17 @@ function findintra!(intra::AbstractIntraDrift,
     if ref_coords === nothing
         # -------- per-dataset adaptive path (iteration 1 / no ref) --------
         k = min(maxn, N - 1)
-        state = NeighborState(N, k, rebuild_threshold)
+        state = NeighborState(N, k, rebuild_threshold, intra.ndims)
 
         if intra.ndims == 2
             build_neighbors!(state, x, y)
-            state.last_rebuild_drift = 0.0
+            drift_vecs!(state.last_drift_vecs, intra, nframes)  # record drift at build time
             myfun = θ -> costfun_entropy_intra_2D_adaptive(θ, x, y, σ_x, σ_y, framenum, maxn, intra,
                                                            state, nframes;
                                                            x_work=x_work, y_work=y_work)
         else
             build_neighbors!(state, x, y, z)
-            state.last_rebuild_drift = 0.0
+            drift_vecs!(state.last_drift_vecs, intra, nframes)
             myfun = θ -> costfun_entropy_intra_3D_adaptive(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra,
                                                            state, nframes;
                                                            x_work=x_work, y_work=y_work, z_work=z_work)
@@ -188,8 +195,8 @@ function findintra!(intra::AbstractIntraDrift,
             theta2intra!(intra, res.minimizer)
             θ0 = res.minimizer
 
-            new_drift = max_drift_magnitude(intra, nframes)
-            if abs(new_drift - state.last_rebuild_drift) < state.rebuild_threshold
+            drift_vecs!(state.current_drift_vecs, intra, nframes)
+            if max_drift_vec_delta(state.current_drift_vecs, state.last_drift_vecs) < state.rebuild_threshold
                 break
             end
 
@@ -205,48 +212,78 @@ function findintra!(intra::AbstractIntraDrift,
                 end
                 build_neighbors!(state, x_work, y_work, z_work)
             end
-            state.last_rebuild_drift = new_drift
+            state.last_drift_vecs .= state.current_drift_vecs
         end
         theta2intra!(intra, res.minimizer)
         return
     end
 
     # ---------------- merged-cloud path (iteration 2+) ----------------
-    x_ref = ref_coords.x
-    y_ref = ref_coords.y
-    σ_x_ref = ref_coords.σ_x
-    σ_y_ref = ref_coords.σ_y
+    x_all = ref_coords.x_all
+    y_all = ref_coords.y_all
+    σ_x_all = ref_coords.σ_x_all
+    σ_y_all = ref_coords.σ_y_all
+    ds_all = ref_coords.ds_all
+    exclude_ds = ref_coords.exclude_dataset
     if intra.ndims == 3
-        z_ref = ref_coords.z
-        σ_z_ref = ref_coords.σ_z
+        z_all = ref_coords.z_all
+        σ_z_all = ref_coords.σ_z_all
     end
-    N_ref = length(x_ref)
+
+    # Count reference size once.
+    N_ref = 0
+    @inbounds for i in eachindex(ds_all)
+        if ds_all[i] != exclude_ds
+            N_ref += 1
+        end
+    end
     if N_ref == 0
-        # No reference available — fall back to per-dataset
+        # No reference available — fall back to per-dataset.
         return findintra!(intra, smld, dataset, maxn; skip_init=true)
     end
 
+    # Allocate once: filtered σ_ref arrays (needed for per-pair divergence),
+    # and data_combined. Ref columns of data_combined are filled ONCE here;
+    # the cost function only rewrites the probe columns (1:N) per evaluation.
+    σ_x_ref = Vector{Float64}(undef, N_ref)
+    σ_y_ref = Vector{Float64}(undef, N_ref)
+    σ_z_ref = intra.ndims == 3 ? Vector{Float64}(undef, N_ref) : Float64[]
+    data_combined = Matrix{Float64}(undef, intra.ndims, N + N_ref)
+
+    let ref_idx = 0
+        @inbounds for i in eachindex(ds_all)
+            if ds_all[i] != exclude_ds
+                ref_idx += 1
+                data_combined[1, N + ref_idx] = x_all[i]
+                data_combined[2, N + ref_idx] = y_all[i]
+                σ_x_ref[ref_idx] = σ_x_all[i]
+                σ_y_ref[ref_idx] = σ_y_all[i]
+                if intra.ndims == 3
+                    data_combined[3, N + ref_idx] = z_all[i]
+                    σ_z_ref[ref_idx] = σ_z_all[i]
+                end
+            end
+        end
+    end
+
     k = min(maxn, N + N_ref - 1)
-    state = NeighborState(N, k, rebuild_threshold)
-    # Force the first cost evaluation to rebuild (sentinel: abs(0 - Inf) > threshold).
-    state.last_rebuild_drift = Inf
+    state = NeighborState(N, k, rebuild_threshold, intra.ndims)
+    # last_drift_vecs initialised to +Inf so first cost eval always rebuilds.
 
     if intra.ndims == 2
-        data_combined = Matrix{Float64}(undef, 2, N + N_ref)
         myfun = θ -> costfun_entropy_intra_2D_merged(θ,
             x, y, σ_x, σ_y, framenum,
-            x_ref, y_ref, σ_x_ref, σ_y_ref,
-            maxn, intra, nframes;
-            x_work=x_work, y_work=y_work,
-            data_combined=data_combined, state=state)
+            σ_x_ref, σ_y_ref,
+            maxn, intra, nframes,
+            data_combined, state;
+            x_work=x_work, y_work=y_work)
     else
-        data_combined = Matrix{Float64}(undef, 3, N + N_ref)
         myfun = θ -> costfun_entropy_intra_3D_merged(θ,
             x, y, z, σ_x, σ_y, σ_z, framenum,
-            x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
-            maxn, intra, nframes;
-            x_work=x_work, y_work=y_work, z_work=z_work,
-            data_combined=data_combined, state=state)
+            σ_x_ref, σ_y_ref, σ_z_ref,
+            maxn, intra, nframes,
+            data_combined, state;
+            x_work=x_work, y_work=y_work, z_work=z_work)
     end
 
     # Trigger the initial KDTree build while allow_rebuild=true, then freeze.
@@ -262,8 +299,8 @@ function findintra!(intra::AbstractIntraDrift,
         theta2intra!(intra, res.minimizer)
         θ0 = res.minimizer
 
-        new_drift = max_drift_magnitude(intra, nframes)
-        if abs(new_drift - state.last_rebuild_drift) < state.rebuild_threshold
+        drift_vecs!(state.current_drift_vecs, intra, nframes)
+        if max_drift_vec_delta(state.current_drift_vecs, state.last_drift_vecs) < state.rebuild_threshold
             break
         end
 

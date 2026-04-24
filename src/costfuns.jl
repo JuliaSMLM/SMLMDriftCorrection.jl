@@ -20,21 +20,26 @@ Instead of rebuilding KDTree every iteration (O(N log N)), we:
 """
 mutable struct NeighborState{T<:Real}
     neighbor_indices::Matrix{Int}           # k × N matrix of neighbor indices
-    last_rebuild_drift::T                   # max drift magnitude at last rebuild
-    rebuild_threshold::T                    # drift change that triggers rebuild
+    last_drift_vecs::Matrix{T}              # ndims × n_test_frames drift vectors at last rebuild
+    rebuild_threshold::T                    # |drift-vector delta| that triggers rebuild (μm)
     rebuild_count::Int                      # number of rebuilds (for diagnostics)
     k::Int                                  # number of neighbors
     kldiv::Vector{T}                        # pre-allocated divergence buffer (length k)
     allow_rebuild::Bool                     # when false, cost fun sees a frozen objective
+    current_drift_vecs::Matrix{T}           # scratch buffer for current drift (avoid alloc)
 end
 
-function NeighborState(N::Int, k::Int, rebuild_threshold::T) where {T<:Real}
+# Test frames used for drift-vector comparison: start, middle, end.
+const _DRIFT_TEST_FRAMES_N = 3
+
+function NeighborState(N::Int, k::Int, rebuild_threshold::T, ndims::Int = 2) where {T<:Real}
     neighbor_indices = Matrix{Int}(undef, k, N)
     kldiv = Vector{T}(undef, k)
-    # Default allow_rebuild=true preserves legacy behavior for any external callers;
-    # findintra!/findinter! set this to false so each optimize() call sees a
-    # deterministic objective, and rebuilds are driven from an outer loop.
-    return NeighborState{T}(neighbor_indices, T(0), rebuild_threshold, 0, k, kldiv, true)
+    # last_drift_vecs initialised to +Inf so the first rebuild check always fires
+    # (delta norm = +Inf > threshold).
+    last = fill(typemax(T), ndims, _DRIFT_TEST_FRAMES_N)
+    current = Matrix{T}(undef, ndims, _DRIFT_TEST_FRAMES_N)
+    return NeighborState{T}(neighbor_indices, last, rebuild_threshold, 0, k, kldiv, true, current)
 end
 
 """
@@ -103,12 +108,13 @@ end
 """
     max_drift_magnitude(intra, nframes)
 
-Compute maximum drift magnitude across all frames for current polynomial.
-Used to detect when drift has changed enough to warrant neighbor rebuild.
+Compute maximum drift magnitude across test frames for current polynomial.
+Kept for callers outside the cost-function hot path (e.g. findintra! outer
+loop convergence checks) — rebuild gating itself uses vector deltas now.
 """
 function max_drift_magnitude(intra::AbstractIntraDrift, nframes::Int)
     max_drift = 0.0
-    for frame in [1, nframes ÷ 2, nframes]
+    for frame in (1, max(1, nframes ÷ 2), max(1, nframes))
         drift_sq = 0.0
         for dim in 1:intra.ndims
             d = evaluate_at_frame(intra.dm[dim], frame)
@@ -120,19 +126,63 @@ function max_drift_magnitude(intra::AbstractIntraDrift, nframes::Int)
 end
 
 """
+    drift_vecs!(buf, intra, nframes)
+
+Fill `buf` (ndims × _DRIFT_TEST_FRAMES_N) with drift vectors at test frames
+[1, ⌊nframes/2⌋, nframes]. Using vectors (not just magnitudes) means a
+direction/sign change at the same magnitude is still picked up as a change.
+"""
+@inline function drift_vecs!(buf::AbstractMatrix, intra::AbstractIntraDrift, nframes::Int)
+    f1 = 1
+    f2 = max(1, nframes ÷ 2)
+    f3 = max(1, nframes)
+    @inbounds for dim in 1:intra.ndims
+        buf[dim, 1] = evaluate_at_frame(intra.dm[dim], f1)
+        buf[dim, 2] = evaluate_at_frame(intra.dm[dim], f2)
+        buf[dim, 3] = evaluate_at_frame(intra.dm[dim], f3)
+    end
+    return buf
+end
+
+"""
+    max_drift_vec_delta(current, last)
+
+Max Euclidean norm of column-wise differences between two ndims × n_test_frames
+drift-vector matrices. Triggers a rebuild if this exceeds rebuild_threshold
+even when the scalar magnitude max_drift_magnitude is unchanged (e.g. rotation
+of the drift vector at the midpoint frame).
+"""
+@inline function max_drift_vec_delta(current::AbstractMatrix{T}, last::AbstractMatrix{T}) where {T<:Real}
+    max_delta = zero(T)
+    n_dim, n_test = size(current)
+    @inbounds for col in 1:n_test
+        d2 = zero(T)
+        for row in 1:n_dim
+            d = current[row, col] - last[row, col]
+            d2 += d * d
+        end
+        s = sqrt(d2)
+        max_delta = s > max_delta ? s : max_delta
+    end
+    return max_delta
+end
+
+"""
     maybe_rebuild_neighbors!(state, x_work, y_work, intra, nframes)
 
-Check if neighbors need rebuilding based on drift magnitude change.
+Check if neighbors need rebuilding based on drift-vector change. Uses the
+ndims × n_test_frames vector representation so direction changes at the same
+magnitude still trigger a rebuild.
 """
 function maybe_rebuild_neighbors!(state::NeighborState{T},
                                    x_work::Vector{T}, y_work::Vector{T},
                                    intra::AbstractIntraDrift, nframes::Int) where {T<:Real}
     state.allow_rebuild || return
-    current_drift = max_drift_magnitude(intra, nframes)
+    drift_vecs!(state.current_drift_vecs, intra, nframes)
 
-    if abs(current_drift - state.last_rebuild_drift) > state.rebuild_threshold
+    if max_drift_vec_delta(state.current_drift_vecs, state.last_drift_vecs) > state.rebuild_threshold
         build_neighbors!(state, x_work, y_work)
-        state.last_rebuild_drift = current_drift
+        state.last_drift_vecs .= state.current_drift_vecs
     end
 end
 
@@ -145,11 +195,11 @@ function maybe_rebuild_neighbors!(state::NeighborState{T},
                                    x_work::Vector{T}, y_work::Vector{T}, z_work::Vector{T},
                                    intra::AbstractIntraDrift, nframes::Int) where {T<:Real}
     state.allow_rebuild || return
-    current_drift = max_drift_magnitude(intra, nframes)
+    drift_vecs!(state.current_drift_vecs, intra, nframes)
 
-    if abs(current_drift - state.last_rebuild_drift) > state.rebuild_threshold
+    if max_drift_vec_delta(state.current_drift_vecs, state.last_drift_vecs) > state.rebuild_threshold
         build_neighbors!(state, x_work, y_work, z_work)
-        state.last_rebuild_drift = current_drift
+        state.last_drift_vecs .= state.current_drift_vecs
     end
 end
 
@@ -296,41 +346,46 @@ end
 
 """
 INTRA-ENTROPY merged-cloud (2D) — iteration 2+ intra fit against all datasets.
+
+Ref points are **fixed** during optimize() (they're the other datasets' already
+fully-corrected coords). The caller (findintra!) fills `data_combined[:, N_n+1:end]`
+ONCE before the optimize loop; this function only rewrites the probe columns
+(1:N_n) each evaluation. σ_x_ref / σ_y_ref must align with the ref slots of
+data_combined.
 """
 function costfun_entropy_intra_2D_merged(θ,
     x_n::Vector{T}, y_n::Vector{T}, σ_x_n::Vector{T}, σ_y_n::Vector{T},
     framenum_n::Vector{Int},
-    x_ref::Vector{T}, y_ref::Vector{T}, σ_x_ref::Vector{T}, σ_y_ref::Vector{T},
-    maxn::Int, intra::AbstractIntraDrift, nframes::Int;
+    σ_x_ref::Vector{T}, σ_y_ref::Vector{T},
+    maxn::Int, intra::AbstractIntraDrift, nframes::Int,
+    data_combined::Matrix{T},
+    state::NeighborState{T};
     x_work::Vector{T} = similar(x_n),
-    y_work::Vector{T} = similar(y_n),
-    data_combined::Matrix{T} = Matrix{T}(undef, 2, length(x_n) + length(x_ref)),
-    state::NeighborState{T}) where {T<:Real}
+    y_work::Vector{T} = similar(y_n)) where {T<:Real}
 
     theta2intra!(intra, θ)
     N_n = length(x_n)
-    N_ref = length(x_ref)
+    N_ref = length(σ_x_ref)
     N_combined = N_n + N_ref
 
     @inbounds for i in 1:N_n
         x_work[i] = correctdrift(x_n[i], framenum_n[i], intra.dm[1])
         y_work[i] = correctdrift(y_n[i], framenum_n[i], intra.dm[2])
-    end
-
-    @inbounds for i in 1:N_n
         data_combined[1, i] = x_work[i]
         data_combined[2, i] = y_work[i]
-    end
-    @inbounds for i in 1:N_ref
-        data_combined[1, N_n + i] = x_ref[i]
-        data_combined[2, N_n + i] = y_ref[i]
+        # ref columns (N_n+1 : end) were filled once by the caller and stay put
     end
 
     k = min(maxn, N_combined - 1)
 
-    current_drift = max_drift_magnitude(intra, nframes)
-    need_rebuild = state.allow_rebuild &&
-                   abs(current_drift - state.last_rebuild_drift) > state.rebuild_threshold
+    # Rebuild gating: vector delta of drift at [1, mid, end] frames. Catches
+    # same-magnitude direction/sign changes that the scalar max_drift_magnitude
+    # comparison would miss.
+    need_rebuild = false
+    if state.allow_rebuild
+        drift_vecs!(state.current_drift_vecs, intra, nframes)
+        need_rebuild = max_drift_vec_delta(state.current_drift_vecs, state.last_drift_vecs) > state.rebuild_threshold
+    end
 
     if need_rebuild
         kdtree = KDTree(data_combined; leafsize = 10)
@@ -342,7 +397,7 @@ function costfun_entropy_intra_2D_merged(θ,
                 state.neighbor_indices[j, i] = idx_i[j + 1]  # skip self
             end
         end
-        state.last_rebuild_drift = current_drift
+        state.last_drift_vecs .= state.current_drift_vecs
         state.rebuild_count += 1
     end
 
@@ -360,7 +415,8 @@ function costfun_entropy_intra_2D_merged(θ,
                 sxj, syj = σ_x_n[jj], σ_y_n[jj]
             else
                 ref_idx = jj - N_n
-                xj, yj = x_ref[ref_idx], y_ref[ref_idx]
+                xj = data_combined[1, jj]
+                yj = data_combined[2, jj]
                 sxj, syj = σ_x_ref[ref_idx], σ_y_ref[ref_idx]
             end
             state.kldiv[j] = -divKL_2D(xi, yi, sxi, syi, xj, yj, sxj, syj)
@@ -374,47 +430,43 @@ end
 
 """
 INTRA-ENTROPY merged-cloud (3D) — iteration 2+ intra fit against all datasets.
+
+Ref columns of `data_combined` filled once by caller (see 2D variant's docstring).
 """
 function costfun_entropy_intra_3D_merged(θ,
     x_n::Vector{T}, y_n::Vector{T}, z_n::Vector{T},
     σ_x_n::Vector{T}, σ_y_n::Vector{T}, σ_z_n::Vector{T},
     framenum_n::Vector{Int},
-    x_ref::Vector{T}, y_ref::Vector{T}, z_ref::Vector{T},
     σ_x_ref::Vector{T}, σ_y_ref::Vector{T}, σ_z_ref::Vector{T},
-    maxn::Int, intra::AbstractIntraDrift, nframes::Int;
+    maxn::Int, intra::AbstractIntraDrift, nframes::Int,
+    data_combined::Matrix{T},
+    state::NeighborState{T};
     x_work::Vector{T} = similar(x_n),
     y_work::Vector{T} = similar(y_n),
-    z_work::Vector{T} = similar(z_n),
-    data_combined::Matrix{T} = Matrix{T}(undef, 3, length(x_n) + length(x_ref)),
-    state::NeighborState{T}) where {T<:Real}
+    z_work::Vector{T} = similar(z_n)) where {T<:Real}
 
     theta2intra!(intra, θ)
     N_n = length(x_n)
-    N_ref = length(x_ref)
+    N_ref = length(σ_x_ref)
     N_combined = N_n + N_ref
 
     @inbounds for i in 1:N_n
         x_work[i] = correctdrift(x_n[i], framenum_n[i], intra.dm[1])
         y_work[i] = correctdrift(y_n[i], framenum_n[i], intra.dm[2])
         z_work[i] = correctdrift(z_n[i], framenum_n[i], intra.dm[3])
-    end
-
-    @inbounds for i in 1:N_n
         data_combined[1, i] = x_work[i]
         data_combined[2, i] = y_work[i]
         data_combined[3, i] = z_work[i]
-    end
-    @inbounds for i in 1:N_ref
-        data_combined[1, N_n + i] = x_ref[i]
-        data_combined[2, N_n + i] = y_ref[i]
-        data_combined[3, N_n + i] = z_ref[i]
+        # ref columns (N_n+1 : end) were filled once by caller
     end
 
     k = min(maxn, N_combined - 1)
 
-    current_drift = max_drift_magnitude(intra, nframes)
-    need_rebuild = state.allow_rebuild &&
-                   abs(current_drift - state.last_rebuild_drift) > state.rebuild_threshold
+    need_rebuild = false
+    if state.allow_rebuild
+        drift_vecs!(state.current_drift_vecs, intra, nframes)
+        need_rebuild = max_drift_vec_delta(state.current_drift_vecs, state.last_drift_vecs) > state.rebuild_threshold
+    end
 
     if need_rebuild
         kdtree = KDTree(data_combined; leafsize = 10)
@@ -426,7 +478,7 @@ function costfun_entropy_intra_3D_merged(θ,
                 state.neighbor_indices[j, i] = idx_i[j + 1]
             end
         end
-        state.last_rebuild_drift = current_drift
+        state.last_drift_vecs .= state.current_drift_vecs
         state.rebuild_count += 1
     end
 
@@ -444,7 +496,9 @@ function costfun_entropy_intra_3D_merged(θ,
                 sxj, syj, szj = σ_x_n[jj], σ_y_n[jj], σ_z_n[jj]
             else
                 ref_idx = jj - N_n
-                xj, yj, zj = x_ref[ref_idx], y_ref[ref_idx], z_ref[ref_idx]
+                xj = data_combined[1, jj]
+                yj = data_combined[2, jj]
+                zj = data_combined[3, jj]
                 sxj, syj, szj = σ_x_ref[ref_idx], σ_y_ref[ref_idx], σ_z_ref[ref_idx]
             end
             state.kldiv[j] = -divKL_3D(xi, yi, zi, sxi, syi, szi,

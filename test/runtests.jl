@@ -541,6 +541,38 @@ using Random
         @test info_roi3 isa DC.DriftInfo
     end
 
+    # ========== Vector-delta rebuild gating ==========
+    # Scalar max_drift_magnitude would miss a same-magnitude direction flip
+    # (e.g. +0.05 μm at the midpoint rotating to -0.05 μm). The vector-based
+    # gate must fire on that change.
+    @testset "Rebuild gating on same-magnitude direction change" begin
+        # Two drift-vector matrices with identical column magnitudes but
+        # flipped directions at the middle test frame. Delta norm is 0.11 μm
+        # at that column, exceeding the 0.1 μm threshold.
+        last    = [ 0.0  0.05  0.0;
+                    0.0  0.00  0.0]
+        current = [ 0.0 -0.06  0.0;
+                    0.0  0.00  0.0]
+        Δ = DC.max_drift_vec_delta(current, last)
+        @test Δ ≈ 0.11 atol=1e-12
+        @test Δ > 0.1  # triggers rebuild at default threshold
+
+        # Identical vectors → zero delta, no rebuild
+        @test DC.max_drift_vec_delta(last, last) == 0.0
+
+        # Translation (same direction, larger magnitude) still detected
+        current2 = [ 0.0  0.20  0.0;
+                     0.0  0.00  0.0]
+        @test DC.max_drift_vec_delta(current2, last) ≈ 0.15 atol=1e-12
+
+        # NeighborState constructor: last_drift_vecs initialised to +Inf so
+        # the first evaluation's delta is +Inf and forces a rebuild regardless
+        # of how small the actual drift is.
+        st = DC.NeighborState(10, 5, 0.1, 2)
+        cur = [0.0 0.0 0.0; 0.0 0.0 0.0]
+        @test DC.max_drift_vec_delta(cur, st.last_drift_vecs) == Inf
+    end
+
     # ========== Edge-case guards ==========
     @testset "Edge-case guards" begin
         # normalize_frame with n_frames=1 should not throw DivideError / DomainError
