@@ -151,14 +151,17 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
         driftmodel = LegendrePolynomial(smld_work; degree=degree)
     end
 
+    # Preserve warm-started intra coefficients by skipping random init in findintra!
+    skip_init = warm_start !== nothing
+
     # Dispatch to appropriate quality tier (using ROI-subsampled data for estimation)
     if quality == :fft
         result = _driftcorrect_fft!(driftmodel, smld_estimation, dataset_mode, verbose)
     elseif quality == :singlepass
-        result = _driftcorrect_singlepass!(driftmodel, smld_estimation, dataset_mode, maxn, verbose, shift_scale)
+        result = _driftcorrect_singlepass!(driftmodel, smld_estimation, dataset_mode, maxn, verbose, shift_scale; skip_init=skip_init)
     else  # :iterative
         result = _driftcorrect_iterative!(driftmodel, smld_estimation, dataset_mode, maxn,
-                                          max_iterations, convergence_tol, verbose, shift_scale)
+                                          max_iterations, convergence_tol, verbose, shift_scale; skip_init=skip_init)
     end
 
     # Apply corrections to get final SMLD
@@ -395,7 +398,8 @@ Matches original algorithm: intra first, then inter vs DS1, then inter vs earlie
 """
 function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
                                     dataset_mode::Symbol, maxn::Int, verbose::Int,
-                                    shift_scale::Float64=1.0)
+                                    shift_scale::Float64=1.0;
+                                    skip_init::Bool=false)
     if verbose > 0
         @info("SMLMDriftCorrection: singlepass mode")
     end
@@ -403,10 +407,11 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     # Step 1: Intra-dataset correction (same path for both modes)
     if model.intra[1].dm[1].degree > 0
         if verbose > 0
-            @info("SMLMDriftCorrection: starting intra-dataset correction")
+            @info("SMLMDriftCorrection: starting intra-dataset correction" *
+                  (skip_init ? " (warm-started, skipping random init)" : ""))
         end
         Threads.@threads for nn = 1:smld.n_datasets
-            findintra!(model.intra[nn], smld, nn, maxn)
+            findintra!(model.intra[nn], smld, nn, maxn; skip_init=skip_init)
         end
     else
         if verbose > 0
@@ -475,13 +480,14 @@ Iterative quality tier - full intra↔inter convergence loop.
 function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
                                    dataset_mode::Symbol, maxn::Int,
                                    max_iterations::Int, convergence_tol::Float64,
-                                   verbose::Int, shift_scale::Float64=1.0)
+                                   verbose::Int, shift_scale::Float64=1.0;
+                                   skip_init::Bool=false)
     if verbose > 0
         @info("SMLMDriftCorrection: iterative mode (max_iterations=$max_iterations, tol=$convergence_tol)")
     end
 
-    # First run singlepass to initialize
-    _driftcorrect_singlepass!(model, smld, dataset_mode, maxn, verbose, shift_scale)
+    # First run singlepass to initialize (preserves warm start when skip_init=true)
+    _driftcorrect_singlepass!(model, smld, dataset_mode, maxn, verbose, shift_scale; skip_init=skip_init)
 
     # Compute initial entropy
     smld_corrected = correctdrift(smld, model)
@@ -536,9 +542,11 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         inter_old = [copy(model.inter[n].dm) for n in 1:n_datasets]
 
         # Re-run intra with inter applied (shifted coordinates)
+        # skip_init=true: model already has coefficients from previous iteration/singlepass;
+        # re-randomizing would discard the progress we're trying to refine.
         smld_shifted = apply_inter_only(smld, model)
         Threads.@threads for nn = 1:n_datasets
-            findintra!(model.intra[nn], smld_shifted, nn, maxn)
+            findintra!(model.intra[nn], smld_shifted, nn, maxn; skip_init=true)
         end
 
         # Update inter-shifts

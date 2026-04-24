@@ -21,7 +21,13 @@ Each SMLD is assumed to be an independent acquisition of the same FOV/structure.
 Tuple `(aligned_smlds, info::AlignInfo)` where:
 - `aligned_smlds`: Vector of aligned SMLDs (first is unchanged)
 - `info.shifts[i]`: translation component for `smlds[i]` (`shifts[1]` = zeros)
-- `info.transforms[i]`: full transform (ShiftTransform or AffineTransform2D/3D)
+- `info.transforms[i]`: diagnostic transform (ShiftTransform for `:shift`; a similarity
+  fit `AffineTransform2D`/`AffineTransform3D` for `:affine`).
+- `info.diagnostic`: `nothing` for `:shift`; for `:affine` a NamedTuple with
+  `affine_coeffs[i] = (a, b, c, d, e, f)` and `global_shifts[i]` — the **exact**
+  per-dataset correction applied (summed across internal passes). The similarity
+  stored in `info.transforms[i]` is only a best-fit approximation of this general
+  affine.
 
 # Example
 ```julia
@@ -31,7 +37,8 @@ info.shifts  # [zeros(2), [dx2, dy2], [dx3, dy3], ...]
 
 # Affine (rotation + scale + translation)
 (aligned, info) = align_smld(smlds; transform=:affine)
-info.transforms[2]  # AffineTransform2D(θ, scale, tx, ty)
+info.transforms[2]        # AffineTransform2D(θ, scale, tx, ty) — similarity approximation
+info.diagnostic.affine_coeffs[2]  # (a, b, c, d, e, f) — actual correction applied
 ```
 """
 function align_smld(smlds::Vector{<:SMLD}; kwargs...)
@@ -97,7 +104,7 @@ function _align_shift(smlds, N, ndims_ref, config, t0)
     end
 
     transforms = AbstractAlignTransform[ShiftTransform(s) for s in shifts]
-    info = AlignInfo(shifts, transforms, elapsed, config.method, config.transform, :cpu)
+    info = AlignInfo(shifts, transforms, elapsed, config.method, config.transform, :cpu, nothing)
     return (aligned, info)
 end
 
@@ -114,6 +121,13 @@ function _align_affine_fft(smlds, N, ndims_ref, config, t0)
     transforms[1] = AffineTransform2D(0.0, 1.0, 0.0, 0.0)
     aligned = Vector{typeof(smlds[1])}(undef, N)
     aligned[1] = smlds[1]
+
+    # Record the exact affine correction actually applied per dataset, so callers
+    # can recover the full general affine (transforms[i] stores only a similarity fit).
+    affine_coeffs = Vector{NTuple{6, Float64}}(undef, N)
+    global_shifts = Vector{Vector{Float64}}(undef, N)
+    affine_coeffs[1] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    global_shifts[1] = zeros(ndims_ref)
 
     for i in 2:N
         # Pass 1: global shift + affine from shift field
@@ -151,14 +165,20 @@ function _align_affine_fft(smlds, N, ndims_ref, config, t0)
             println("  smlds[$i] pass2: rms=$(round(result2.rms_residual*1000; digits=1))nm")
         end
 
-        # Total shift at centroid
+        # Record the exact correction applied (sum of two passes)
+        total_a = a + a2; total_b = b + b2; total_c = c + c2
+        total_d = d + d2; total_e = e + e2; total_f = f + f2
+        total_global = result.global_shift .+ result2.global_shift
+        affine_coeffs[i] = (total_a, total_b, total_c, total_d, total_e, total_f)
+        global_shifts[i] = collect(total_global)
+
+        # Total shift at centroid (diagnostic similarity fit — independent x/y scale
+        # and shear from the general affine are not captured here).
         cx = mean(em.x for em in smlds[i].emitters)
         cy = mean(em.y for em in smlds[i].emitters)
-        gs = result.global_shift .+ result2.global_shift
-        total_a = a + a2; total_e = e + e2
-        shifts[i] = [gs[1] + a*cx + b*cy + c, gs[2] + d*cx + e*cy + f]
+        shifts[i] = [total_global[1] + a*cx + b*cy + c, total_global[2] + d*cx + e*cy + f]
 
-        θ_fit = atan(((d + d2) - (b + b2)) / 2)
+        θ_fit = atan((total_d - total_b) / 2)
         s_fit = sqrt(abs((1 + total_a) * (1 + total_e)))
         transforms[i] = AffineTransform2D(θ_fit, s_fit, shifts[i][1], shifts[i][2])
     end
@@ -166,7 +186,8 @@ function _align_affine_fft(smlds, N, ndims_ref, config, t0)
     elapsed = time() - t0
     config.verbose >= 1 && println("align_smld: aligned $N SMLDs (fft, affine) in $(round(elapsed; digits=2))s")
 
-    info = AlignInfo(shifts, transforms, elapsed, config.method, config.transform, :cpu)
+    diag = (affine_coeffs = affine_coeffs, global_shifts = global_shifts)
+    info = AlignInfo(shifts, transforms, elapsed, config.method, config.transform, :cpu, diag)
     return (aligned, info)
 end
 
@@ -258,7 +279,26 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
         myfun = θ -> entropy_cost(θ) + λ * sum((θ .- θ_cc).^2)
 
         opt = Optim.Options(iterations=10000, g_abstol=1e-8, show_trace=false)
-        res = optimize(myfun, θ_cc, BFGS(), opt)
+        # Deterministic objective for BFGS: freeze state during optimize, drive
+        # KDTree rebuilds from an outer loop (mirrors findinter!).
+        state.allow_rebuild = true
+        entropy_cost(θ_cc)
+        state.allow_rebuild = false
+
+        θ0 = copy(θ_cc)
+        local res
+        for _ in 1:3
+            res = optimize(myfun, θ0, BFGS(), opt)
+            θ0 = Float64.(res.minimizer)
+            Δ2 = 0.0
+            for dim in 1:ndims_ref
+                Δ2 += (θ0[dim] - state.last_shift[dim])^2
+            end
+            sqrt(Δ2) < state.rebuild_threshold && break
+            state.allow_rebuild = true
+            entropy_cost(θ0)
+            state.allow_rebuild = false
+        end
         shifts[i] = Float64.(res.minimizer)
     end
 end
