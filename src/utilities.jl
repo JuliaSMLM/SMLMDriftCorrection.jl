@@ -48,13 +48,22 @@ except the last which absorbs any remainder.
 If both are specified, `n_chunks` takes priority.
 """
 function compute_chunk_params(n_frames::Int; chunk_frames::Int=0, n_chunks::Int=0)
+    # Guards: absurd inputs (0-frame SMLDs, or n_chunks exceeding n_frames, or
+    # chunk_frames larger than the whole acquisition) used to produce 0-sized
+    # chunks and blow up downstream.
+    if n_frames <= 1
+        return (frames_per_chunk=max(n_frames, 1), n_chunks=1)
+    end
     if n_chunks > 0
-        # n_chunks specified: divide evenly
+        # Cap n_chunks at n_frames; each chunk must have at least 1 frame
+        n_chunks = min(n_chunks, n_frames)
         frames_per_chunk = n_frames ÷ n_chunks
         return (frames_per_chunk=frames_per_chunk, n_chunks=n_chunks)
     elseif chunk_frames > 0
-        # chunk_frames specified: compute n_chunks, then make equal
+        # Cap chunk_frames at n_frames, then derive n_chunks
+        chunk_frames = min(chunk_frames, n_frames)
         n_chunks = max(1, round(Int, n_frames / chunk_frames))
+        n_chunks = min(n_chunks, n_frames)
         frames_per_chunk = n_frames ÷ n_chunks
         return (frames_per_chunk=frames_per_chunk, n_chunks=n_chunks)
     else

@@ -25,12 +25,16 @@ mutable struct NeighborState{T<:Real}
     rebuild_count::Int                      # number of rebuilds (for diagnostics)
     k::Int                                  # number of neighbors
     kldiv::Vector{T}                        # pre-allocated divergence buffer (length k)
+    allow_rebuild::Bool                     # when false, cost fun sees a frozen objective
 end
 
 function NeighborState(N::Int, k::Int, rebuild_threshold::T) where {T<:Real}
     neighbor_indices = Matrix{Int}(undef, k, N)
     kldiv = Vector{T}(undef, k)
-    return NeighborState{T}(neighbor_indices, T(0), rebuild_threshold, 0, k, kldiv)
+    # Default allow_rebuild=true preserves legacy behavior for any external callers;
+    # findintra!/findinter! set this to false so each optimize() call sees a
+    # deterministic objective, and rebuilds are driven from an outer loop.
+    return NeighborState{T}(neighbor_indices, T(0), rebuild_threshold, 0, k, kldiv, true)
 end
 
 """
@@ -123,6 +127,7 @@ Check if neighbors need rebuilding based on drift magnitude change.
 function maybe_rebuild_neighbors!(state::NeighborState{T},
                                    x_work::Vector{T}, y_work::Vector{T},
                                    intra::AbstractIntraDrift, nframes::Int) where {T<:Real}
+    state.allow_rebuild || return
     current_drift = max_drift_magnitude(intra, nframes)
 
     if abs(current_drift - state.last_rebuild_drift) > state.rebuild_threshold
@@ -139,6 +144,7 @@ end
 function maybe_rebuild_neighbors!(state::NeighborState{T},
                                    x_work::Vector{T}, y_work::Vector{T}, z_work::Vector{T},
                                    intra::AbstractIntraDrift, nframes::Int) where {T<:Real}
+    state.allow_rebuild || return
     current_drift = max_drift_magnitude(intra, nframes)
 
     if abs(current_drift - state.last_rebuild_drift) > state.rebuild_threshold
@@ -288,18 +294,19 @@ mutable struct InterNeighborState{T<:Real}
     k::Int                                  # number of neighbors
     kldiv::Vector{T}                        # pre-allocated divergence buffer
     needs_initial_build::Bool               # true until first build
+    allow_rebuild::Bool                     # when false, cost fun sees a frozen objective
 end
 
 function InterNeighborState(N_n::Int, k::Int, rebuild_threshold::T) where {T<:Real}
     neighbor_indices = Matrix{Int}(undef, k, N_n)
     kldiv = Vector{T}(undef, k)
-    return InterNeighborState{T}(neighbor_indices, T[Inf, Inf], rebuild_threshold, 0, k, kldiv, true)
+    return InterNeighborState{T}(neighbor_indices, T[Inf, Inf], rebuild_threshold, 0, k, kldiv, true, true)
 end
 
 function InterNeighborState3D(N_n::Int, k::Int, rebuild_threshold::T) where {T<:Real}
     neighbor_indices = Matrix{Int}(undef, k, N_n)
     kldiv = Vector{T}(undef, k)
-    return InterNeighborState{T}(neighbor_indices, T[Inf, Inf, Inf], rebuild_threshold, 0, k, kldiv, true)
+    return InterNeighborState{T}(neighbor_indices, T[Inf, Inf, Inf], rebuild_threshold, 0, k, kldiv, true, true)
 end
 
 """
@@ -363,10 +370,14 @@ function costfun_entropy_inter_2D_merged(θ,
 
     k = min(maxn, N_combined - 1)
 
-    # Check if we need to rebuild neighbors
+    # Check if we need to rebuild neighbors.
+    # Initial build is always allowed; subsequent rebuilds only when state.allow_rebuild.
+    # findinter! freezes the state during optimize() and drives rebuilds from an outer loop
+    # to keep BFGS's view of the objective deterministic.
     need_rebuild = state === nothing ||
                    state.needs_initial_build ||
-                   sqrt((θ[1] - state.last_shift[1])^2 + (θ[2] - state.last_shift[2])^2) > state.rebuild_threshold
+                   (state.allow_rebuild &&
+                    sqrt((θ[1] - state.last_shift[1])^2 + (θ[2] - state.last_shift[2])^2) > state.rebuild_threshold)
 
     local idxs  # for stateless fallback
     if need_rebuild
@@ -461,10 +472,14 @@ function costfun_entropy_inter_3D_merged(θ,
 
     k = min(maxn, N_combined - 1)
 
-    # Check if we need to rebuild neighbors
+    # Check if we need to rebuild neighbors.
+    # Initial build is always allowed; subsequent rebuilds only when state.allow_rebuild.
+    # findinter! freezes the state during optimize() and drives rebuilds from an outer loop
+    # to keep BFGS's view of the objective deterministic.
     need_rebuild = state === nothing ||
                    state.needs_initial_build ||
-                   sqrt((θ[1] - state.last_shift[1])^2 + (θ[2] - state.last_shift[2])^2 + (θ[3] - state.last_shift[3])^2) > state.rebuild_threshold
+                   (state.allow_rebuild &&
+                    sqrt((θ[1] - state.last_shift[1])^2 + (θ[2] - state.last_shift[2])^2 + (θ[3] - state.last_shift[3])^2) > state.rebuild_threshold)
 
     local idxs
     if need_rebuild

@@ -30,9 +30,17 @@ end
 H_i(D) is the entropy of the distribution p(r), where
 D = {d(1),...,d(L)} is the drift at all frames (1 to L).
 The quantity below is Gaussian Mixture Model single components
-summed over all localizations provided.
+**summed** over all localizations provided (total Shannon entropy, not per-point).
 
 σ_x and σ_y are localization uncertainties.
+
+!!! warning "Scale note"
+    `entropy_HD` returns a sum of size ~N, while the neighbor divergence term
+    used in `entropy1_*`/`ub_entropy` is averaged per-localization (`out / N`).
+    The formula `entropy_HD - out/N` is therefore **dominated by the H(D) term**
+    as N grows — by design, since `entropy_HD` is θ-independent and is only a
+    constant offset for the optimizer. If you want a dataset-size-independent
+    number for diagnostics, divide by `length(σ_x)`.
 """
 function entropy_HD(σ_x::Vector{T}, σ_y::Vector{T}) where {T<:Real}
     c = T(0.5) * log(T(2) * T(π) * T(ℯ))
@@ -308,6 +316,10 @@ end
 
 """
 Entropy upper bound based on maxn nearest neighbors of each localization (2D).
+
+Returns `entropy_HD(σ_x, σ_y) - out/N`, where the first term is a **sum** over
+N localizations and the second is a per-localization average. The result scales
+with N through the `entropy_HD` term; divide by `length(x)` for per-locus bits.
 
 # Arguments
 - x, y: Vectors of localization positions
