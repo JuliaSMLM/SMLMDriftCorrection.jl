@@ -15,6 +15,7 @@
 using NearestNeighbors
 using Statistics
 using Printf
+using Random
 using SMLMData
 
 """
@@ -266,6 +267,148 @@ function pairdist_diagnostic(smld::SMLD;
         split_median_diff_nm = abs(odd.median_nm - even.median_nm),
         split_iqr_diff_nm    = abs(odd.iqr_nm - even.iqr_nm),
     ))
+end
+
+"""
+    nn_distances_per_emitter(smld; k=20, max_dist_um=0.05) -> Vector{Vector{Float64}}
+
+Per-emitter k-NN distance lists (one entry per emitter, length 0..k). The
+single KDTree query is the expensive step; storing per-emitter lists lets the
+paired bootstrap below resample emitters cheaply without rebuilding the tree.
+
+Self-match is excluded; entries are sorted ascending and capped at `max_dist_um`.
+"""
+function nn_distances_per_emitter(smld::SMLD; k::Int = 20, max_dist_um::Real = 0.05)
+    x = Float64[e.x for e in smld.emitters]
+    y = Float64[e.y for e in smld.emitters]
+    N = length(x)
+    out = [Float64[] for _ in 1:N]
+    N < 2 && return out
+
+    data = Matrix{Float64}(undef, 2, N)
+    @inbounds for i in 1:N
+        data[1, i] = x[i]; data[2, i] = y[i]
+    end
+    kdtree = KDTree(data; leafsize = 10)
+
+    kquery = min(k + 1, N)
+    idxs, dists = knn(kdtree, data, kquery, true)
+
+    @inbounds for i in 1:N
+        di = dists[i]
+        v = out[i]
+        sizehint!(v, kquery - 1)
+        for j in 2:length(di)  # skip self at index 1
+            d = di[j]
+            d > max_dist_um && break
+            push!(v, d)
+        end
+    end
+    return out
+end
+
+"""
+    _shape_stats_from_indexed(per_emit, idxs; max_um, tail_cutoffs_um, scratch=Float64[])
+
+Compute shape stats on the concatenation of per_emit[i] for i in idxs.
+Reuses `scratch` to amortise allocation across bootstrap draws.
+"""
+function _shape_stats_from_indexed(per_emit::Vector{Vector{Float64}}, idxs::AbstractVector{<:Integer};
+        max_um::Real = 0.05,
+        tail_cutoffs_um::Tuple = (0.025, 0.030, 0.035, 0.040),
+        scratch::Vector{Float64} = Float64[])
+    total = 0
+    @inbounds for i in idxs
+        total += length(per_emit[i])
+    end
+    resize!(scratch, total)
+    pos = 1
+    @inbounds for i in idxs
+        v = per_emit[i]
+        for d in v
+            scratch[pos] = d
+            pos += 1
+        end
+    end
+    return shape_stats(scratch; max_um = max_um, tail_cutoffs_um = tail_cutoffs_um)
+end
+
+"""
+    paired_bootstrap_compare(per_emit_a, per_emit_b; n_boot=500, seed=42, ...)
+
+Paired bootstrap (resample emitter indices) on the Δstats between two methods
+operating on the SAME raw input. Both `per_emit_*` arrays must be aligned
+(same length, same indexing). Returns CIs on Δmedian, ΔIQR, Δp90, Δp99, and
+Δtail30+ (method_b - method_a — positive Δ ⇒ method_a tighter on that stat).
+
+`n_boot` draws of N indices with replacement; quantiles 2.5/50/97.5%.
+"""
+function paired_bootstrap_compare(per_emit_a::Vector{Vector{Float64}},
+        per_emit_b::Vector{Vector{Float64}};
+        n_boot::Int = 500, seed::Int = 42,
+        max_um::Real = 0.05,
+        tail_cutoffs_um::Tuple = (0.025, 0.030, 0.035, 0.040))
+
+    N = length(per_emit_a)
+    @assert N == length(per_emit_b) "per_emit arrays must align (same N)"
+    rng = MersenneTwister(seed)
+
+    deltas_med    = Vector{Float64}(undef, n_boot)
+    deltas_iqr    = Vector{Float64}(undef, n_boot)
+    deltas_p90    = Vector{Float64}(undef, n_boot)
+    deltas_p99    = Vector{Float64}(undef, n_boot)
+    deltas_tail30 = Vector{Float64}(undef, n_boot)
+
+    scratch_a = Float64[]
+    scratch_b = Float64[]
+    idxs = Vector{Int}(undef, N)
+
+    for b in 1:n_boot
+        rand!(rng, idxs, 1:N)
+        sa = _shape_stats_from_indexed(per_emit_a, idxs;
+                max_um = max_um, tail_cutoffs_um = tail_cutoffs_um, scratch = scratch_a)
+        sb = _shape_stats_from_indexed(per_emit_b, idxs;
+                max_um = max_um, tail_cutoffs_um = tail_cutoffs_um, scratch = scratch_b)
+        # method_b - method_a so positive Δ means method_a is tighter
+        deltas_med[b]    = sb.median_nm - sa.median_nm
+        deltas_iqr[b]    = sb.iqr_nm    - sa.iqr_nm
+        deltas_p90[b]    = sb.p90_nm    - sa.p90_nm
+        deltas_p99[b]    = sb.p99_nm    - sa.p99_nm
+        deltas_tail30[b] = sb.tail_30_nm - sa.tail_30_nm
+    end
+
+    qci(v) = (lo = quantile(v, 0.025), med = quantile(v, 0.5), hi = quantile(v, 0.975))
+    return (
+        n_boot         = n_boot,
+        delta_median   = qci(deltas_med),
+        delta_iqr      = qci(deltas_iqr),
+        delta_p90      = qci(deltas_p90),
+        delta_p99      = qci(deltas_p99),
+        delta_tail30   = qci(deltas_tail30),
+    )
+end
+
+"""
+    print_paired_bootstrap_report(label_a, label_b, ci; α=0.05)
+
+Pretty-print paired CIs. Sign of `(ci.lo, ci.hi)`:
+  both negative ⇒ method_a (the first one) clearly tighter on this stat (CI doesn't cross zero)
+  both positive ⇒ method_b clearly tighter
+  spans zero    ⇒ within noise
+"""
+function print_paired_bootstrap_report(label_a::AbstractString, label_b::AbstractString, ci::NamedTuple)
+    println("=== paired Δ ($label_b − $label_a, B=$(ci.n_boot), 95% CI) ===")
+    function fmt(name, q)
+        marker = (q.lo > 0) ? "⇒ $label_a tighter" :
+                 (q.hi < 0) ? "⇒ $label_b tighter" : "(within noise)"
+        @printf("  Δ%-12s : %+7.3f  [%+7.3f, %+7.3f]  %s\n",
+                name, q.med, q.lo, q.hi, marker)
+    end
+    fmt("median",   ci.delta_median)
+    fmt("IQR",      ci.delta_iqr)
+    fmt("p90",      ci.delta_p90)
+    fmt("p99",      ci.delta_p99)
+    fmt("tail30+",  ci.delta_tail30)
 end
 
 """
