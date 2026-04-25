@@ -32,11 +32,17 @@ end
 Normalize frame number to [-1, 1] for Legendre polynomial evaluation.
 Frame 1 maps to -1, frame n_frames maps to +1.
 
-Note: If frame is outside [1, n_frames], the Legendre polynomial evaluation will
-throw a DomainError. This is intentional - it exposes bugs in frame assignment
-rather than hiding them with defensive clamping.
+Degenerate n_frames=1 (a single-frame acquisition) maps to t=0 (interval midpoint)
+since [-1, +1] collapses — without this guard the division by `n_frames - 1` would
+throw. Polynomials degree>0 evaluate to 0 at t=0 for odd basis functions, and to
+a constant for even ones, which is the sensible behaviour when no time axis exists.
+
+Note: If frame is outside [1, n_frames] (and n_frames > 1), the Legendre polynomial
+evaluation will throw a DomainError. This is intentional - it exposes bugs in frame
+assignment rather than hiding them with defensive clamping.
 """
 function normalize_frame(frame::Int, n_frames::Int)
+    n_frames <= 1 && return 0.0
     return 2 * (frame - 1) / (n_frames - 1) - 1
 end
 

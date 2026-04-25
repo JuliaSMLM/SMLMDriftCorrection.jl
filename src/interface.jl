@@ -151,14 +151,17 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
         driftmodel = LegendrePolynomial(smld_work; degree=degree)
     end
 
+    # Preserve warm-started intra coefficients by skipping random init in findintra!
+    skip_init = warm_start !== nothing
+
     # Dispatch to appropriate quality tier (using ROI-subsampled data for estimation)
     if quality == :fft
         result = _driftcorrect_fft!(driftmodel, smld_estimation, dataset_mode, verbose)
     elseif quality == :singlepass
-        result = _driftcorrect_singlepass!(driftmodel, smld_estimation, dataset_mode, maxn, verbose, shift_scale)
+        result = _driftcorrect_singlepass!(driftmodel, smld_estimation, dataset_mode, maxn, verbose, shift_scale; skip_init=skip_init)
     else  # :iterative
         result = _driftcorrect_iterative!(driftmodel, smld_estimation, dataset_mode, maxn,
-                                          max_iterations, convergence_tol, verbose, shift_scale)
+                                          max_iterations, convergence_tol, verbose, shift_scale; skip_init=skip_init)
     end
 
     # Apply corrections to get final SMLD
@@ -395,7 +398,8 @@ Matches original algorithm: intra first, then inter vs DS1, then inter vs earlie
 """
 function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
                                     dataset_mode::Symbol, maxn::Int, verbose::Int,
-                                    shift_scale::Float64=1.0)
+                                    shift_scale::Float64=1.0;
+                                    skip_init::Bool=false)
     if verbose > 0
         @info("SMLMDriftCorrection: singlepass mode")
     end
@@ -403,10 +407,11 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     # Step 1: Intra-dataset correction (same path for both modes)
     if model.intra[1].dm[1].degree > 0
         if verbose > 0
-            @info("SMLMDriftCorrection: starting intra-dataset correction")
+            @info("SMLMDriftCorrection: starting intra-dataset correction" *
+                  (skip_init ? " (warm-started, skipping random init)" : ""))
         end
         Threads.@threads for nn = 1:smld.n_datasets
-            findintra!(model.intra[nn], smld, nn, maxn)
+            findintra!(model.intra[nn], smld, nn, maxn; skip_init=skip_init)
         end
     else
         if verbose > 0
@@ -475,13 +480,14 @@ Iterative quality tier - full intra↔inter convergence loop.
 function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
                                    dataset_mode::Symbol, maxn::Int,
                                    max_iterations::Int, convergence_tol::Float64,
-                                   verbose::Int, shift_scale::Float64=1.0)
+                                   verbose::Int, shift_scale::Float64=1.0;
+                                   skip_init::Bool=false)
     if verbose > 0
         @info("SMLMDriftCorrection: iterative mode (max_iterations=$max_iterations, tol=$convergence_tol)")
     end
 
-    # First run singlepass to initialize
-    _driftcorrect_singlepass!(model, smld, dataset_mode, maxn, verbose, shift_scale)
+    # First run singlepass to initialize (preserves warm start when skip_init=true)
+    _driftcorrect_singlepass!(model, smld, dataset_mode, maxn, verbose, shift_scale; skip_init=skip_init)
 
     # Compute initial entropy
     smld_corrected = correctdrift(smld, model)
@@ -532,13 +538,147 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
     for iter = 1:max_iterations
         iteration += 1
 
-        # Store current inter-shifts
+        # Snapshot BOTH inter-shifts and intra drift vectors at [1, mid, end]
+        # before the pass. Convergence check below uses the max of their deltas,
+        # because the merged-cloud intra can move intra materially and inter-only
+        # convergence would declare convergence prematurely.
         inter_old = [copy(model.inter[n].dm) for n in 1:n_datasets]
+        intra_old_vecs = [Matrix{Float64}(undef, n_dims, 3) for _ in 1:n_datasets]
+        for n in 1:n_datasets
+            drift_vecs!(intra_old_vecs[n], model.intra[n], smld.n_frames)
+        end
 
-        # Re-run intra with inter applied (shifted coordinates)
+        # Re-run intra with inter applied (shifted coordinates).
+        # skip_init=true: model already has coefficients from previous iteration/singlepass;
+        # re-randomizing would discard the progress we're trying to refine.
+        #
+        # Merged-cloud intra: in iteration 2+ the inter model is populated, so every
+        # dataset has a fully-corrected snapshot available. Pass the other datasets'
+        # corrected coords as `ref_coords` — intra now fits against the same structural
+        # scaffold that findinter! uses, which breaks the intra ↔ inter limit cycle
+        # that blocks convergence on cells with small inter-shifts.
+        #
+        # Memory: we pass ONE set of full arrays (no per-dataset mask copies). Each
+        # findintra! thread filters inline and allocates only the ref-filtered σ
+        # arrays + data_combined it actually uses.
         smld_shifted = apply_inter_only(smld, model)
+        smld_full = correctdrift(smld, model)
+        x_all   = Float64[e.x   for e in smld_full.emitters]
+        y_all   = Float64[e.y   for e in smld_full.emitters]
+        σ_x_all = Float64[e.σ_x for e in smld_full.emitters]
+        σ_y_all = Float64[e.σ_y for e in smld_full.emitters]
+        ds_all  = Int[e.dataset for e in smld_full.emitters]
+        z_all   = n_dims == 3 ? Float64[e.z   for e in smld_full.emitters] : Float64[]
+        σ_z_all = n_dims == 3 ? Float64[e.σ_z for e in smld_full.emitters] : Float64[]
+
+        # :continuous mode: compute soft endpoint prior for each chunk's intra fit.
+        # Formulation is in TOTAL-DRIFT coordinates (matches findinter/warmstart
+        # semantics). For chunk n, the total drift at frame f is `inter[n] + intra[n](f)`.
+        # Continuity says drift at chunk n's first frame should equal drift at chunk
+        # n-1's last frame. During the intra fit for chunk n, inter[n] is held at its
+        # current value — so expressing the prior as "target for intra[n](1)" means
+        # `target = total_end_{n-1} - inter[n]` where `total_end_{n-1} = inter[n-1] +
+        # intra[n-1](N_frames)`. Analogous for the endpoint.
+        #
+        # λ scale: the θ-dependent entropy cost is `entropy_HD - out/N_n` where
+        # entropy_HD is θ-independent and `out/N_n` is per-locus averaged. So the
+        # θ-varying part is O(1) per evaluation, not O(N_n). The prior is also O(1)
+        # per endpoint, so using `λ = 1/σ²` with σ from _estimate_continuous_lambda
+        # (typical boundary-gap uncertainty, few nm) puts a ~1-unit penalty at the
+        # σ level and a ~10-100× penalty at 10-100 nm deviation — comparable to
+        # per-iteration entropy changes. We do NOT divide λ by N_n: the prior lives
+        # at the same scale as the optimization-relevant entropy term.
+        #
+        # Without this prior, merged-cloud intra on sparse data can drift into
+        # polynomials whose endpoints don't match the warmstart chain, producing
+        # DS7-style chunk-boundary blow-ups (see hs-tirf Gattaquant stress test).
+        boundary_priors = nothing
+        if dataset_mode == :continuous
+            λ_boundary = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
+            start_targets = Vector{Union{Nothing, Vector{Float64}}}(undef, n_datasets)
+            end_targets   = Vector{Union{Nothing, Vector{Float64}}}(undef, n_datasets)
+            for n in 1:n_datasets
+                # Startpoint target: target value for intra[n](1).
+                # Chunk 1 anchors origin — total drift at (DS=1, frame=1) = 0 after
+                # normalization, so intra[1](1) ≈ -inter[1].
+                if n == 1
+                    start_targets[1] = [-model.inter[1].dm[d] for d in 1:n_dims]
+                else
+                    # total_end_{n-1} = inter[n-1] + intra[n-1](N);  target for
+                    # intra[n](1) is total_end_{n-1} - inter[n].
+                    start_targets[n] = [model.inter[n-1].dm[d] +
+                                        evaluate_at_frame(model.intra[n-1].dm[d], smld.n_frames) -
+                                        model.inter[n].dm[d]
+                                        for d in 1:n_dims]
+                end
+                # Endpoint target: target value for intra[n](N). No constraint for
+                # the last chunk (nothing to chain into).
+                if n == n_datasets
+                    end_targets[n] = nothing
+                else
+                    # total_start_{n+1} = inter[n+1] + intra[n+1](1);  target for
+                    # intra[n](N) is total_start_{n+1} - inter[n].
+                    end_targets[n] = [model.inter[n+1].dm[d] +
+                                      evaluate_at_frame(model.intra[n+1].dm[d], 1) -
+                                      model.inter[n].dm[d]
+                                      for d in 1:n_dims]
+                end
+            end
+            boundary_priors = (start_targets = start_targets,
+                               end_targets = end_targets,
+                               λ = λ_boundary)
+        end
+
         Threads.@threads for nn = 1:n_datasets
-            findintra!(model.intra[nn], smld_shifted, nn, maxn)
+            ref = if n_dims == 2
+                (x_all = x_all, y_all = y_all,
+                 σ_x_all = σ_x_all, σ_y_all = σ_y_all,
+                 ds_all = ds_all, exclude_dataset = nn)
+            else
+                (x_all = x_all, y_all = y_all, z_all = z_all,
+                 σ_x_all = σ_x_all, σ_y_all = σ_y_all, σ_z_all = σ_z_all,
+                 ds_all = ds_all, exclude_dataset = nn)
+            end
+            prior = if boundary_priors === nothing
+                nothing
+            else
+                (start_target = boundary_priors.start_targets[nn],
+                 end_target   = boundary_priors.end_targets[nn],
+                 λ            = boundary_priors.λ)
+            end
+            findintra!(model.intra[nn], smld_shifted, nn, maxn;
+                       skip_init=true, ref_coords=ref, boundary_prior=prior)
+        end
+
+        # :continuous diagnostic: after the intra pass, report the residual
+        # boundary gaps in nm — max across chunks and per-chunk list if verbose≥2.
+        # A well-controlled run should show residuals of O(σ_endpoint) ≈ few nm.
+        # Large sustained residuals on one boundary indicate the prior is being
+        # overruled by the entropy cost (e.g. DS6→DS7 of hs-tirf in the
+        # pre-prior run showed ~1900 nm gaps).
+        if dataset_mode == :continuous && verbose > 0
+            max_gap_nm = 0.0
+            worst_boundary = 0
+            for n in 1:(n_datasets - 1)
+                gap2 = 0.0
+                for d in 1:n_dims
+                    end_n = model.inter[n].dm[d] +
+                            evaluate_at_frame(model.intra[n].dm[d], smld.n_frames)
+                    start_np1 = model.inter[n+1].dm[d] +
+                                evaluate_at_frame(model.intra[n+1].dm[d], 1)
+                    gap2 += (start_np1 - end_n)^2
+                end
+                gap_nm = 1000 * sqrt(gap2)
+                if gap_nm > max_gap_nm
+                    max_gap_nm = gap_nm
+                    worst_boundary = n
+                end
+                if verbose > 1
+                    @info("SMLMDriftCorrection: boundary $(n)→$(n+1) gap = $(round(gap_nm, digits=2)) nm")
+                end
+            end
+            @info("SMLMDriftCorrection: iter $iteration continuous-boundary max gap " *
+                  "= $(round(max_gap_nm, digits=2)) nm at DS$(worst_boundary)→DS$(worst_boundary+1)")
         end
 
         # Update inter-shifts
@@ -580,17 +720,34 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         current_entropy = _compute_entropy(smld_corrected, maxn)
         push!(history, current_entropy)
 
-        # Check convergence
-        max_change = _max_inter_change(inter_old, model.inter)
+        # Convergence criterion now considers BOTH inter-shift movement and
+        # intra drift-vector movement at test frames [1, mid, end]. Declaring
+        # convergence on inter-only lets the merged-cloud intra sneak through
+        # with material intra drift still in flight. Log the two components
+        # separately so reports can show whether convergence is joint.
+        inter_delta = _max_inter_change(inter_old, model.inter)
+        intra_delta = 0.0
+        scratch = Matrix{Float64}(undef, n_dims, 3)
+        for n in 1:n_datasets
+            drift_vecs!(scratch, model.intra[n], smld.n_frames)
+            d = max_drift_vec_delta(scratch, intra_old_vecs[n])
+            if d > intra_delta
+                intra_delta = d
+            end
+        end
+        max_change = max(inter_delta, intra_delta)
 
         if verbose > 0
-            @info("SMLMDriftCorrection: iteration $iteration, entropy=$current_entropy, max_shift_change=$max_change")
+            @info("SMLMDriftCorrection: iteration $iteration, entropy=$current_entropy, " *
+                  "max_shift_change=$max_change (inter=$(round(inter_delta, sigdigits=3)) " *
+                  "intra=$(round(intra_delta, sigdigits=3)))")
         end
 
         if max_change < convergence_tol
             converged = true
             if verbose > 0
-                @info("SMLMDriftCorrection: converged after $iteration iterations")
+                @info("SMLMDriftCorrection: converged after $iteration iterations " *
+                      "(inter=$(round(inter_delta, sigdigits=3)), intra=$(round(intra_delta, sigdigits=3)))")
             end
             break
         end
