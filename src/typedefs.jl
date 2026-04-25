@@ -23,6 +23,15 @@ end
 2D similarity transform: rotation + uniform scale + translation.
 Parameters: [θ_rot, scale, tx, ty]
 Transform: [x'; y'] = s * R(θ) * [x; y] + [tx; ty]
+
+!!! note "align_smld(..., transform=:affine) stores an approximation"
+    `align_smld` with `transform=:affine` applies a **general** 2D affine
+    correction recovered from a grid of local CC shifts (independent x/y
+    scale + shear is possible), and then reports a best-fit similarity in
+    `info.transforms[i]`. The exact per-dataset 6-parameter affine that was
+    applied is available in `info.diagnostic.affine_coeffs[i]` as
+    `(a, b, c, d, e, f)`, representing the correction
+    `Δx = a·x + b·y + c, Δy = d·x + e·y + f`.
 """
 struct AffineTransform2D <: AbstractAlignTransform
     θ::Float64       # rotation angle (radians)
@@ -188,11 +197,14 @@ Result metadata from `align_smld`.
 
 # Fields
 - `shifts::Vector{Vector{Float64}}`: Recovered shift for each SMLD (shifts[1] = zeros)
-- `transforms::Vector{<:AbstractAlignTransform}`: Full transform for each SMLD (ShiftTransform for :shift, AffineTransform2D/3D for :affine)
+- `transforms::Vector{<:AbstractAlignTransform}`: Full transform for each SMLD (ShiftTransform for :shift, AffineTransform2D/3D for :affine). For `transform=:affine` this is a **similarity-best-fit approximation** of the general affine that was actually applied — the exact coefficients live in `diagnostic`.
 - `elapsed_s::Float64`: Wall time in seconds
 - `method::Symbol`: Method used (`:entropy` or `:fft`)
 - `transform::Symbol`: Transform model used (`:shift` or `:affine`)
 - `backend::Symbol`: Computation backend (`:cpu`)
+- `diagnostic::Union{Nothing, NamedTuple}`: Extra per-dataset information. `nothing` for pure shift alignment. For `transform=:affine`, a NamedTuple with:
+    - `affine_coeffs::Vector{NTuple{6,Float64}}`: per-dataset `(a, b, c, d, e, f)` such that the applied correction was `x -> x - (a·x + b·y + c)`, `y -> y - (d·x + e·y + f)` (summed over the two refinement passes).
+    - `global_shifts::Vector{Vector{Float64}}`: per-dataset global shift applied before the affine correction (summed over both passes).
 """
 struct AlignInfo <: AbstractSMLMInfo
     shifts::Vector{Vector{Float64}}
@@ -201,4 +213,5 @@ struct AlignInfo <: AbstractSMLMInfo
     method::Symbol
     transform::Symbol
     backend::Symbol
+    diagnostic::Union{Nothing, NamedTuple}
 end

@@ -533,21 +533,28 @@ function findshift_damped(smld1::T, smld2::T;
     # Convert prior_shift to pixel coordinates
     prior_px = prior_shift ./ histbinsize
 
-    # Apply Gaussian damping centered at prior_shift
+    # Apply Gaussian damping centered at the CC peak implied by prior_shift.
+    # Shift convention here is `shift = center - peak`, so for a given prior_shift
+    # the implied peak sits at pixel index (mid - prior_px). The Gaussian weight at
+    # pixel (i, j) must measure distance to that peak:
+    #     d = (i - mid) - (-prior_px) = (i - mid) + prior_px
+    # Guard against prior_sigma <= 0 or histbinsize extremes that would give σ_px = 0
+    # (Gaussian would collapse to a delta and zero the entire CC).
     σ_px = prior_sigma / histbinsize
+    σ_px = max(σ_px, one(σ_px))  # at least 1 pixel worth of tolerance
     if n_dims == 2
         for j in 1:size(cc, 2), i in 1:size(cc, 1)
-            di = (i - mid1) - prior_px[1]
-            dj = (j - mid2) - prior_px[2]
+            di = (i - mid1) + prior_px[1]
+            dj = (j - mid2) + prior_px[2]
             weight = exp(-(di^2 + dj^2) / (2 * σ_px^2))
             cc[i, j] *= weight
         end
     else  # 3D
         mid3 = size(cc, 3) ÷ 2 + 1
         for k in 1:size(cc, 3), j in 1:size(cc, 2), i in 1:size(cc, 1)
-            di = (i - mid1) - prior_px[1]
-            dj = (j - mid2) - prior_px[2]
-            dk = (k - mid3) - (length(prior_shift) > 2 ? prior_px[3] : 0.0)
+            di = (i - mid1) + prior_px[1]
+            dj = (j - mid2) + prior_px[2]
+            dk = (k - mid3) + (length(prior_shift) > 2 ? prior_px[3] : 0.0)
             weight = exp(-(di^2 + dj^2 + dk^2) / (2 * σ_px^2))
             cc[i, j, k] *= weight
         end
