@@ -67,9 +67,9 @@ function run_hstirf_arbitration(;
         results[q] = r
 
         d = pairdist_diagnostic(r.smld_corrected;
+                k               = 20,
                 max_dist_um     = 0.05,
-                peak_window_um  = (0.012, 0.035),
-                tail_cutoff_um  = 0.030,
+                tail_cutoffs_um = (0.025, 0.030, 0.035, 0.040),
                 split_half      = true)
         diags[q] = d
     end
@@ -85,17 +85,20 @@ function run_hstirf_arbitration(;
 
     if length(diags) >= 2
         ks = collect(keys(diags))
-        # Side-by-side compact summary
+        # Side-by-side compact summary (smaller = better for all numeric columns)
         println("\n" * "=" ^ 72)
-        println("SUMMARY (smaller is better for IQR / tail / split-half-Δ)")
+        println("SUMMARY (smaller = better for all columns)")
         println("=" ^ 72)
-        @printf("  %-14s  %8s  %8s  %8s  %8s  %12s\n",
-                "tier", "peak_nm", "IQR_nm", "std_nm", "tail_30+", "splitΔ_nm")
+        @printf("  %-14s  %7s  %7s  %7s  %7s  %7s  %7s  %9s  %9s\n",
+                "tier", "med_nm", "IQR_nm", "std_nm", "p90_nm", "p99_nm",
+                "tail30+", "Δmed_nm", "ΔIQR_nm")
         for q in ks
             d = diags[q]
-            @printf("  %-14s  %8.2f  %8.2f  %8.2f  %8.4f  %12.2f\n",
-                    string(q), d.peak_nm, d.iqr_nm, d.std_nm, d.tail_fraction,
-                    haskey(d, :split_peak_diff_nm) ? d.split_peak_diff_nm : NaN)
+            sm = haskey(d, :split_median_diff_nm) ? d.split_median_diff_nm : NaN
+            si = haskey(d, :split_iqr_diff_nm)    ? d.split_iqr_diff_nm    : NaN
+            @printf("  %-14s  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.4f  %9.3f  %9.3f\n",
+                    string(q), d.median_nm, d.iqr_nm, d.std_nm,
+                    d.p90_nm, d.p99_nm, d.tail_30_nm, sm, si)
         end
     end
 
