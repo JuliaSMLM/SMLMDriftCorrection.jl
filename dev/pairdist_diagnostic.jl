@@ -18,14 +18,57 @@ using Printf
 using SMLMData
 
 """
+    nn_pair_distances(smld; k=20, max_dist_um=0.05) -> Vector{Float64}
+
+For each emitter, collect at most `k` nearest neighbours within `max_dist_um`
+(μm). Returns the union of those NN distances (one entry per emitter–neighbour
+edge — every edge counted twice since both endpoints contribute, but cluster
+occupancy bias is removed: dense rulers no longer dominate the histogram with
+quadratic pair counts).
+
+This is the v2 metric. v1 (`pair_distances`) returned every within-radius
+pair, which weights bright clusters by N² and biases the distribution toward
+within-site distances. v2 weights every emitter equally.
+"""
+function nn_pair_distances(smld::SMLD; k::Int = 20, max_dist_um::Real = 0.05)
+    x = Float64[e.x for e in smld.emitters]
+    y = Float64[e.y for e in smld.emitters]
+    N = length(x)
+    if N < 2
+        return Float64[]
+    end
+    data = Matrix{Float64}(undef, 2, N)
+    @inbounds for i in 1:N
+        data[1, i] = x[i]
+        data[2, i] = y[i]
+    end
+    kdtree = KDTree(data; leafsize = 10)
+
+    # Ask for k+1 NN (first is self), then drop self and any neighbour beyond
+    # max_dist. We use knn (sorted=true) rather than inrange so we cap the
+    # per-emitter contribution at k regardless of cluster density.
+    kquery = min(k + 1, N)
+    idxs, dists = knn(kdtree, data, kquery, true)
+    out = Float64[]
+    sizehint!(out, N * k)
+    @inbounds for i in 1:N
+        di = dists[i]
+        # di[1] is the self-match (distance 0). Skip it.
+        for j in 2:length(di)
+            d = di[j]
+            d > max_dist_um && break  # sorted, so no further entries qualify
+            push!(out, d)
+        end
+    end
+    return out
+end
+
+"""
     pair_distances(smld; max_dist_um=0.05) -> Vector{Float64}
 
-Return all unique within-radius pairwise distances (μm) in `smld`. Pairs are
-collected via KDTree radius search; each pair counted once (i<j).
-
-`max_dist_um` controls the search radius. 50 nm is a good default for 20 nm
-nanorulers (captures the within-cluster 20 nm signal and a little
-between-cluster background).
+v1 variant — every unique within-radius pair (i<j) collected via KDTree radius
+search. Kept for back-compat / contrast with v2 nn_pair_distances. Biased by
+cluster occupancy: pairs grow as N² within dense rulers.
 """
 function pair_distances(smld::SMLD; max_dist_um::Real = 0.05)
     x = Float64[e.x for e in smld.emitters]
@@ -140,75 +183,113 @@ function split_by_frame_parity(smld::SMLD)
 end
 
 """
-    pairdist_diagnostic(smld; max_dist_um=0.05, peak_window_um=(0.012, 0.035),
-                              tail_cutoff_um=0.030, split_half=true)
+    shape_stats(distances; max_um=0.05, tail_cutoffs_um=(0.025, 0.030, 0.035, 0.040))
 
-Return a NamedTuple with peak stats, tail fraction, and (optionally)
-odd/even split-half consistency for the same metrics. Higher peak n with
-narrower IQR / std and lower tail fraction → tighter reconstruction. Split-half
-agreement on `peak_nm` indicates drift correction is consistent across frames.
+Robust shape stats for a pair-distance set, no peak-finder, no model
+assumptions. Reports:
+- `n`: pairs ≤ max_um
+- `median_nm`, `mean_nm`
+- `iqr_nm`, `std_nm`
+- `p90_nm`, `p99_nm`
+- `tail_NN_nm`: fraction of (0, max_um] mass beyond `NN` nm, one entry per
+  cutoff in `tail_cutoffs_um`.
+
+For data dominated by within-site Rayleigh noise + between-site Rice signal,
+two drift methods that find different optima will produce the same Rayleigh
+component but different Rice tails — the shape stats catch the difference
+without trying to localise a noise-broadened peak.
+"""
+function shape_stats(distances::Vector{<:Real};
+        max_um::Real = 0.05,
+        tail_cutoffs_um::Tuple = (0.025, 0.030, 0.035, 0.040))
+    in_range = filter(d -> 0 < d <= max_um, distances)
+    n = length(in_range)
+    if n == 0
+        zeros_nt = NamedTuple{Tuple([Symbol(:tail_, round(Int, c*1000), :_nm) for c in tail_cutoffs_um])}(
+                    ntuple(_ -> NaN, length(tail_cutoffs_um)))
+        return merge((n=0, median_nm=NaN, mean_nm=NaN, iqr_nm=NaN,
+                     std_nm=NaN, p90_nm=NaN, p99_nm=NaN), zeros_nt)
+    end
+    base = (
+        n         = n,
+        median_nm = 1000 * median(in_range),
+        mean_nm   = 1000 * mean(in_range),
+        iqr_nm    = 1000 * (quantile(in_range, 0.75) - quantile(in_range, 0.25)),
+        std_nm    = 1000 * std(in_range),
+        p90_nm    = 1000 * quantile(in_range, 0.90),
+        p99_nm    = 1000 * quantile(in_range, 0.99),
+    )
+    tails = NamedTuple{Tuple([Symbol(:tail_, round(Int, c*1000), :_nm) for c in tail_cutoffs_um])}(
+        Tuple(count(d -> d > c, in_range) / n for c in tail_cutoffs_um))
+    return merge(base, tails)
+end
+
+"""
+    pairdist_diagnostic(smld; k=20, max_dist_um=0.05, split_half=true)
+
+v2 diagnostic: k-NN-per-emitter pair distances (cancels cluster-occupancy
+bias) + robust shape stats over a wider window (no peak finder). Optionally
+odd/even frame-parity split-half on the same stats.
+
+Default `k=20` covers a typical full ruler (locs from both binding sites)
+without spilling into neighbouring rulers at hs-tirf density. Adjust if your
+data is sparser/denser. Same-input cross-method comparison: tighter
+reconstruction → smaller median/IQR/tail; better drift consistency → smaller
+split-half difference on those stats.
 """
 function pairdist_diagnostic(smld::SMLD;
+        k::Int = 20,
         max_dist_um::Real = 0.05,
-        peak_window_um::Tuple{<:Real,<:Real} = (0.012, 0.035),
-        tail_cutoff_um::Real = 0.030,
+        tail_cutoffs_um::Tuple = (0.025, 0.030, 0.035, 0.040),
         split_half::Bool = true)
 
-    full_d = pair_distances(smld; max_dist_um = max_dist_um)
-    full_stats = peak_stats(full_d; window_um = peak_window_um)
-    full_tail  = tail_fraction(full_d; cutoff_um = tail_cutoff_um, max_um = max_dist_um)
-
-    base = (
-        n_pairs        = length(full_d),
-        peak_nm        = full_stats.peak_nm,
-        median_nm      = full_stats.median_nm,
-        mean_nm        = full_stats.mean_nm,
-        iqr_nm         = full_stats.iqr_nm,
-        std_nm         = full_stats.std_nm,
-        in_window_n    = full_stats.n,
-        tail_fraction  = full_tail,
-    )
+    full_d   = nn_pair_distances(smld; k = k, max_dist_um = max_dist_um)
+    full     = shape_stats(full_d; max_um = max_dist_um, tail_cutoffs_um = tail_cutoffs_um)
+    base = merge((variant = :v2_nn, k = k), full)
 
     if !split_half
         return base
     end
 
     smld_odd, smld_even = split_by_frame_parity(smld)
-    odd_d  = pair_distances(smld_odd;  max_dist_um = max_dist_um)
-    even_d = pair_distances(smld_even; max_dist_um = max_dist_um)
-    odd_stats  = peak_stats(odd_d;  window_um = peak_window_um)
-    even_stats = peak_stats(even_d; window_um = peak_window_um)
+    odd_d  = nn_pair_distances(smld_odd;  k = k, max_dist_um = max_dist_um)
+    even_d = nn_pair_distances(smld_even; k = k, max_dist_um = max_dist_um)
+    odd  = shape_stats(odd_d;  max_um = max_dist_um, tail_cutoffs_um = tail_cutoffs_um)
+    even = shape_stats(even_d; max_um = max_dist_um, tail_cutoffs_um = tail_cutoffs_um)
     return merge(base, (
-        odd_peak_nm    = odd_stats.peak_nm,
-        odd_iqr_nm     = odd_stats.iqr_nm,
-        odd_n          = odd_stats.n,
-        even_peak_nm   = even_stats.peak_nm,
-        even_iqr_nm    = even_stats.iqr_nm,
-        even_n         = even_stats.n,
-        split_peak_diff_nm = abs(odd_stats.peak_nm - even_stats.peak_nm),
+        odd_median_nm  = odd.median_nm,
+        odd_iqr_nm     = odd.iqr_nm,
+        odd_n          = odd.n,
+        even_median_nm = even.median_nm,
+        even_iqr_nm    = even.iqr_nm,
+        even_n         = even.n,
+        split_median_diff_nm = abs(odd.median_nm - even.median_nm),
+        split_iqr_diff_nm    = abs(odd.iqr_nm - even.iqr_nm),
     ))
 end
 
 """
     print_pairdist_report(label, diag)
 
-Pretty-print a diagnostic NamedTuple alongside a method label.
+Pretty-print a v2 diagnostic NamedTuple alongside a method label.
 """
 function print_pairdist_report(label::AbstractString, diag::NamedTuple)
     println("=== $label ===")
-    @printf("  pairs <50nm                 : %d\n", diag.n_pairs)
-    @printf("  20nm peak window pairs       : %d\n", diag.in_window_n)
-    @printf("  peak position                : %6.2f nm  (target 20.00)\n", diag.peak_nm)
-    @printf("  median (in window)           : %6.2f nm\n", diag.median_nm)
-    @printf("  IQR  (in window)             : %6.2f nm  (smaller = tighter)\n", diag.iqr_nm)
-    @printf("  std  (in window)             : %6.2f nm\n", diag.std_nm)
-    @printf("  tail fraction (>30nm)        : %6.4f    (smaller = less smear)\n", diag.tail_fraction)
-    if haskey(diag, :odd_peak_nm)
-        @printf("  split-half odd  peak/IQR     : %5.2f / %5.2f nm  (n=%d)\n",
-                diag.odd_peak_nm, diag.odd_iqr_nm, diag.odd_n)
-        @printf("  split-half even peak/IQR     : %5.2f / %5.2f nm  (n=%d)\n",
-                diag.even_peak_nm, diag.even_iqr_nm, diag.even_n)
-        @printf("  split-half peak Δ            : %6.2f nm  (smaller = consistent)\n",
-                diag.split_peak_diff_nm)
+    @printf("  k-NN pairs (k=%d, ≤50nm)       : %d\n", diag.k, diag.n)
+    @printf("  median                       : %6.2f nm\n", diag.median_nm)
+    @printf("  IQR                          : %6.2f nm  (smaller = tighter)\n", diag.iqr_nm)
+    @printf("  std                          : %6.2f nm\n", diag.std_nm)
+    @printf("  p90 / p99                    : %6.2f / %6.2f nm\n", diag.p90_nm, diag.p99_nm)
+    if haskey(diag, :tail_25_nm)
+        @printf("  tail fractions               : >25nm %.4f  >30nm %.4f  >35nm %.4f  >40nm %.4f\n",
+                diag.tail_25_nm, diag.tail_30_nm, diag.tail_35_nm, diag.tail_40_nm)
+    end
+    if haskey(diag, :odd_median_nm)
+        @printf("  split-half odd  median/IQR   : %5.2f / %5.2f nm  (n=%d)\n",
+                diag.odd_median_nm, diag.odd_iqr_nm, diag.odd_n)
+        @printf("  split-half even median/IQR   : %5.2f / %5.2f nm  (n=%d)\n",
+                diag.even_median_nm, diag.even_iqr_nm, diag.even_n)
+        @printf("  split-half median Δ / IQR Δ  : %6.2f / %6.2f nm  (smaller = consistent)\n",
+                diag.split_median_diff_nm, diag.split_iqr_diff_nm)
     end
 end
