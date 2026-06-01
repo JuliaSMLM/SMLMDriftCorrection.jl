@@ -127,6 +127,15 @@ For trajectory plotting in continuous mode:
 traj = drift_trajectory(info.model; cumulative=true)
 ```
 
+**Residual drift from chunk stitching (coarse-to-fine 2-pass)**: With `n_chunks > 1`, chunks are fit independently and stitched by endpoint chaining (inter-shift pinned to the chained value, see Continuous Mode Internals). Per-chunk fit bias therefore *accumulates across seams*, leaving a small coherent **directional** residual drift (observed ~17nm on a 20k-frame / 10-chunk DNA-PAINT nanoruler) that smears fine structure. Chunking can't simply be removed — a single global polynomial (`n_chunks=1`) cannot bootstrap from the uncorrected, drift-smeared cloud (flat entropy gradient → optimizer stalls). The robust, config-only fix is a two-pass coarse-to-fine: chunk to bootstrap, then refine the de-smeared output with a single low-degree global polynomial (no seams):
+```julia
+# Pass 1: chunked bootstrap
+(smld_coarse, info1) = driftcorrect(smld; dataset_mode=:continuous, n_chunks=10, degree=3, quality=:iterative)
+# Pass 2: single-poly refine on pass-1 output (removes the stitch-accumulation residual)
+(smld_corrected, info2) = driftcorrect(smld_coarse; dataset_mode=:continuous, n_chunks=1, degree=2, quality=:iterative)
+```
+A low `degree` (2-3) suffices for pass 2 (the residual is smooth/low-frequency); Nelder-Mead converges it fine. Do NOT use `warm_start=info1.model` for pass 2 — a chunked model's per-chunk polynomials are normalized to each chunk's frame domain and can't be reinterpreted on the full domain; use the two sequential calls. Measure residual with consecutive/endpoint time-block cross-correlation (`findshift`), not block-vs-global (which under-reads on smeared data); and run a random-split control before attributing any residual spread to field-dependence (small-group CC spread is noise-inflated).
+
 ## Usage Patterns
 
 ### Basic Usage

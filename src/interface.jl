@@ -63,6 +63,38 @@ config = DriftConfig(; quality=:iterative, degree=3, verbose=1)
 # Extract drift trajectory for plotting
 traj = drift_trajectory(info.model)
 ```
+
+# Reducing residual drift in continuous mode (coarse-to-fine 2-pass)
+
+In `:continuous` mode with `n_chunks > 1`, each chunk is fit independently and the
+chunks are stitched by polynomial endpoint chaining (the inter-shift is pinned to
+the chained value). Per-chunk fit bias therefore *accumulates across chunk seams*,
+leaving a small but coherent (directional) residual drift — enough to smear
+fine structure such as 3-spot nanorulers.
+
+Chunking is nonetheless required: a single global polynomial (`n_chunks=1`) cannot
+bootstrap from an uncorrected, heavily drift-smeared point cloud (the entropy
+gradient at the origin is nearly flat, so the optimizer stalls). The robust fix is a
+two-pass coarse-to-fine sequence — chunk to bootstrap, then refine the now-sharp
+cloud with a single global polynomial (no chunk seams):
+
+```julia
+# Pass 1: chunked bootstrap (handles the bulk drift)
+(smld_coarse, info1) = driftcorrect(smld; dataset_mode=:continuous,
+                                    n_chunks=10, degree=3, quality=:iterative)
+
+# Pass 2: single-polynomial refine on the de-smeared output (removes the
+# residual the chunk stitching left behind). n_chunks=1 converges here because
+# the input cloud is already sharp. A LOW degree suffices — the residual is
+# smooth/low-frequency.
+(smld_corrected, info2) = driftcorrect(smld_coarse; dataset_mode=:continuous,
+                                       n_chunks=1, degree=2, quality=:iterative)
+```
+
+Note: do NOT try to pass `warm_start=info1.model` into an `n_chunks=1` refine — a
+chunked model's per-chunk polynomials are normalized to each chunk's own frame
+domain and cannot be reinterpreted on the full-acquisition domain. Use the two
+sequential `driftcorrect` calls above instead.
 """
 function driftcorrect(smld::SMLD;
     quality::Symbol = :singlepass,
