@@ -694,8 +694,15 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
                 warmstart_values = [copy(model.inter[nn].dm) for nn in 1:n_datasets]
             end
         elseif dataset_mode == :continuous
-            # Continuous mode: initialize from polynomial endpoints before optimization
-            _warmstart_inter_continuous!(model, smld, verbose > 1 ? verbose : 0)
+            # Continuous mode: do NOT re-chain inter from polynomial endpoints here.
+            # The endpoint chain is established once in the singlepass init; re-chaining
+            # every iteration overwrote the entropy-refined inter shifts with chain-derived
+            # values, and because the chain is cumulative from chunk 1 it accumulated each
+            # iteration's intra wander downstream — re-injecting a perturbation at the late
+            # chunks faster than the entropy refine could remove it, which sustained an
+            # inter-shift limit cycle (non-convergence) on long/dense continuous data.
+            # Refining inter continuously from the previous iteration converges; continuity
+            # is still enforced softly by the intra boundary prior in findintra!.
             reg_lambda = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
             warmstart_values = [copy(model.inter[nn].dm) for nn in 1:n_datasets]
         end
