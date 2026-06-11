@@ -436,9 +436,10 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         end
         _cc_primary_inter!(model, smld, maxn; n_passes=2, init=true, verbose=verbose)
     else  # :continuous
-        # Endpoint-chained inter shifts (warmstart from polynomial endpoints), entropy
-        # refined, normalized so drift at (DS1, frame1)=0.
-        _warmstart_inter_continuous!(model, smld, verbose)
+        # CC-seeded inter shifts: measure each chunk boundary by cross-correlation
+        # (endpoint-chaining kept only as a per-boundary fallback), then entropy-refine
+        # and normalize so drift at (DS1, frame1)=0. See _ccseed_inter_continuous!.
+        _ccseed_inter_continuous!(model, smld; verbose=verbose)
         reg_lambda = _estimate_continuous_lambda(model, smld.n_frames, verbose)
         warmstart_values = [copy(model.inter[nn].dm) for nn in 1:smld.n_datasets]
         precomputed = correctdrift(smld, model)
@@ -913,22 +914,92 @@ function _max_inter_change(inter_old::Vector{Vector{Float64}},
 end
 
 """
-Warm start inter-shifts for continuous mode from polynomial endpoints.
+Seed continuous-mode inter-shifts by cross-correlating consecutive chunks (FFT),
+with a per-boundary endpoint-chaining fallback.
+
+Continuous chunks share structure (same FOV, consecutive in time), so the inter
+shift across each boundary can be *measured* by cross-correlating the intra-
+corrected chunk against the already-placed previous chunk — rather than
+*extrapolated* from the polynomial endpoints. Per boundary (n-1)→n, both
+candidates are formed: the CC-measured shift, and the endpoint-chained shift
+`inter[n-1] + endpoint(n-1) - startpoint(n)`. Whichever puts chunk n in better
+consensus overlap (`_overlap_score` within `_CC_VERIFY_RADIUS`) with the corrected
+chunk n-1 is kept.
+
+This is strictly ≥ either method alone: it uses CC where it locks on (the common
+case) and falls back to endpoint-chaining at a sparse/featureless boundary where
+CC can't. It avoids endpoint-chaining's two failure modes — slow directional
+residual accumulation, and a single bad boundary blowing up and propagating down
+the cumulative chain when a degree-d polynomial extrapolates wildly at t=±1
+(measuring beats extrapolating). See Continuous Mode Internals in CLAUDE.md.
 """
-function _warmstart_inter_continuous!(model::LegendrePolynomial, smld::SMLD, verbose::Int)
-    ndims = model.intra[1].ndims
-    for nn = 2:smld.n_datasets
-        # Chain: inter[n] = inter[n-1] + endpoint(n-1) - startpoint(n)
-        endpoint_prev = endpoint_drift(model.intra[nn-1], smld.n_frames)
-        startpoint_curr = startpoint_drift(model.intra[nn])
-        for dim in 1:ndims
-            model.inter[nn].dm[dim] = model.inter[nn-1].dm[dim] +
-                                      endpoint_prev[dim] - startpoint_curr[dim]
+function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbose::Int=0)
+    n_dims = nDims(smld)
+    n_datasets = smld.n_datasets
+    n_datasets < 2 && return
+    model.inter[1].dm .= 0.0
+
+    # chunk d, intra removed, inter NOT applied (deepcopy: filter shares emitter refs)
+    intra_only(d) = begin
+        sd = deepcopy(filter_by_dataset(smld, d))
+        for e in sd.emitters
+            e.x = correctdrift(e.x, e.frame, model.intra[d].dm[1])
+            e.y = correctdrift(e.y, e.frame, model.intra[d].dm[2])
+            n_dims == 3 && (e.z = correctdrift(e.z, e.frame, model.intra[d].dm[3]))
         end
+        sd
     end
-    if verbose > 0
-        @info("SMLMDriftCorrection: initialized inter-shifts from polynomial endpoints")
+
+    n_cc = 0; n_ep = 0
+    prev = intra_only(1)
+    for nn in 2:n_datasets
+        cur = intra_only(nn)
+        # reference = chunk n-1 placed in the corrected frame (its inter applied)
+        ref = deepcopy(prev)
+        for e in ref.emitters
+            e.x -= model.inter[nn-1].dm[1]
+            e.y -= model.inter[nn-1].dm[2]
+            n_dims == 3 && (e.z -= model.inter[nn-1].dm[3])
+        end
+
+        # endpoint-chained candidate (always available, even where CC can't lock on)
+        ep = endpoint_drift(model.intra[nn-1], smld.n_frames) .- startpoint_drift(model.intra[nn])
+        inter_ep = Float64[model.inter[nn-1].dm[k] + Float64(ep[k]) for k in 1:n_dims]
+
+        if isempty(ref.emitters) || isempty(cur.emitters)
+            model.inter[nn].dm .= inter_ep; n_ep += 1; prev = cur; continue
+        end
+
+        refmat = n_dims == 2 ?
+            permutedims([Float64[e.x for e in ref.emitters] Float64[e.y for e in ref.emitters]]) :
+            permutedims([Float64[e.x for e in ref.emitters] Float64[e.y for e in ref.emitters] Float64[e.z for e in ref.emitters]])
+        tree = KDTree(refmat; leafsize=10)
+        ov_ep = _overlap_score(cur, inter_ep, tree, _CC_VERIFY_RADIUS, n_dims)
+
+        # CC-measured candidate: rigid shift of cur onto the corrected ref = full inter[n].
+        # Fine histogram (20 nm) — coarse bins lose the overlap contest to the smooth
+        # endpoint prediction at clean boundaries even though CC is globally better.
+        cc = try findshift(ref, cur; histbinsize=0.02) catch; nothing end
+        if cc !== nothing && maximum(abs.(cc)) < 5.0
+            inter_cc = Float64[Float64(cc[k]) for k in 1:n_dims]
+            ov_cc = _overlap_score(cur, inter_cc, tree, _CC_VERIFY_RADIUS, n_dims)
+            # Prefer the CC measurement: take endpoint only when CC overlap is clearly
+            # worse (a real lock-on failure), not on a marginal edge — endpoint errors
+            # chain down the sequence, so CC wins globally even when slightly behind at a
+            # single boundary.
+            if ov_cc >= ov_ep - 0.05
+                model.inter[nn].dm .= inter_cc; n_cc += 1
+            else
+                model.inter[nn].dm .= inter_ep; n_ep += 1
+            end
+        else
+            model.inter[nn].dm .= inter_ep; n_ep += 1
+        end
+        prev = cur
     end
+    verbose > 0 && @info("SMLMDriftCorrection: continuous CC-seed — $n_cc/$(n_datasets-1) " *
+                         "boundaries from cross-correlation, $n_ep from endpoint fallback")
+    return
 end
 
 """

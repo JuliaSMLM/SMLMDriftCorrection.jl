@@ -754,4 +754,35 @@ using Random
             @test length(res_inter.residuals_y) == length(res_inter.dataset_indices)
         end
     end
+
+    # --- Continuous mode: full-sim drift recovery (CC seed) ---
+    @testset "Continuous mode (CC seed) full sim" begin
+        # One dense acquisition with a known smooth drift (zero at frame 1, matching the
+        # continuous gauge). Dense enough (~10^5 locs) that consecutive-chunk CC locks on
+        # reliably, so the CC seed recovers the drift where endpoint-chaining would
+        # accumulate it. (On real cohort data this is 593nm→10nm; here we assert the
+        # synthetic drift is substantially removed.)
+        Random.seed!(7)
+        params_cont = StaticSMLMConfig(80.0, 0.13, 30, 1, 4000, 50.0, 2, [0.0, 1.0])
+        (smld_c0, _) = simulate(params_cont; pattern = Nmer2D(n = 8, d = 0.3),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.05, k_off = 50.0),
+            camera = IdealCamera(1:64, 1:64, 0.1))
+        NFc = smld_c0.n_frames
+        cdrift(f) = (u = (f - 1) / (NFc - 1); (0.12 * sin(2π * u) + 0.06 * u, 0.10 * u^2 + 0.04 * u))
+        smld_cd = deepcopy(smld_c0)
+        for e in smld_cd.emitters
+            dx, dy = cdrift(e.frame); e.x += dx; e.y += dy
+        end
+        crm(a, b) = sqrt(sum((e1.x - e2.x)^2 + (e1.y - e2.y)^2
+                             for (e1, e2) in zip(a.emitters, b.emitters)) / length(a.emitters))
+        drifted = 1000 * crm(smld_cd, smld_c0)
+        (sc, cinfo) = DC.driftcorrect(smld_cd; dataset_mode = :continuous,
+                                       n_chunks = 4, degree = 3)
+        corrected = 1000 * crm(sc, smld_c0)
+        print("continuous full-sim: drifted RMSD = $(round(drifted, digits=1)) nm -> " *
+              "corrected = $(round(corrected, digits=1)) nm\n")
+        @test cinfo isa DC.DriftInfo
+        @test corrected < 0.4 * drifted      # drift substantially removed
+        @test corrected < 35.0               # ~3x the ~12 nm observed; robust to RNG/threads
+    end
 end

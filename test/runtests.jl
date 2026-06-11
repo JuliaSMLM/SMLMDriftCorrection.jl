@@ -275,6 +275,34 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # Continuous mode smoke — exercises chunking + the CC-seed inter path
+    # (_ccseed_inter_continuous!). Tiny data, so assert only that it runs and
+    # returns valid output; full-sim drift recovery lives in extended_tests.jl.
+    # -----------------------------------------------------------------------
+    @testset "continuous mode smoke" begin
+        Random.seed!(7)
+        cmodel = DC.LegendrePolynomial(smld_small; degree = 2,
+                                        initialize = "random", rscale = 0.05)
+        cmodel.inter[1].dm .= 0.0
+        smld_cdrift = DC.applydrift(smld_small, cmodel)
+
+        (sc, cinfo) = DC.driftcorrect(smld_cdrift; dataset_mode = :continuous,
+                                       n_chunks = 2, degree = 2)
+        @test sc isa DC.SMLD
+        @test cinfo isa DC.DriftInfo
+        @test cinfo.model isa DC.LegendrePolynomial
+        @test length(sc.emitters) == length(smld_cdrift.emitters)
+        @test cinfo.elapsed_s > 0
+
+        # _ccseed_inter_continuous! runs without error on a 2-chunk model and
+        # produces one inter shift per chunk.
+        ci = DC.chunk_smld(smld_small; n_chunks = 2)
+        m2 = DC.LegendrePolynomial(ci.smld; degree = 2)
+        @test_nowarn DC._ccseed_inter_continuous!(m2, ci.smld)
+        @test length(m2.inter) == ci.smld.n_datasets
+    end
+
+    # -----------------------------------------------------------------------
     # align_smld smoke — known shift recovery on small data.
     # -----------------------------------------------------------------------
     @testset "align_smld smoke" begin
