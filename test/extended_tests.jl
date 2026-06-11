@@ -215,6 +215,34 @@ using Random
         @test rmsd_iter < 0.150  # 150 nm (stochastic, allow margin)
     end
 
+    # --- Test CC-primary inter alignment (registered; covers _cc_primary_inter!) ---
+    @testset "CC-primary inter (registered)" begin
+        # smld_noisy is 3 datasets imaging the same Nmer structure (mutually aligned,
+        # no applied drift). Deliberately offset DS2 by +80nm in x — the global
+        # merged-cloud entropy is only ~1/N sensitive to a single dataset's offset, so
+        # this is the failure mode CC-primary (CC seed → entropy refine → overlap
+        # arbiter, per dataset) exists to catch. It must pull DS2 back toward the
+        # consensus and leave the aligned datasets put. (CC on this small sim is coarse
+        # — 50nm bins — so assert direction + bound, not an exact value; exact recovery
+        # is validated on dense real data.)
+        smld_off = deepcopy(smld_noisy)
+        for e in smld_off.emitters
+            e.dataset == 2 && (e.x += 0.080)
+        end
+        model = DC.LegendrePolynomial(smld_off; degree=2)   # zeros: intra=0, inter=0
+        DC._cc_primary_inter!(model, smld_off, 100; n_passes=2, init=true)
+        @test 0.025 < model.inter[2].dm[1] < 0.135            # pulled toward +80nm, no wild overshoot
+        @test isapprox(model.inter[1].dm[1], 0.0; atol=1e-9)  # reference re-anchored to inter[1]=0
+        @test abs(model.inter[3].dm[1]) < 0.04                # aligned DS3 stays put (≤~1 CC bin)
+
+        # Non-regression on already-aligned data. CC-primary re-solves every dataset,
+        # so values won't be exactly 0, but nothing should be pushed off the consensus
+        # by more than ~1 cross-correlation bin.
+        model2 = DC.LegendrePolynomial(smld_noisy; degree=2)
+        DC._cc_primary_inter!(model2, smld_noisy, 100; n_passes=2, init=true)
+        @test all(abs(model2.inter[d].dm[k]) < 0.04 for d in 1:3, k in 1:2)
+    end
+
     # --- Test warm start ---
     @testset "Warm start" begin
         (smld1, info1) = DC.driftcorrect(smld_drift; quality=:singlepass)
