@@ -9,7 +9,7 @@ AI-parseable API reference for SMLMDriftCorrection.jl. All distance units are in
 
 ## Key Concepts
 
-Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
+Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). In registered mode the inter step is **CC-primary**: per dataset a globally-robust cross-correlation seed is entropy-refined, and an overlap arbiter keeps whichever of the two better matches the consensus — needed because the global merged-cloud entropy is only ~1/N sensitive to a single dataset's offset (one dataset's misalignment barely moves the global cost). The `:iterative` tier converges when the entropy cost plateaus in addition to `convergence_tol`. Continuous mode instead chains polynomial endpoints across chunks. The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
 
 ## Types
 

@@ -28,7 +28,7 @@ julia --project=docs docs/make.jl
 
 The drift correction has two phases:
 1. **Intra-dataset correction**: Corrects drift within each dataset using Legendre polynomial models (optimized via entropy minimization)
-2. **Inter-dataset correction**: Aligns datasets to each other using constant shifts
+2. **Inter-dataset correction**: Aligns datasets to each other using constant shifts. In registered mode this is **CC-primary** (cross-correlation seed → entropy refine → overlap arbiter, per dataset), because the global merged-cloud entropy alone is ~1/N blind to a single dataset's offset — see Inter-dataset Alignment. Continuous mode instead chains polynomial endpoints.
 
 The algorithm uses **entropy minimization** as the cost function with **adaptive KDTree neighbor rebuilding** for efficiency.
 
@@ -90,20 +90,23 @@ Intra-dataset correction is parallelized with `Threads.@threads` (each dataset i
 
 The `NeighborState` / `InterNeighborState` structs track KDTree neighbors and rebuild only when drift changes significantly (threshold: 100 nm). This avoids O(N log N) tree rebuilds on every optimizer iteration.
 
-### Inter-dataset Alignment (Merged Cloud Entropy)
+### Inter-dataset Alignment (registered mode: CC-primary)
 
-Inter-dataset alignment uses a "merged cloud" entropy approach:
-1. Combine shifted dataset with reference dataset(s)
-2. Compute entropy of the combined point cloud
-3. Optimizer finds shift that minimizes entropy (tighter combined cloud = better alignment)
+Registered-mode inter alignment (`_cc_primary_inter!`) treats **cross-correlation as the primary** per-dataset objective and **entropy as the refinement**. For each dataset (including the reference), per Jacobi pass over one corrected snapshot:
 
-This properly incorporates localization uncertainties (σ) and works well for real SMLM data where datasets image the same underlying structure.
+1. **CC seed** — cross-correlation of the dataset (intra-corrected) against the corrected consensus of all *other* datasets. CC is globally robust: it finds the right alignment basin even for a dataset the merged-cloud entropy can't see.
+2. **Entropy refine** — `findinter!` minimizes the entropy of the dataset merged with that consensus, starting from the CC seed (no L2 reg — the CC seed is the anchor). The merged-cloud entropy properly incorporates localization uncertainties (σ) and gives sub-CC-bin precision *when it starts in the right basin*.
+3. **Overlap arbiter** — keep whichever of {CC seed, entropy-refined shift} puts a larger fraction of the dataset's localizations within `_CC_VERIFY_RADIUS` (30 nm) of a consensus localization. This makes each step **strictly ≥ CC quality**, and is required because the entropy is ~1/N blind (below) and so cannot, on its own, reveal a refine that wandered to a wrong local minimum.
+
+The reference (DS1) is included so a misaligned reference is fixable, then the result is re-anchored to `inter[1]=0` (an image-invariant global shift). `:singlepass` does a CC cold-start vs DS1 then 2 passes; `:iterative` runs 1 pass per outer iteration. `:fft` is a separate, faster path (CC only, no entropy refine).
+
+**Why CC-primary — entropy blindness.** The merged-cloud entropy is a *global* cost: one dataset being offset is only ~1/N of the cloud, so a ~50 nm error in a single dataset moves the entropy by <1 part in 10⁶. Entropy-*only* inter alignment therefore has almost no gradient to align an individual dataset and can leave one badly misaligned (this produced the visible single-dataset ghost in some cohort cells); for the same reason the old `:iterative` loop could wander the inter parameters without lowering the cost (see Quality Tiers). Making CC the primary objective supplies the global signal entropy lacks, while the overlap arbiter keeps the entropy refine from regressing it. Validated on real cohort cells (reference-outlier DS1 58→3 nm, multi-outlier max 72→7 nm) and by an *independent* cross-dataset NN co-localization metric that improved on every dataset of the original bug cell. Note: on diffuse/low-contrast cells CC is imprecise (no structure to lock onto), but the overlap arbiter caps the damage by never accepting a shift that lowers consensus overlap. **Continuous mode does NOT use this path** — it keeps polynomial endpoint-chaining (see Dataset Modes / Continuous Mode Internals) and is not validated to the same standard.
 
 ### Quality Tiers
 
 - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
 - `:singlepass` (default): Single pass of intra then inter correction
-- `:iterative`: Full convergence with intra↔inter iteration
+- `:iterative`: Full intra↔inter refinement (intra, then a CC-primary inter pass, per iteration). Converges when the entropy **cost plateaus** (relative improvement < `_ENTROPY_REL_TOL`=1e-4) in addition to the `convergence_tol` parameter-movement test — either trips convergence. The cost-plateau guard is retained because the merged-cloud entropy is a near-flat basin w.r.t. the inter shifts (entropy blindness, above), so a movement-only test could otherwise run to the iteration cap at ~0% gain.
 
 ### Dataset Modes
 
