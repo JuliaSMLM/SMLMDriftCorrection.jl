@@ -63,7 +63,7 @@ AlignInfo <: AbstractSMLMInfo (output struct with shifts, transforms, timing)
 
 1. `driftcorrect(smld)` or `driftcorrect(smld, config::DriftConfig)` creates a `LegendrePolynomial` model
 2. `findintra!()` optimizes intra-dataset drift per dataset (parallelized with `Threads.@threads`)
-3. `findinter!()` aligns datasets (threaded all-vs-DS1, then sequential refinement vs earlier)
+3. Inter-dataset alignment: registered = `_cc_primary_inter!` (per-dataset CC seed → `findinter!` entropy refine → overlap arbiter, threaded); continuous = `_ccseed_inter_continuous!` (consecutive-chunk CC → `findinter!` refine). `findinter!` is the entropy-refine primitive both wrap.
 4. `correctdrift(smld, model)` applies the final corrections
 5. Returns tuple `(smld_corrected, info::DriftInfo)`
 6. Optional continuation: `driftcorrect(smld, info::DriftInfo)` refines from previous result
@@ -84,7 +84,7 @@ AlignInfo <: AbstractSMLMInfo (output struct with shifts, transforms, timing)
 
 ### Threading
 
-Intra-dataset correction is parallelized with `Threads.@threads` (each dataset independent). The first inter-dataset pass (all vs DS1) is also threaded using a precomputed snapshot of corrected coordinates. The refinement pass (each vs all earlier) is sequential.
+Intra-dataset correction is parallelized with `Threads.@threads` (each dataset independent). Registered inter alignment (`_cc_primary_inter!`) is also threaded — each dataset's CC seed + entropy refine + overlap arbiter runs against a precomputed corrected snapshot. Continuous CC-seeding (`_ccseed_inter_continuous!`) is sequential (a consecutive-chunk chain), while its inter refine pass (`findinter!`) is threaded.
 
 ### Adaptive Neighbor Optimization (Intra-dataset)
 
@@ -106,7 +106,7 @@ The reference (DS1) is included so a misaligned reference is fixable, then the r
 
 - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
 - `:singlepass` (default): Single pass of intra then inter correction
-- `:iterative`: Full intra↔inter refinement (intra, then a CC-primary inter pass, per iteration). Converges when the entropy **cost plateaus** (relative improvement < `_ENTROPY_REL_TOL`=1e-4) in addition to the `convergence_tol` parameter-movement test — either trips convergence. The cost-plateau guard is retained because the merged-cloud entropy is a near-flat basin w.r.t. the inter shifts (entropy blindness, above), so a movement-only test could otherwise run to the iteration cap at ~0% gain.
+- `:iterative`: Full intra↔inter refinement, one inter pass per iteration (registered: a CC-primary pass; continuous: in-place inter refine, no per-iteration re-chain). Convergence trips when the max change across **both** inter and intra parameters falls below `convergence_tol`. In **registered** mode an entropy **cost-plateau** early exit also applies (relative improvement < `_ENTROPY_REL_TOL`=1e-4), because the merged-cloud entropy is a near-flat basin w.r.t. the inter shifts (entropy blindness, above) and a movement-only test could otherwise run to the iteration cap at ~0% gain. Continuous mode uses the movement criterion only.
 
 ### Dataset Modes
 

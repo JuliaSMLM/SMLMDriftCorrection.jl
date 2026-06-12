@@ -9,7 +9,7 @@ AI-parseable API reference for SMLMDriftCorrection.jl. All distance units are in
 
 ## Key Concepts
 
-Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). In registered mode the inter step is **CC-primary**: per dataset a globally-robust cross-correlation seed is entropy-refined, and an overlap arbiter keeps whichever of the two better matches the consensus — needed because the global merged-cloud entropy is only ~1/N sensitive to a single dataset's offset (one dataset's misalignment barely moves the global cost). The `:iterative` tier converges when the entropy cost plateaus in addition to `convergence_tol`. Continuous mode instead seeds each inter-chunk shift by cross-correlating consecutive chunks (measuring the boundary rather than extrapolating polynomial endpoints, which keeps a single bad boundary from propagating down the chain); endpoint-chaining remains a per-boundary fallback. The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
+Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). In registered mode the inter step is **CC-primary**: per dataset a globally-robust cross-correlation seed is entropy-refined, and an overlap arbiter keeps whichever of the two better matches the consensus — needed because the global merged-cloud entropy is only ~1/N sensitive to a single dataset's offset (one dataset's misalignment barely moves the global cost). The `:iterative` tier converges on a parameter-movement test (`convergence_tol`, over both inter and intra), with an additional entropy-cost-plateau early exit in registered mode. Continuous mode instead seeds each inter-chunk shift by cross-correlating consecutive chunks (measuring the boundary rather than extrapolating polynomial endpoints, which keeps a single bad boundary from propagating down the chain); endpoint-chaining remains a per-boundary fallback. The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
 
 ## Types
 
@@ -213,7 +213,7 @@ Combined intra + inter drift model using Legendre polynomial basis.
 - `intra::Vector{IntraLegendre}`: Per-dataset polynomial models
 - `inter::Vector{InterShift}`: Per-dataset constant shifts
 
-**Initialize options:** `"zeros"` (default), `"random"`. Continuous mode warmstart is handled by `initialize_from_endpoint!`, not an initialize string.
+**Initialize options:** `"zeros"` (default), `"random"` — `"random"` seeds **both** the intra polynomial coefficients and the inter shifts with `rscale * randn()`. That is only the *constructed* initial model; in the high-level `driftcorrect` pipeline the inter shifts are then determined by the alignment step (registered: CC-primary; continuous: CC-seeded per boundary by `_ccseed_inter_continuous!`), which overwrites any random inter values.
 
 ### applydrift / correctdrift
 ```julia
@@ -272,12 +272,6 @@ Evaluate Legendre drift at the last frame of a dataset. Evaluates at t=+1 in Leg
 startpoint_drift(intra::IntraLegendre) -> Vector
 ```
 Evaluate Legendre drift at frame 1 of a dataset (uses `n_frames` from the polynomial). Evaluates at t=-1, which is NOT zero.
-
-### initialize_from_endpoint!
-```julia
-initialize_from_endpoint!(intra_new::IntraLegendre, intra_prev::IntraLegendre, n_frames_prev::Int)
-```
-Initialize polynomial for continuous mode warmstart. Copies coefficients from `intra_prev` and shifts so `intra_new`'s startpoint (frame 1) equals `intra_prev`'s endpoint (frame `n_frames_prev`). Initialization only - optimizer refines from here.
 
 ## Internal Types
 

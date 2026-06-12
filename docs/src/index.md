@@ -140,7 +140,7 @@ smld_roi = filter_emitters(smld, mask)
 For data where drift accumulates across files (one long acquisition split into multiple datasets):
 
 ```julia
-# Continuous mode - drift chains across datasets
+# Continuous mode - one acquisition split across datasets
 config = DriftConfig(dataset_mode=:continuous)
 (smld_corrected, info) = driftcorrect(smld, config)
 
@@ -188,7 +188,7 @@ The algorithm uses **entropy minimization** (Cnossen et al., 2021) with **Legend
 
 1. **Intra-dataset**: For each dataset, fit a Legendre polynomial (degree 2 by default) to model drift over time. Uses KL divergence-based entropy as cost function with adaptive KDTree neighbor rebuilding. Threaded across datasets.
 
-2. **Inter-dataset**: Align datasets using constant shifts optimized via merged-cloud entropy minimization. First pass aligns all to dataset 1 (threaded), then sequential refinement against all earlier datasets.
+2. **Inter-dataset**: Align datasets using constant shifts via a cross-correlation seed plus entropy refinement. Registered mode aligns each dataset against the corrected consensus of the others (keeping whichever of {CC seed, refined} better matches by overlap, since the global entropy is nearly blind to a single dataset's offset); continuous mode aligns consecutive-chunk boundaries by cross-correlation, with endpoint-chaining as a per-boundary fallback.
 
 3. **Iterative** (`:iterative` quality only): Repeat intra↔inter until inter-shift changes converge below tolerance.
 
