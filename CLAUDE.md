@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Package Overview
 
-SMLMDriftCorrection.jl is a Julia package for fiducial-free drift correction in Single Molecule Localization Microscopy (SMLM). It works on both 2D and 3D localization data and is part of the JuliaSMLM ecosystem (depends on SMLMData.jl for core data structures).
+SMLMDriftCorrection.jl is a Julia package for fiducial-free drift correction in SMLM. It works on both 2D and 3D localization data and is part of the JuliaSMLM ecosystem (depends on SMLMData.jl for core data structures).
 
 ## Development Commands
 
@@ -28,7 +28,7 @@ julia --project=docs docs/make.jl
 
 The drift correction has two phases:
 1. **Intra-dataset correction**: Corrects drift within each dataset using Legendre polynomial models (optimized via entropy minimization)
-2. **Inter-dataset correction**: Aligns datasets to each other using constant shifts
+2. **Inter-dataset correction**: Aligns datasets to each other using constant shifts. In registered mode this is **CC-primary** (cross-correlation seed → entropy refine → overlap arbiter, per dataset), because the global merged-cloud entropy alone is ~1/N blind to a single dataset's offset — see Inter-dataset Alignment. Continuous mode instead chains polynomial endpoints.
 
 The algorithm uses **entropy minimization** as the cost function with **adaptive KDTree neighbor rebuilding** for efficiency.
 
@@ -63,7 +63,7 @@ AlignInfo <: AbstractSMLMInfo (output struct with shifts, transforms, timing)
 
 1. `driftcorrect(smld)` or `driftcorrect(smld, config::DriftConfig)` creates a `LegendrePolynomial` model
 2. `findintra!()` optimizes intra-dataset drift per dataset (parallelized with `Threads.@threads`)
-3. `findinter!()` aligns datasets (threaded all-vs-DS1, then sequential refinement vs earlier)
+3. Inter-dataset alignment: registered = `_cc_primary_inter!` (per-dataset CC seed → `findinter!` entropy refine → overlap arbiter, threaded); continuous = `_ccseed_inter_continuous!` (consecutive-chunk CC → `findinter!` refine). `findinter!` is the entropy-refine primitive both wrap.
 4. `correctdrift(smld, model)` applies the final corrections
 5. Returns tuple `(smld_corrected, info::DriftInfo)`
 6. Optional continuation: `driftcorrect(smld, info::DriftInfo)` refines from previous result
@@ -84,33 +84,36 @@ AlignInfo <: AbstractSMLMInfo (output struct with shifts, transforms, timing)
 
 ### Threading
 
-Intra-dataset correction is parallelized with `Threads.@threads` (each dataset independent). The first inter-dataset pass (all vs DS1) is also threaded using a precomputed snapshot of corrected coordinates. The refinement pass (each vs all earlier) is sequential.
+Intra-dataset correction is parallelized with `Threads.@threads` (each dataset independent). Registered inter alignment (`_cc_primary_inter!`) is also threaded — each dataset's CC seed + entropy refine + overlap arbiter runs against a precomputed corrected snapshot. Continuous CC-seeding (`_ccseed_inter_continuous!`) is sequential (a consecutive-chunk chain), while its inter refine pass (`findinter!`) is threaded.
 
 ### Adaptive Neighbor Optimization (Intra-dataset)
 
 The `NeighborState` / `InterNeighborState` structs track KDTree neighbors and rebuild only when drift changes significantly (threshold: 100 nm). This avoids O(N log N) tree rebuilds on every optimizer iteration.
 
-### Inter-dataset Alignment (Merged Cloud Entropy)
+### Inter-dataset Alignment (registered mode: CC-primary)
 
-Inter-dataset alignment uses a "merged cloud" entropy approach:
-1. Combine shifted dataset with reference dataset(s)
-2. Compute entropy of the combined point cloud
-3. Optimizer finds shift that minimizes entropy (tighter combined cloud = better alignment)
+Registered-mode inter alignment (`_cc_primary_inter!`) treats **cross-correlation as the primary** per-dataset objective and **entropy as the refinement**. For each dataset (including the reference), per Jacobi pass over one corrected snapshot:
 
-This properly incorporates localization uncertainties (σ) and works well for real SMLM data where datasets image the same underlying structure.
+1. **CC seed** — cross-correlation of the dataset (intra-corrected) against the corrected consensus of all *other* datasets. CC is globally robust: it finds the right alignment basin even for a dataset the merged-cloud entropy can't see.
+2. **Entropy refine** — `findinter!` minimizes the entropy of the dataset merged with that consensus, starting from the CC seed (no L2 reg — the CC seed is the anchor). The merged-cloud entropy properly incorporates localization uncertainties (σ) and gives sub-CC-bin precision *when it starts in the right basin*.
+3. **Overlap arbiter** — keep whichever of {CC seed, entropy-refined shift} puts a larger fraction of the dataset's localizations within `_CC_VERIFY_RADIUS` (30 nm) of a consensus localization. This makes each step **strictly ≥ CC quality**, and is required because the entropy is ~1/N blind (below) and so cannot, on its own, reveal a refine that wandered to a wrong local minimum.
+
+The reference (DS1) is included so a misaligned reference is fixable, then the result is re-anchored to `inter[1]=0` (an image-invariant global shift). `:singlepass` does a CC cold-start vs DS1 then 2 passes; `:iterative` runs 1 pass per outer iteration. `:fft` is a separate, faster path (CC only, no entropy refine).
+
+**Why CC-primary — entropy blindness.** The merged-cloud entropy is a *global* cost: one dataset being offset is only ~1/N of the cloud, so a ~50 nm error in a single dataset moves the entropy by <1 part in 10⁶. Entropy-*only* inter alignment therefore has almost no gradient to align an individual dataset and can leave one badly misaligned (this produced the visible single-dataset ghost in some cohort cells); for the same reason the old `:iterative` loop could wander the inter parameters without lowering the cost (see Quality Tiers). Making CC the primary objective supplies the global signal entropy lacks, while the overlap arbiter keeps the entropy refine from regressing it. Validated on real cohort cells (reference-outlier DS1 58→3 nm, multi-outlier max 72→7 nm) and by an *independent* cross-dataset NN co-localization metric that improved on every dataset of the original bug cell. Note: on diffuse/low-contrast cells CC is imprecise (no structure to lock onto), but the overlap arbiter caps the damage by never accepting a shift that lowers consensus overlap. **Continuous mode uses a different mechanism** — consecutive-chunk cross-correlation seeding (see Dataset Modes / Continuous Mode Internals), not the merged-cloud consensus (whose cloud is smeared across chunks by the drift itself). Validated on real cohort data (DNA-PAINT 593→10 nm, ruler 23→5 nm).
 
 ### Quality Tiers
 
 - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
 - `:singlepass` (default): Single pass of intra then inter correction
-- `:iterative`: Full convergence with intra↔inter iteration
+- `:iterative`: Full intra↔inter refinement, one inter pass per iteration (registered: a CC-primary pass; continuous: in-place inter refine, no per-iteration re-chain). Convergence trips when the max change across **both** inter and intra parameters falls below `convergence_tol`. In **registered** mode an entropy **cost-plateau** early exit also applies (relative improvement < `_ENTROPY_REL_TOL`=1e-4), because the merged-cloud entropy is a near-flat basin w.r.t. the inter shifts (entropy blindness, above) and a movement-only test could otherwise run to the iteration cap at ~0% gain. Continuous mode uses the movement criterion only.
 
 ### Dataset Modes
 
 - `:registered` (default): Datasets are independent acquisitions with spatial overlap. Uses entropy-based inter-dataset alignment via `findinter!()`.
-- `:continuous`: One long acquisition split into files. Uses polynomial endpoint chaining (warmstart) for inter-dataset alignment since chunks have temporal but not spatial overlap.
+- `:continuous`: One long acquisition split into chunks. Inter-chunk alignment **measures** each boundary shift by cross-correlating consecutive chunks (`_ccseed_inter_continuous!`), with polynomial endpoint-chaining kept only as a per-boundary fallback where CC can't lock on. Consecutive chunks share structure (same FOV, adjacent in time), so CC is reliable — and unlike endpoint extrapolation it neither accumulates directional residual nor propagates a single bad-boundary blow-up down the chain (see Continuous Mode Internals).
 
-**Chunking guidance for continuous mode**: Consider chunking when acquisitions exceed ~4000 frames, using `chunk_frames=4000` as a reasonable maximum. Shorter acquisitions can use a single polynomial with moderate degree. The warmstart mechanism initializes each chunk's polynomial from the previous chunk's endpoint for smooth transitions.
+**Chunking guidance for continuous mode**: Consider chunking when acquisitions exceed ~4000 frames, using `chunk_frames=4000` as a reasonable maximum. Shorter acquisitions can use a single polynomial with moderate degree. Each chunk's inter shift is measured against the previous (corrected) chunk by cross-correlation; a soft intra boundary prior keeps the per-chunk polynomials continuous across boundaries.
 ```julia
 # Short acquisition (<4000 frames) - single polynomial
 (smld_corrected, info) = driftcorrect(smld; dataset_mode=:continuous, degree=3)
@@ -234,7 +237,7 @@ The package supports both SMLMData 0.5 and 0.6+ via `_HAS_SIGMA_XY` (compile-tim
 
 ### Continuous Mode Internals
 
-For continuous mode, inter-shifts are warmstarted from polynomial endpoint chaining (`_warmstart_inter_continuous!`) and regularized using boundary gap estimates (`_estimate_continuous_lambda`). Key functions: `endpoint_drift()`, `startpoint_drift()`, `evaluate_drift()` in `legendre.jl`.
+For continuous mode (singlepass), inter-shifts are **CC-seeded per boundary** (`_ccseed_inter_continuous!`): cross-correlate consecutive intra-corrected chunks, and keep whichever of {CC measurement, endpoint-chain prediction} better overlaps the corrected previous chunk (`_overlap_score` within `_CC_VERIFY_RADIUS`); then entropy-refine regularized by boundary-gap estimates (`_estimate_continuous_lambda`). Endpoint-chaining (`endpoint_drift()` − `startpoint_drift()`) survives only as the per-boundary fallback where CC can't lock on. Because CC *measures* each boundary, it avoids endpoint extrapolation's two failure modes — slow directional accumulation, and a single bad boundary (a degree-d polynomial blowing up at t=±1) propagated down the cumulative chain. The `:iterative` continuous path is separate (soft intra boundary priors + no per-iteration re-chain, `b463bd1`) and is left on its own machinery. Key functions: `endpoint_drift()`, `startpoint_drift()`, `evaluate_drift()` in `legendre.jl`.
 
 ## Key Dependencies
 

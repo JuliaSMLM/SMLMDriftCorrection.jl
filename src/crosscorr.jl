@@ -379,19 +379,22 @@ function findshift(smld1::T, smld2::T;
        smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
         error("Images must have the same size.")
     end
+    # Build ROI in the coordinate type (Float32 emitters need a Float32 ROI; histimage2D
+    # is parametrized on a single T shared by x/y/ROI/histbinsize). `float([...])` would
+    # force Float64 and TypeError against Float32 emitter data.
     if n_dims == 2
-        ROI = float([smld1.camera.pixel_edges_x[1],
-                     smld1.camera.pixel_edges_x[end],
-                     smld1.camera.pixel_edges_y[1],
-                     smld1.camera.pixel_edges_y[end]])
+        ROI = coord_type[smld1.camera.pixel_edges_x[1],
+                         smld1.camera.pixel_edges_x[end],
+                         smld1.camera.pixel_edges_y[1],
+                         smld1.camera.pixel_edges_y[end]]
     elseif n_dims == 3
         smld1_z = [e.z for e in smld1.emitters]
-        ROI = float([smld1.camera.pixel_edges_x[1],
-                     smld1.camera.pixel_edges_x[end],
-                     smld1.camera.pixel_edges_y[1],
-                     smld1.camera.pixel_edges_y[end],
-                     round(minimum(smld1_z)),
-                     round(maximum(smld1_z))])
+        ROI = coord_type[smld1.camera.pixel_edges_x[1],
+                         smld1.camera.pixel_edges_x[end],
+                         smld1.camera.pixel_edges_y[1],
+                         smld1.camera.pixel_edges_y[end],
+                         round(minimum(smld1_z)),
+                         round(maximum(smld1_z))]
     end
     imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
     imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
@@ -494,19 +497,22 @@ function findshift_damped(smld1::T, smld2::T;
         error("Images must have the same size.")
     end
 
+    # Build ROI in the coordinate type (Float32 emitters need a Float32 ROI; histimage2D
+    # is parametrized on a single T shared by x/y/ROI/histbinsize). `float([...])` would
+    # force Float64 and TypeError against Float32 emitter data.
     if n_dims == 2
-        ROI = float([smld1.camera.pixel_edges_x[1],
-                     smld1.camera.pixel_edges_x[end],
-                     smld1.camera.pixel_edges_y[1],
-                     smld1.camera.pixel_edges_y[end]])
+        ROI = coord_type[smld1.camera.pixel_edges_x[1],
+                         smld1.camera.pixel_edges_x[end],
+                         smld1.camera.pixel_edges_y[1],
+                         smld1.camera.pixel_edges_y[end]]
     elseif n_dims == 3
         smld1_z = [e.z for e in smld1.emitters]
-        ROI = float([smld1.camera.pixel_edges_x[1],
-                     smld1.camera.pixel_edges_x[end],
-                     smld1.camera.pixel_edges_y[1],
-                     smld1.camera.pixel_edges_y[end],
-                     round(minimum(smld1_z)),
-                     round(maximum(smld1_z))])
+        ROI = coord_type[smld1.camera.pixel_edges_x[1],
+                         smld1.camera.pixel_edges_x[end],
+                         smld1.camera.pixel_edges_y[1],
+                         smld1.camera.pixel_edges_y[end],
+                         round(minimum(smld1_z)),
+                         round(maximum(smld1_z))]
     end
 
     smld1_x = [e.x for e in smld1.emitters]
@@ -892,11 +898,11 @@ function find_affine_fft(smld1::S, smld2::S;
     coord_type = typeof(smld1.emitters[1].x)
     hbs = coord_type(histbinsize)
 
-    # Step 1: Build histogram images on shared ROI
-    ROI = float([smld1.camera.pixel_edges_x[1],
-                 smld1.camera.pixel_edges_x[end],
-                 smld1.camera.pixel_edges_y[1],
-                 smld1.camera.pixel_edges_y[end]])
+    # Step 1: Build histogram images on shared ROI (coord_type so Float32 emitters work)
+    ROI = coord_type[smld1.camera.pixel_edges_x[1],
+                     smld1.camera.pixel_edges_x[end],
+                     smld1.camera.pixel_edges_y[1],
+                     smld1.camera.pixel_edges_y[end]]
 
     x1 = [e.x for e in smld1.emitters]
     y1 = [e.y for e in smld1.emitters]

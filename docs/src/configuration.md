@@ -23,7 +23,7 @@ DriftConfig
 The `quality` parameter selects the algorithm complexity:
 
 - **`:fft`** -- Fast cross-correlation of histogram images. No intra-dataset correction. Best for quick previews or very large datasets.
-- **`:singlepass`** (default) -- One pass of entropy-based intra-dataset correction followed by inter-dataset alignment. Good balance of speed and accuracy.
+- **`:singlepass`** (default) -- One pass of entropy-based intra-dataset correction followed by cross-correlation-seeded, entropy-refined inter-dataset alignment. Good balance of speed and accuracy.
 - **`:iterative`** -- Iterates intra and inter correction until convergence. Most accurate; resolves the coupling between intra and inter drift estimates.
 
 ### Dataset Modes
@@ -31,7 +31,7 @@ The `quality` parameter selects the algorithm complexity:
 The `dataset_mode` parameter controls how multiple datasets are related:
 
 - **`:registered`** (default) -- Datasets are independent acquisitions of the same field of view (e.g., SeqSRM). Inter-dataset alignment finds the best constant shift for each dataset against the others.
-- **`:continuous`** -- One long acquisition split into multiple files or chunks. Polynomials are warm-started from the previous chunk's endpoint, and inter-shifts are regularized to maintain continuity.
+- **`:continuous`** -- One long acquisition split into multiple files or chunks. Each inter-chunk shift is measured by cross-correlating consecutive chunks (with endpoint-chaining kept only as a per-boundary fallback), then entropy-refined with continuity regularization.
 
 ### Chunking (Continuous Mode)
 
@@ -45,7 +45,7 @@ config = DriftConfig(dataset_mode=:continuous, chunk_frames=4000)
 config = DriftConfig(dataset_mode=:continuous, n_chunks=3)
 ```
 
-Each chunk gets its own polynomial. Warm-starting from the previous chunk's endpoint ensures smooth transitions.
+Each chunk gets its own polynomial; consecutive chunks are aligned by cross-correlation (endpoint-chaining only as a fallback), which keeps a single mis-fit boundary from propagating down the chain.
 
 ### Auto-ROI
 

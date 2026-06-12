@@ -18,3 +18,5 @@ src/SAVE/typedefs.jl
 examples/output/
 dev/output/
 .codex
+worktrees/
+scratch/
