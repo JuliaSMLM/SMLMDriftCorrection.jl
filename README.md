@@ -83,8 +83,8 @@ config = DriftConfig(quality=:iterative, degree=3, verbose=1)
 ## Algorithm Pipeline
 
 1. **Intra-dataset**: For each dataset, fit Legendre polynomial drift over time via entropy minimization with adaptive KDTree neighbor rebuilding (threaded across datasets)
-2. **Inter-dataset**: Align datasets using constant shifts optimized via merged-cloud entropy. First pass aligns all to dataset 1 (threaded), then sequential refinement against all earlier datasets
-3. **Iterative** (`:iterative` only): Repeat intra↔inter until inter-shift changes < `convergence_tol`
+2. **Inter-dataset**: Align datasets using constant shifts via a cross-correlation seed plus entropy refinement. Registered mode aligns each dataset against the corrected consensus of the others, keeping whichever of {CC seed, refined} better matches by overlap; continuous mode aligns consecutive-chunk boundaries by cross-correlation, with endpoint-chaining as a per-boundary fallback
+3. **Iterative** (`:iterative` only): Repeat intra↔inter until the inter+intra parameter changes fall below `convergence_tol` (registered mode adds an entropy-cost-plateau early exit)
 
 The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
 

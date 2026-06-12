@@ -164,6 +164,10 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
                                           max_iterations, convergence_tol, verbose, shift_scale; skip_init=skip_init)
     end
 
+    # (Registered inter alignment is now CC-primary inside the tier — cross-correlation
+    # seeds + entropy refines + overlap arbiter — so the old post-hoc CC-rescue is no
+    # longer needed; :fft keeps its own pass-3 outlier re-alignment.)
+
     # Apply corrections to get final SMLD
     smld_corrected = _apply_final_corrections(smld, smld_work, driftmodel, chunk_info, dataset_mode)
 
@@ -420,59 +424,54 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     end
 
     # Step 2: Inter-dataset alignment
-    # Both modes use entropy optimization - datasets image the same FOV/structures
-    n_dims = model.intra[1].ndims
-    reg_lambda = 0.0
-    warmstart_values = Vector{Vector{Float64}}()
+    # Step 2: Inter-dataset alignment — mode-specific.
     if dataset_mode == :registered
-        # Registered mode: mild L2 regularization toward zero for first pass
-        reg_lambda = 1.0 / shift_scale^2
-        warmstart_values = [zeros(n_dims) for _ in 1:smld.n_datasets]
-    elseif dataset_mode == :continuous
-        # Continuous mode: initialize inter-shifts from polynomial endpoints, then optimize
-        _warmstart_inter_continuous!(model, smld, verbose)
-        # Estimate endpoint uncertainty and regularize around warmstart
+        # CC-primary: cross-correlation seeds each dataset (globally robust), entropy
+        # refines (locally precise), and the overlap arbiter keeps the better. Subsumes
+        # the old entropy-first pass1/pass2 + the post-hoc CC-rescue. Continuous keeps
+        # endpoint-chaining below — CC-primary isn't built for temporal chunks whose
+        # global consensus is smeared by across-chunk drift.
+        if verbose > 0
+            @info("SMLMDriftCorrection: CC-primary inter-dataset alignment")
+        end
+        _cc_primary_inter!(model, smld, maxn; n_passes=2, init=true, verbose=verbose)
+    else  # :continuous
+        # CC-seeded inter shifts: measure each chunk boundary by cross-correlation
+        # (endpoint-chaining kept only as a per-boundary fallback), then entropy-refine
+        # and normalize so drift at (DS1, frame1)=0. See _ccseed_inter_continuous!.
+        _ccseed_inter_continuous!(model, smld; verbose=verbose)
         reg_lambda = _estimate_continuous_lambda(model, smld.n_frames, verbose)
         warmstart_values = [copy(model.inter[nn].dm) for nn in 1:smld.n_datasets]
-    end
-
-    if verbose > 0
-        @info("SMLMDriftCorrection: inter-dataset alignment (vs DS1)")
-    end
-    # Precompute corrected SMLD once (inter[1]=0, so this is just intra correction for DS1)
-    precomputed = correctdrift(smld, model)
-    Threads.@threads for nn = 2:smld.n_datasets
-        findinter!(model, smld, nn, [1], maxn;
-            precomputed_corrected = precomputed,
-            regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
-            regularization_lambda = reg_lambda)
-    end
-
-    # Update regularization for second pass using first-pass results
-    if dataset_mode == :registered && smld.n_datasets > 3
-        reg_lambda, warmstart_values = _estimate_registered_lambda(model, smld, verbose)
-    elseif dataset_mode == :registered
-        # Too few datasets for robust statistics — keep first-pass values as targets
-        warmstart_values = [copy(model.inter[nn].dm) for nn in 1:smld.n_datasets]
-    end
-
-    if verbose > 0
-        @info("SMLMDriftCorrection: refining inter-dataset alignment (vs earlier)")
-    end
-    for nn = 2:smld.n_datasets
-        ref_datasets = collect(1:(nn-1))
-        findinter!(model, smld, nn, ref_datasets, maxn;
-            regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
-            regularization_lambda = reg_lambda)
-    end
-
-    # Normalize continuous mode so drift at (DS=1, frame=1) = 0
-    if dataset_mode == :continuous
+        precomputed = correctdrift(smld, model)
+        Threads.@threads for nn = 2:smld.n_datasets
+            findinter!(model, smld, nn, [1], maxn;
+                precomputed_corrected = precomputed,
+                regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda)
+        end
+        for nn = 2:smld.n_datasets
+            findinter!(model, smld, nn, collect(1:(nn-1)), maxn;
+                regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda)
+        end
         _normalize_continuous!(model)
     end
 
     return (iterations=1, converged=true, history=Float64[])
 end
+
+# Relative entropy-improvement threshold for declaring iterative convergence.
+# The global merged-cloud entropy is nearly insensitive to a single dataset's inter
+# shift (one dataset is ~1/N of the cloud, so a tens-of-nm shift moves the cost
+# <1e-6). The inter parameters therefore sit in a near-flat cost basin: each
+# iteration re-nudges them > convergence_tol while the entropy is unchanged, so a
+# parameter-movement test never converges. Stop when the cost itself plateaus.
+const _ENTROPY_REL_TOL = 1.0e-4
+
+# Neighbor radius (μm) for the CC-primary overlap arbiter: per dataset, whichever of
+# {CC seed, entropy-refined shift} places a larger fraction of the dataset's
+# localizations within this distance of a consensus localization is kept. This makes
+# each inter step strictly ≥ CC quality even though the merged-cloud entropy is only
+# ~1/N sensitive to one dataset's offset and so cannot reveal a bad refine on its own.
+const _CC_VERIFY_RADIUS = 0.030
 
 """
 Iterative quality tier - full intra↔inter convergence loop.
@@ -681,37 +680,24 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
                   "= $(round(max_gap_nm, digits=2)) nm at DS$(worst_boundary)→DS$(worst_boundary+1)")
         end
 
-        # Update inter-shifts
-        # Both modes use entropy optimization - datasets image the same FOV/structures
-        reg_lambda = 0.0
-        warmstart_values = Vector{Vector{Float64}}()
+        # Update inter-shifts — mode-specific.
         if dataset_mode == :registered
-            # Registered mode: adaptive regularization from current shift distribution
-            if n_datasets > 3
-                reg_lambda, warmstart_values = _estimate_registered_lambda(model, smld, verbose > 1 ? verbose : 0)
-            else
-                reg_lambda = 1.0 / shift_scale^2
-                warmstart_values = [copy(model.inter[nn].dm) for nn in 1:n_datasets]
-            end
-        elseif dataset_mode == :continuous
-            # Continuous mode: initialize from polynomial endpoints before optimization
-            _warmstart_inter_continuous!(model, smld, verbose > 1 ? verbose : 0)
+            # CC-primary, one Jacobi pass per iteration (the loop provides the iteration):
+            # CC seed + entropy refine + overlap arbiter, reference included + re-anchored.
+            _cc_primary_inter!(model, smld, maxn; n_passes=1, init=false,
+                               verbose = verbose > 1 ? verbose : 0)
+        else  # :continuous
+            # Endpoint-chained inter; do NOT re-chain from polynomial endpoints per
+            # iteration (b463bd1) — refine continuously from the previous iteration;
+            # continuity is enforced softly by the intra boundary prior in findintra!.
             reg_lambda = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
             warmstart_values = [copy(model.inter[nn].dm) for nn in 1:n_datasets]
-        end
-
-        # Entropy-based all-to-all alignment (Jacobi: snapshot before parallel loop)
-        precomputed = correctdrift(smld, model)
-        Threads.@threads for nn = 2:n_datasets
-            others = collect(setdiff(1:n_datasets, nn))
-            findinter!(model, smld, nn, others, maxn;
-                precomputed_corrected = precomputed,
-                regularization_target = isempty(warmstart_values) ? nothing : warmstart_values[nn],
-                regularization_lambda = reg_lambda)
-        end
-
-        # Normalize continuous mode
-        if dataset_mode == :continuous
+            precomputed = correctdrift(smld, model)
+            Threads.@threads for nn = 2:n_datasets
+                findinter!(model, smld, nn, collect(setdiff(1:n_datasets, nn)), maxn;
+                    precomputed_corrected = precomputed,
+                    regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda)
+            end
             _normalize_continuous!(model)
         end
 
@@ -719,6 +705,31 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         smld_corrected = correctdrift(smld, model)
         current_entropy = _compute_entropy(smld_corrected, maxn)
         push!(history, current_entropy)
+
+        # Entropy-plateau early-exit. The parameter-movement test below can never
+        # settle: the global merged-cloud entropy is nearly insensitive to a single
+        # dataset's inter shift (one dataset is ~1/N of the cloud), so the inter
+        # parameters sit in a near-flat cost basin — each iteration re-nudges them
+        # > convergence_tol while the entropy is unchanged, and intra wobbles as its
+        # merged-cloud scaffold follows. When the cost itself has stopped improving,
+        # the optimization is done; continuing (and the warm-start retries, which
+        # only re-enter this same loop and so cannot escape a flat basin) just burns
+        # hours. Stop on a relative-improvement plateau. Gated to registered mode:
+        # this is the registered merged-cloud failure mode; continuous mode uses
+        # endpoint-chained inter shifts and keeps its own (b463bd1) convergence path
+        # unchanged, so its behavior is provably unaffected by this fix.
+        if dataset_mode == :registered && length(history) >= 2
+            prev_entropy = history[end-1]
+            rel_impr = (prev_entropy - current_entropy) / max(abs(prev_entropy), eps())
+            if rel_impr < _ENTROPY_REL_TOL
+                converged = true
+                if verbose > 0
+                    @info("SMLMDriftCorrection: entropy plateau after $iteration iterations " *
+                          "(relative improvement $(round(rel_impr, sigdigits=2)) < $_ENTROPY_REL_TOL)")
+                end
+                break
+            end
+        end
 
         # Convergence criterion now considers BOTH inter-shift movement and
         # intra drift-vector movement at test frames [1, mid, end]. Declaring
@@ -779,6 +790,115 @@ function apply_inter_only(smld::SMLD, model::LegendrePolynomial)
 end
 
 """
+Fraction of a dataset's localizations (after applying `inter`) that fall within
+`radius` (μm) of a consensus localization in `tree`. Used by the CC-primary
+overlap arbiter as a model-free alignment-quality score.
+"""
+function _overlap_score(sd::SMLD, inter::Vector{Float64}, tree, radius::Float64, n_dims::Int)
+    isempty(sd.emitters) && return 0.0
+    cnt = 0
+    pt = zeros(Float64, n_dims)
+    for e in sd.emitters
+        pt[1] = e.x - inter[1]
+        pt[2] = e.y - inter[2]
+        n_dims == 3 && (pt[3] = e.z - inter[3])
+        _, dists = knn(tree, pt, 1)
+        dists[1] < radius && (cnt += 1)
+    end
+    return cnt / length(sd.emitters)
+end
+
+"""
+Return a copy of dataset `d` with ONLY its intra-drift removed (inter shift left in),
+so cross-correlation/overlap against the consensus recovers the total inter shift.
+"""
+function _intra_only_corrected(smld::SMLD, model::LegendrePolynomial, d::Int)
+    n_dims = nDims(smld)
+    sd = deepcopy(filter_by_dataset(smld, d))
+    for e in sd.emitters
+        e.x = correctdrift(e.x, e.frame, model.intra[d].dm[1])
+        e.y = correctdrift(e.y, e.frame, model.intra[d].dm[2])
+        n_dims == 3 && (e.z = correctdrift(e.z, e.frame, model.intra[d].dm[3]))
+    end
+    return sd
+end
+
+"""
+CC-primary inter-dataset alignment (registered mode).
+
+Cross-correlation is the *primary* per-dataset objective (globally robust — it finds
+the right alignment basin even where the merged-cloud entropy is blind to a single
+dataset's offset), and entropy is the *refinement* (locally precise). For each
+dataset: seed from the cross-correlation shift to the corrected consensus of the
+others, entropy-refine from that seed (`findinter!`), then keep whichever of
+{CC seed, entropy-refined} has higher consensus overlap (`_overlap_score`). The
+overlap arbiter is required because the merged-cloud entropy is only ~1/N sensitive
+to one dataset, so the refine can drift toward a wrong local minimum without the
+entropy value revealing it; keeping the better-by-overlap candidate makes the step
+strictly ≥ CC quality. The reference (DS1) is included so a misaligned reference is
+fixable; the result is re-anchored to inter[1]=0 (an image-invariant global shift).
+`init=true` first does a rough cross-correlation init vs DS1 (cold start). Jacobi:
+each pass uses one corrected snapshot. Subsumes the old post-hoc CC-rescue.
+"""
+function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
+                             n_passes::Int=2, init::Bool=false, verbose::Int=0)
+    n_dims = nDims(smld)
+    n_datasets = smld.n_datasets
+    n_datasets < 2 && return
+
+    # Cold start: rough CC alignment of each dataset to DS1.
+    if init
+        ds1 = _intra_only_corrected(smld, model, 1)
+        Threads.@threads for d in 2:n_datasets
+            sd = _intra_only_corrected(smld, model, d)
+            cc = try findshift(ds1, sd; histbinsize=0.05) catch; continue end
+            maximum(abs.(cc)) < 5.0 && (model.inter[d].dm .= Float64.(cc[1:n_dims]))
+        end
+    end
+
+    for pass in 1:n_passes
+        snap = correctdrift(smld, model)             # Jacobi snapshot (read-only across threads)
+        Threads.@threads for d in 1:n_datasets
+            others = [x for x in 1:n_datasets if x != d]
+            ref = filter_by_dataset(snap, others)
+            isempty(ref.emitters) && continue
+            sd = _intra_only_corrected(smld, model, d)
+            isempty(sd.emitters) && continue
+
+            cc = try findshift(ref, sd; histbinsize=0.05) catch; continue end
+            maximum(abs.(cc)) > 5.0 && continue       # reject absurd CC
+
+            refmat = if n_dims == 2
+                permutedims([Float64[e.x for e in ref.emitters] Float64[e.y for e in ref.emitters]])
+            else
+                permutedims([Float64[e.x for e in ref.emitters] Float64[e.y for e in ref.emitters] Float64[e.z for e in ref.emitters]])
+            end
+            tree = KDTree(refmat; leafsize=10)
+            ov_cc = _overlap_score(sd, Float64.(cc[1:n_dims]), tree, _CC_VERIFY_RADIUS, n_dims)
+
+            # entropy-refine from the CC seed (no L2 reg: CC provides the anchor)
+            for k in 1:n_dims; model.inter[d].dm[k] = Float64(cc[k]); end
+            findinter!(model, smld, d, others, maxn;
+                       precomputed_corrected = snap, regularization_lambda = 0.0)
+            ov_ref = _overlap_score(sd, copy(model.inter[d].dm), tree, _CC_VERIFY_RADIUS, n_dims)
+
+            if ov_ref + 1e-9 < ov_cc                   # overlap arbiter: refine drifted → keep CC
+                for k in 1:n_dims; model.inter[d].dm[k] = Float64(cc[k]); end
+            end
+        end
+    end
+
+    # Re-anchor to inter[1]=0 (global frame shift, image-invariant) if the reference moved.
+    if any(abs.(model.inter[1].dm) .> 1e-12)
+        δ = copy(model.inter[1].dm)
+        for d in 1:n_datasets, k in 1:n_dims
+            model.inter[d].dm[k] -= δ[k]
+        end
+    end
+    return
+end
+
+"""
 Check maximum change in inter-shifts between iterations.
 """
 function _max_inter_change(inter_old::Vector{Vector{Float64}},
@@ -794,22 +914,92 @@ function _max_inter_change(inter_old::Vector{Vector{Float64}},
 end
 
 """
-Warm start inter-shifts for continuous mode from polynomial endpoints.
+Seed continuous-mode inter-shifts by cross-correlating consecutive chunks (FFT),
+with a per-boundary endpoint-chaining fallback.
+
+Continuous chunks share structure (same FOV, consecutive in time), so the inter
+shift across each boundary can be *measured* by cross-correlating the intra-
+corrected chunk against the already-placed previous chunk — rather than
+*extrapolated* from the polynomial endpoints. Per boundary (n-1)→n, both
+candidates are formed: the CC-measured shift, and the endpoint-chained shift
+`inter[n-1] + endpoint(n-1) - startpoint(n)`. Whichever puts chunk n in better
+consensus overlap (`_overlap_score` within `_CC_VERIFY_RADIUS`) with the corrected
+chunk n-1 is kept.
+
+This is strictly ≥ either method alone: it uses CC where it locks on (the common
+case) and falls back to endpoint-chaining at a sparse/featureless boundary where
+CC can't. It avoids endpoint-chaining's two failure modes — slow directional
+residual accumulation, and a single bad boundary blowing up and propagating down
+the cumulative chain when a degree-d polynomial extrapolates wildly at t=±1
+(measuring beats extrapolating). See Continuous Mode Internals in CLAUDE.md.
 """
-function _warmstart_inter_continuous!(model::LegendrePolynomial, smld::SMLD, verbose::Int)
-    ndims = model.intra[1].ndims
-    for nn = 2:smld.n_datasets
-        # Chain: inter[n] = inter[n-1] + endpoint(n-1) - startpoint(n)
-        endpoint_prev = endpoint_drift(model.intra[nn-1], smld.n_frames)
-        startpoint_curr = startpoint_drift(model.intra[nn])
-        for dim in 1:ndims
-            model.inter[nn].dm[dim] = model.inter[nn-1].dm[dim] +
-                                      endpoint_prev[dim] - startpoint_curr[dim]
+function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbose::Int=0)
+    n_dims = nDims(smld)
+    n_datasets = smld.n_datasets
+    n_datasets < 2 && return
+    model.inter[1].dm .= 0.0
+
+    # chunk d, intra removed, inter NOT applied (deepcopy: filter shares emitter refs)
+    intra_only(d) = begin
+        sd = deepcopy(filter_by_dataset(smld, d))
+        for e in sd.emitters
+            e.x = correctdrift(e.x, e.frame, model.intra[d].dm[1])
+            e.y = correctdrift(e.y, e.frame, model.intra[d].dm[2])
+            n_dims == 3 && (e.z = correctdrift(e.z, e.frame, model.intra[d].dm[3]))
         end
+        sd
     end
-    if verbose > 0
-        @info("SMLMDriftCorrection: initialized inter-shifts from polynomial endpoints")
+
+    n_cc = 0; n_ep = 0
+    prev = intra_only(1)
+    for nn in 2:n_datasets
+        cur = intra_only(nn)
+        # reference = chunk n-1 placed in the corrected frame (its inter applied)
+        ref = deepcopy(prev)
+        for e in ref.emitters
+            e.x -= model.inter[nn-1].dm[1]
+            e.y -= model.inter[nn-1].dm[2]
+            n_dims == 3 && (e.z -= model.inter[nn-1].dm[3])
+        end
+
+        # endpoint-chained candidate (always available, even where CC can't lock on)
+        ep = endpoint_drift(model.intra[nn-1], smld.n_frames) .- startpoint_drift(model.intra[nn])
+        inter_ep = Float64[model.inter[nn-1].dm[k] + Float64(ep[k]) for k in 1:n_dims]
+
+        if isempty(ref.emitters) || isempty(cur.emitters)
+            model.inter[nn].dm .= inter_ep; n_ep += 1; prev = cur; continue
+        end
+
+        refmat = n_dims == 2 ?
+            permutedims([Float64[e.x for e in ref.emitters] Float64[e.y for e in ref.emitters]]) :
+            permutedims([Float64[e.x for e in ref.emitters] Float64[e.y for e in ref.emitters] Float64[e.z for e in ref.emitters]])
+        tree = KDTree(refmat; leafsize=10)
+        ov_ep = _overlap_score(cur, inter_ep, tree, _CC_VERIFY_RADIUS, n_dims)
+
+        # CC-measured candidate: rigid shift of cur onto the corrected ref = full inter[n].
+        # Fine histogram (20 nm) — coarse bins lose the overlap contest to the smooth
+        # endpoint prediction at clean boundaries even though CC is globally better.
+        cc = try findshift(ref, cur; histbinsize=0.02) catch; nothing end
+        if cc !== nothing && maximum(abs.(cc)) < 5.0
+            inter_cc = Float64[Float64(cc[k]) for k in 1:n_dims]
+            ov_cc = _overlap_score(cur, inter_cc, tree, _CC_VERIFY_RADIUS, n_dims)
+            # Prefer the CC measurement: take endpoint only when CC overlap is clearly
+            # worse (a real lock-on failure), not on a marginal edge — endpoint errors
+            # chain down the sequence, so CC wins globally even when slightly behind at a
+            # single boundary.
+            if ov_cc >= ov_ep - 0.05
+                model.inter[nn].dm .= inter_cc; n_cc += 1
+            else
+                model.inter[nn].dm .= inter_ep; n_ep += 1
+            end
+        else
+            model.inter[nn].dm .= inter_ep; n_ep += 1
+        end
+        prev = cur
     end
+    verbose > 0 && @info("SMLMDriftCorrection: continuous CC-seed — $n_cc/$(n_datasets-1) " *
+                         "boundaries from cross-correlation, $n_ep from endpoint fallback")
+    return
 end
 
 """

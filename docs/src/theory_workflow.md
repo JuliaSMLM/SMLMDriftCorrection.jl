@@ -94,7 +94,7 @@ config = DriftConfig(dataset_mode=:continuous, chunk_frames=4000)
 (smld_corrected, info) = driftcorrect(smld, config)
 ```
 
-Each chunk is treated as a separate "dataset" internally. **Warm-starting** ensures continuity: each chunk's polynomial is initialized from the endpoint of the previous chunk's fit. The inter-dataset shifts chain the chunks together, with regularization from boundary gap estimates to prevent discontinuities. This piecewise approach provides the flexibility of high-order modeling without requiring a single high-degree polynomial over the full acquisition.
+Each chunk is treated as a separate "dataset" internally. The inter-chunk shift at each boundary is **measured by cross-correlating consecutive chunks** rather than extrapolated from polynomial endpoints -- consecutive chunks image the same structure (same field of view, adjacent in time), so cross-correlation locks on reliably. The endpoint-chained prediction (``\text{inter}[n] = \text{inter}[n-1] + \text{endpoint}(n-1) - \text{startpoint}(n)``) is kept only as a per-boundary fallback for a sparse or featureless boundary where cross-correlation cannot, chosen by a consensus-overlap test, and the result is entropy-refined with regularization from boundary-gap estimates. Measuring each boundary independently avoids the two failure modes of endpoint extrapolation: slow directional residual accumulation across many seams, and a single mis-fit boundary (a polynomial extrapolating poorly at ``t = \pm 1``) propagating downstream through the cumulative chain. This piecewise approach provides the flexibility of high-order modeling without requiring a single high-degree polynomial over the full acquisition.
 
 ### Registered
 
@@ -107,14 +107,14 @@ config = DriftConfig(dataset_mode=:registered)
 
 Between acquisition segments, the microscope acquires a brightfield z-stack, computes 3D cross-correlation against a reference, and iteratively moves the stage to realign the sample. This bounds the inter-dataset drift to the registration precision (typically 5-10 nm lateral). However, residual registration errors and intra-segment drift still require computational correction.
 
-In registered mode, datasets are spatially overlapping images of the same field of view. The inter-dataset alignment uses **merged-cloud entropy**: the shifted dataset's localizations are combined with reference dataset localizations into a single point cloud, and the entropy of the combined cloud is minimized. This finds the constant shift that produces the tightest merged distribution.
+In registered mode, datasets are spatially overlapping images of the same field of view. The inter-dataset alignment is **CC-primary**: for each dataset, a cross-correlation against the corrected consensus of all *other* datasets gives a globally robust shift estimate (the **seed**), which is then **refined** by minimizing the merged-cloud entropy of that dataset combined with the consensus (this incorporates the localization uncertainties ``\sigma`` for sub-bin precision). An **overlap arbiter** keeps whichever of {seed, refined} places more of the dataset's localizations near a consensus localization. Cross-correlation has to lead because the global merged-cloud entropy is only ~``1/N`` sensitive to a single dataset's offset -- entropy alone has almost no gradient to align an individual dataset and can leave one badly misaligned. The CC seed supplies the global signal entropy lacks; the arbiter guarantees each step is at least as good as the cross-correlation. The reference dataset is included (so a misaligned reference is fixable) and the result is re-anchored so the global frame is fixed.
 
 ## Quality Tiers
 
 The package provides three quality tiers that trade speed for accuracy. All three share the same drift model (Legendre polynomials + inter-shifts); they differ in how the model parameters are estimated.
 
 !!! tip "Multi-threading"
-    Intra-dataset correction is parallelized with `Threads.@threads` (each dataset is independent). The first inter-dataset pass (all vs dataset 1) is also threaded using a precomputed snapshot of corrected coordinates. Start Julia with multiple threads for best performance:
+    Intra-dataset correction is parallelized with `Threads.@threads` (each dataset is independent). Registered inter-dataset alignment is also threaded (each dataset's CC seed + entropy refine runs against a precomputed snapshot of corrected coordinates). Start Julia with multiple threads for best performance:
     ```
     julia -t auto        # use all available cores
     julia -t 8           # use 8 threads
@@ -141,27 +141,21 @@ The default tier. Performs one pass of entropy-based intra-dataset correction fo
    - Initialize polynomial coefficients with small random values
    - Minimize entropy upper bound using Nelder-Mead optimization (10,000 iteration limit)
    - Adaptive KDTree rebuilding avoids unnecessary recomputation
-2. **Inter-dataset alignment, Pass 1** (threaded, all vs dataset 1):
-   - For each dataset ``n > 1``, apply intra-correction to dataset ``n`` and full correction to dataset 1
-   - Use cross-correlation for initial shift estimate
-   - Refine via BFGS optimization of merged-cloud entropy
-3. **Inter-dataset alignment, Pass 2** (sequential, each vs all earlier):
-   - For each dataset ``n``, re-optimize the shift against all datasets ``1, \ldots, n-1``
-   - This incorporates information from the intermediate datasets
-4. Apply corrections to produce the final SMLD
-
-For continuous mode, inter-shifts are warm-started from polynomial endpoint chaining and regularized using boundary gap estimates.
+2. **Inter-dataset alignment** -- mode-specific:
+   - **Registered**: CC-primary, as described under Dataset Modes. For each dataset (threaded over a snapshot of the corrected coordinates), cross-correlate against the corrected consensus of the others (seed), refine that seed via BFGS on the merged-cloud entropy, and keep whichever of {seed, refined} has higher consensus overlap. The reference is included and the result is re-anchored.
+   - **Continuous**: CC-seeded per boundary. The boundary cross-correlations walk the chunks **sequentially** (each placement builds on the previous chunk's), falling back to endpoint-chaining only where CC cannot lock on; the entropy refine that follows (with boundary-gap regularization) is threaded against chunk 1, then sequential against earlier chunks.
+3. Apply corrections to produce the final SMLD
 
 ### Iterative (`:iterative`)
 
 The most accurate tier. Iterates between intra and inter correction until convergence.
 
 **Procedure:**
-1. Run the full singlepass procedure as initialization
+1. Run the full singlepass procedure as initialization (this establishes the CC-seeded inter shifts -- continuous benefits from the CC seed here too)
 2. **Iterate until convergence** (default: max 10 iterations, tolerance 1 nm):
    a. Re-run intra-dataset correction with inter-shifts applied (shifted coordinates), threaded across datasets
-   b. Re-run inter-dataset alignment using Jacobi-style updates (snapshot corrected data, then thread all-vs-others)
-   c. Check convergence: maximum change in any inter-shift component < `convergence_tol`
+   b. Re-run inter-dataset alignment over a corrected snapshot -- registered: one CC-primary pass; continuous: refine the inter shifts in place (the boundary cross-correlation is *not* re-chained every iteration, which would otherwise overwrite the refined shifts and stall convergence)
+   c. Check convergence: the maximum change across **both** inter-shift and intra-drift components (the latter sampled at frame start/mid/end) falls below `convergence_tol`. In **registered** mode an additional early exit fires when the merged-cloud entropy cost plateaus (relative improvement below a tolerance) -- the entropy is nearly flat with respect to the inter shifts there, so a movement-only test could otherwise run to the iteration cap at ~0% gain. Continuous mode uses only the movement criterion.
 3. Track entropy history for diagnostics (`info.history`)
 
 The iteration resolves the coupling between intra and inter corrections: the optimal polynomial depends on the inter-shifts, and vice versa. For data with significant inter-dataset drift, iterative mode can improve accuracy substantially over singlepass.

@@ -215,6 +215,34 @@ using Random
         @test rmsd_iter < 0.150  # 150 nm (stochastic, allow margin)
     end
 
+    # --- Test CC-primary inter alignment (registered; covers _cc_primary_inter!) ---
+    @testset "CC-primary inter (registered)" begin
+        # smld_noisy is 3 datasets imaging the same Nmer structure (mutually aligned,
+        # no applied drift). Deliberately offset DS2 by +80nm in x — the global
+        # merged-cloud entropy is only ~1/N sensitive to a single dataset's offset, so
+        # this is the failure mode CC-primary (CC seed → entropy refine → overlap
+        # arbiter, per dataset) exists to catch. It must pull DS2 back toward the
+        # consensus and leave the aligned datasets put. (CC on this small sim is coarse
+        # — 50nm bins — so assert direction + bound, not an exact value; exact recovery
+        # is validated on dense real data.)
+        smld_off = deepcopy(smld_noisy)
+        for e in smld_off.emitters
+            e.dataset == 2 && (e.x += 0.080)
+        end
+        model = DC.LegendrePolynomial(smld_off; degree=2)   # zeros: intra=0, inter=0
+        DC._cc_primary_inter!(model, smld_off, 100; n_passes=2, init=true)
+        @test 0.025 < model.inter[2].dm[1] < 0.135            # pulled toward +80nm, no wild overshoot
+        @test isapprox(model.inter[1].dm[1], 0.0; atol=1e-9)  # reference re-anchored to inter[1]=0
+        @test abs(model.inter[3].dm[1]) < 0.04                # aligned DS3 stays put (≤~1 CC bin)
+
+        # Non-regression on already-aligned data. CC-primary re-solves every dataset,
+        # so values won't be exactly 0, but nothing should be pushed off the consensus
+        # by more than ~1 cross-correlation bin.
+        model2 = DC.LegendrePolynomial(smld_noisy; degree=2)
+        DC._cc_primary_inter!(model2, smld_noisy, 100; n_passes=2, init=true)
+        @test all(abs(model2.inter[d].dm[k]) < 0.04 for d in 1:3, k in 1:2)
+    end
+
     # --- Test warm start ---
     @testset "Warm start" begin
         (smld1, info1) = DC.driftcorrect(smld_drift; quality=:singlepass)
@@ -725,5 +753,36 @@ using Random
             @test length(res_inter.residuals_x) == length(res_inter.dataset_indices)
             @test length(res_inter.residuals_y) == length(res_inter.dataset_indices)
         end
+    end
+
+    # --- Continuous mode: full-sim drift recovery (CC seed) ---
+    @testset "Continuous mode (CC seed) full sim" begin
+        # One dense acquisition with a known smooth drift (zero at frame 1, matching the
+        # continuous gauge). Dense enough (~10^5 locs) that consecutive-chunk CC locks on
+        # reliably, so the CC seed recovers the drift where endpoint-chaining would
+        # accumulate it. (On real cohort data this is 593nm→10nm; here we assert the
+        # synthetic drift is substantially removed.)
+        Random.seed!(7)
+        params_cont = StaticSMLMConfig(80.0, 0.13, 30, 1, 4000, 50.0, 2, [0.0, 1.0])
+        (smld_c0, _) = simulate(params_cont; pattern = Nmer2D(n = 8, d = 0.3),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.05, k_off = 50.0),
+            camera = IdealCamera(1:64, 1:64, 0.1))
+        NFc = smld_c0.n_frames
+        cdrift(f) = (u = (f - 1) / (NFc - 1); (0.12 * sin(2π * u) + 0.06 * u, 0.10 * u^2 + 0.04 * u))
+        smld_cd = deepcopy(smld_c0)
+        for e in smld_cd.emitters
+            dx, dy = cdrift(e.frame); e.x += dx; e.y += dy
+        end
+        crm(a, b) = sqrt(sum((e1.x - e2.x)^2 + (e1.y - e2.y)^2
+                             for (e1, e2) in zip(a.emitters, b.emitters)) / length(a.emitters))
+        drifted = 1000 * crm(smld_cd, smld_c0)
+        (sc, cinfo) = DC.driftcorrect(smld_cd; dataset_mode = :continuous,
+                                       n_chunks = 4, degree = 3)
+        corrected = 1000 * crm(sc, smld_c0)
+        print("continuous full-sim: drifted RMSD = $(round(drifted, digits=1)) nm -> " *
+              "corrected = $(round(corrected, digits=1)) nm\n")
+        @test cinfo isa DC.DriftInfo
+        @test corrected < 0.4 * drifted      # drift substantially removed
+        @test corrected < 35.0               # ~3x the ~12 nm observed; robust to RNG/threads
     end
 end
