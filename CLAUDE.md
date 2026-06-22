@@ -106,7 +106,7 @@ The reference (DS1) is included so a misaligned reference is fixable, then the r
 
 - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
 - `:singlepass` (default): Single pass of intra then inter correction
-- `:iterative`: Full intra↔inter refinement, one inter pass per iteration (registered: a CC-primary pass; continuous: in-place inter refine, no per-iteration re-chain). Convergence trips when the max change across **both** inter and intra parameters falls below `convergence_tol`. In **registered** mode an entropy **cost-plateau** early exit also applies (relative improvement < `_ENTROPY_REL_TOL`=1e-4), because the merged-cloud entropy is a near-flat basin w.r.t. the inter shifts (entropy blindness, above) and a movement-only test could otherwise run to the iteration cap at ~0% gain. Continuous mode uses the movement criterion only.
+- `:iterative`: Full intra↔inter refinement, one inter pass per iteration (registered: a CC-primary pass; continuous: in-place inter refine, no per-iteration re-chain). Convergence trips when the max change across **both** inter and intra parameters falls below `convergence_tol`. In **both** modes an entropy **cost-plateau** early exit also applies (relative improvement < `_ENTROPY_REL_TOL`=1e-4): a movement-only test can run to the iteration cap at ~0% gain whenever the cost sits in a near-flat basin — registered via merged-cloud entropy blindness (above), continuous because the CC-seeded singlepass already solves the alignment so the iterate loop only wobbles params below the entropy scale. (This previously mis-reported `converged=false` on flat-basin continuous runs that had in fact reached the entropy floor — fixed in 0.2.8 by extending the plateau exit to continuous mode.)
 
 ### Dataset Modes
 
