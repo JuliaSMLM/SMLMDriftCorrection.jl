@@ -785,4 +785,37 @@ using Random
         @test corrected < 0.4 * drifted      # drift substantially removed
         @test corrected < 35.0               # ~3x the ~12 nm observed; robust to RNG/threads
     end
+
+    # --- Continuous mode + iterative: entropy-plateau early-exit reports converged ---
+    # Regression guard for the 0.2.8 fix. A flat-basin continuous iterative run (the
+    # CC-seeded singlepass already solves it, so the iterate loop only wobbles params
+    # below the entropy scale but above convergence_tol) must report converged=true
+    # via the entropy-plateau exit — not run to the iteration cap with converged=false
+    # as it did before the plateau exit was extended from registered to continuous.
+    @testset "Continuous mode iterative converges (entropy plateau)" begin
+        Random.seed!(7)
+        params_ci = StaticSMLMConfig(80.0, 0.13, 30, 1, 4000, 50.0, 2, [0.0, 1.0])
+        (smld_ci0, _) = simulate(params_ci; pattern = Nmer2D(n = 8, d = 0.3),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.05, k_off = 50.0),
+            camera = IdealCamera(1:64, 1:64, 0.1))
+        NFci = smld_ci0.n_frames
+        cidrift(f) = (u = (f - 1) / (NFci - 1); (0.10 * u, 0.08 * u))
+        smld_cid = deepcopy(smld_ci0)
+        for e in smld_cid.emitters
+            dx, dy = cidrift(e.frame); e.x += dx; e.y += dy
+        end
+        crm_ci(a, b) = sqrt(sum((e1.x - e2.x)^2 + (e1.y - e2.y)^2
+                                for (e1, e2) in zip(a.emitters, b.emitters)) / length(a.emitters))
+        drifted_ci = 1000 * crm_ci(smld_cid, smld_ci0)
+        (sci, ciinfo) = DC.driftcorrect(smld_cid; quality = :iterative,
+                                         dataset_mode = :continuous, n_chunks = 4,
+                                         degree = 3, max_iterations = 6)
+        corrected_ci = 1000 * crm_ci(sci, smld_ci0)
+        print("continuous iterative: drifted = $(round(drifted_ci, digits=1)) nm -> " *
+              "corrected = $(round(corrected_ci, digits=1)) nm, " *
+              "converged=$(ciinfo.converged), iters=$(ciinfo.iterations)\n")
+        @test ciinfo.converged == true        # plateau (or movement) exit, not the cap
+        @test ciinfo.iterations < 6 * 4       # did not exhaust all warm-start retries at the cap
+        @test corrected_ci < 0.5 * drifted_ci # drift substantially removed
+    end
 end

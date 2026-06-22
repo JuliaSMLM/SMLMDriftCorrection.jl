@@ -706,19 +706,24 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         current_entropy = _compute_entropy(smld_corrected, maxn)
         push!(history, current_entropy)
 
-        # Entropy-plateau early-exit. The parameter-movement test below can never
-        # settle: the global merged-cloud entropy is nearly insensitive to a single
-        # dataset's inter shift (one dataset is ~1/N of the cloud), so the inter
-        # parameters sit in a near-flat cost basin — each iteration re-nudges them
-        # > convergence_tol while the entropy is unchanged, and intra wobbles as its
-        # merged-cloud scaffold follows. When the cost itself has stopped improving,
-        # the optimization is done; continuing (and the warm-start retries, which
-        # only re-enter this same loop and so cannot escape a flat basin) just burns
-        # hours. Stop on a relative-improvement plateau. Gated to registered mode:
-        # this is the registered merged-cloud failure mode; continuous mode uses
-        # endpoint-chained inter shifts and keeps its own (b463bd1) convergence path
-        # unchanged, so its behavior is provably unaffected by this fix.
-        if dataset_mode == :registered && length(history) >= 2
+        # Entropy-plateau early-exit. The parameter-movement test below can fail to
+        # settle in a flat entropy basin, so the loop runs to the iteration cap (and
+        # through the warm-start retries, which only re-enter this same loop and so
+        # cannot escape a flat basin) at ~0% cost gain. BOTH dataset modes can reach
+        # such a basin:
+        #   - registered: the global merged-cloud entropy is nearly insensitive to a
+        #     single dataset's inter shift (one dataset is ~1/N of the cloud), so the
+        #     inter parameters sit in a near-flat cost basin and intra wobbles as its
+        #     scaffold follows.
+        #   - continuous: the CC-seeded singlepass init already solves the alignment,
+        #     so the iterate loop only wobbles params below the entropy scale yet above
+        #     convergence_tol (a 513-ruler hv_2ch run reached the converged run's exact
+        #     entropy but reported converged=false at the iteration cap).
+        # When the cost itself has stopped improving the optimization is done, so stop
+        # on a relative-improvement plateau (both modes). The intra Legendre has no
+        # P_0 term, so a flat-entropy param move is degenerate wobble, not a real
+        # refinement being cut short.
+        if length(history) >= 2
             prev_entropy = history[end-1]
             rel_impr = (prev_entropy - current_entropy) / max(abs(prev_entropy), eps())
             if rel_impr < _ENTROPY_REL_TOL
