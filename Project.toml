@@ -17,7 +17,7 @@ StatsFuns = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
 
 [compat]
 Distributions = "0.25"
-FourierTools = "0.4"
+FourierTools = "0.4, 0.5"
 LegendrePolynomials = "0.4"
 NearestNeighbors = "0.4"
 Optim = "1"
@@ -26,4 +26,3 @@ SMLMSim = "0.3, 0.4, 0.5, 0.6, 0.7"
 Statistics = "1"
 StatsFuns = "1"
 julia = "1.10"
-
