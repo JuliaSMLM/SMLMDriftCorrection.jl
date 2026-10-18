@@ -371,10 +371,14 @@ end
 Perform a cross-correlation between images representing localizations in two
 SMLD structures and compute the shift between the two original images.
 histbinsize is the size of the bins in the histogram image in the
-same units as the localization coordinates.
+same units as the localization coordinates. `maxcount`, when given, clips every
+histogram bin to at most that many localizations before correlating, so the CC
+measures shared occupancy and one bright aggregate (thousands of localizations in a
+bin) cannot outweigh the structure; `nothing` (default) correlates raw counts.
 """
 function findshift(smld1::T, smld2::T;
-    histbinsize::Real=1.0
+    histbinsize::Real=1.0,
+    maxcount::Union{Nothing, Int}=nothing
 ) where {T<:SMLD}
 
     # Check for empty datasets
@@ -413,6 +417,10 @@ function findshift(smld1::T, smld2::T;
                           ROI=ROI, histbinsize=histbinsize)
         im2 = histimage3D(smld2_x, smld2_y, smld2_z;
                           ROI=ROI, histbinsize=histbinsize)
+    end
+    if maxcount !== nothing
+        im1 = min.(im1, maxcount)
+        im2 = min.(im2, maxcount)
     end
     # Compute the cross-correlation (with zero-padding)
     if n_dims == 2
@@ -466,11 +474,13 @@ end
 
 Find shift with Gaussian damping centered at prior_shift.
 Used to refine outlier shifts by searching near expected location.
+`maxcount` clips histogram bins as in `findshift`.
 """
 function findshift_damped(smld1::T, smld2::T;
     histbinsize::Real=1.0,
     prior_shift::Vector{<:Real}=[0.0, 0.0],
-    prior_sigma::Real=1.0
+    prior_sigma::Real=1.0,
+    maxcount::Union{Nothing, Int}=nothing
 ) where {T<:SMLD}
 
     # Check for empty datasets
@@ -505,12 +515,14 @@ function findshift_damped(smld1::T, smld2::T;
     if n_dims == 2
         im1 = histimage2D(smld1_x, smld1_y; ROI=ROI, histbinsize=histbinsize)
         im2 = histimage2D(smld2_x, smld2_y; ROI=ROI, histbinsize=histbinsize)
+        maxcount === nothing || (im1 = min.(im1, maxcount); im2 = min.(im2, maxcount))
         cc = crosscorr2D(im1, im2)
     elseif n_dims == 3
         smld1_z = [e.z for e in smld1.emitters]
         smld2_z = [e.z for e in smld2.emitters]
         im1 = histimage3D(smld1_x, smld1_y, smld1_z; ROI=ROI, histbinsize=histbinsize)
         im2 = histimage3D(smld2_x, smld2_y, smld2_z; ROI=ROI, histbinsize=histbinsize)
+        maxcount === nothing || (im1 = min.(im1, maxcount); im2 = min.(im2, maxcount))
         cc = crosscorr3D(im1, im2)
     end
 

@@ -284,8 +284,10 @@ FFT quality tier - fast cross-correlation only, no entropy optimization.
 Two-pass approach:
 1. First pass: align each dataset to dataset 1 (rough alignment)
 2. Second pass: align each dataset to all others (refinement)
-Each CC shift (and the pass-3 outlier re-alignment) replaces the incumbent only where
-it raises the dataset's overlap with the reference (`_arbitrate_cc!`).
+Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`), so a bright
+aggregate cannot capture the peak, and each CC shift (and the pass-3 outlier re-alignment)
+replaces the incumbent only where it raises the dataset's overlap with the reference
+(`_accept_if_better_overlap!`).
 """
 function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                             dataset_mode::Symbol, verbose::Int)
@@ -300,7 +302,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
         return (iterations=0, converged=true, history=Float64[])
     end
 
-    # Every CC shift below is overlap-guarded (`_arbitrate_cc!`): the
+    # Every CC shift below is overlap-guarded (`_accept_if_better_overlap!`): the
     # unnormalized histogram CC argmax can be captured by a hot spot present in some
     # datasets only and land microns away, so a CC shift replaces the incumbent only
     # where it puts more of the dataset near the reference (see `_cc_primary_inter!`).
@@ -313,8 +315,8 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     tree_ref = _coord_tree(smld_ref, n_dims)
     for nn = 2:n_datasets
         smld_n = filter_by_dataset(smld, nn)
-        cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05)
-        _arbitrate_cc!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
+        cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
     end
 
     if verbose > 0
@@ -351,8 +353,8 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
             copy(smld.metadata)
         )
 
-        cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05)
-        _arbitrate_cc!(model.inter[nn].dm, cc_shift, smld_n,
+        cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n,
                                    _coord_tree(smld_merged, n_dims), n_dims)
     end
 
@@ -388,10 +390,10 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                 for nn in outliers
                     smld_n = filter_by_dataset(smld, nn)
                     cc_shift = findshift_damped(smld_ref, smld_n;
-                        histbinsize=0.05,
+                        histbinsize=0.05, maxcount=_CC_MAXCOUNT,
                         prior_shift=median_dm,
                         prior_sigma=prior_sigma)
-                    _arbitrate_cc!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
+                    _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
                     if verbose > 0
                         new_mag = sqrt(sum(model.inter[nn].dm.^2)) * 1000
                         @info("SMLMDriftCorrection: DS$nn re-aligned: $(round(new_mag, digits=1)) nm")
@@ -440,8 +442,8 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     # Step 2: Inter-dataset alignment — mode-specific.
     if dataset_mode == :registered
         # CC-primary: cross-correlation seeds each dataset (globally robust), entropy
-        # refines (locally precise), and the overlap arbiter keeps the best-ranked of
-        # {refined, CC, incumbent} (see _cc_primary_inter!). Subsumes
+        # refines (locally precise), and the overlap arbiter keeps the best of
+        # {refined, CC, incumbent}. Subsumes
         # the old entropy-first pass1/pass2 + the post-hoc CC-rescue. Continuous keeps
         # endpoint-chaining below — CC-primary isn't built for temporal chunks whose
         # global consensus is smeared by across-chunk drift.
@@ -480,25 +482,18 @@ end
 # parameter-movement test never converges. Stop when the cost itself plateaus.
 const _ENTROPY_REL_TOL = 1.0e-4
 
-# Neighbor radius (μm) for the CC-primary overlap arbiter: per dataset, the candidate
-# placing the most of the dataset's localizations within this distance of a consensus
-# localization is kept (`_overlap_stats`, `_better_overlap`). This makes
-# each inter step never lower a dataset's consensus overlap (as scored) even though the
+# Neighbor radius (μm) for the CC-primary overlap arbiter: per dataset, whichever of
+# {entropy-refined, CC, incumbent} places the largest fraction of the dataset's
+# localizations within this distance of a consensus localization is kept. This makes
+# each inter step never lower a dataset's consensus overlap even though the
 # merged-cloud entropy is only ~1/N sensitive to one dataset's offset and so cannot
 # reveal a wrong CC peak or a bad refine on its own.
 const _CC_VERIFY_RADIUS = 0.030
 
-# Sub-bin grid (μm) searched around the CC shift and the incumbent by `_grid_candidate`:
-# the 50 nm histogram CC can be up to ~35 nm off on sparse data, more than
-# `_CC_VERIFY_RADIUS`, and an incumbent can sit just past it.
-# Offsets of 0 and ±25 nm per axis, ordered center first and then by increasing
-# displacement, so that among fully tied offsets the smallest move wins.
-const _CC_SUBBIN_STEP = 0.025
-const _CC_SUBBIN_GRID_2D = sort!([(_CC_SUBBIN_STEP * i, _CC_SUBBIN_STEP * j)
-                                  for i in -1:1 for j in -1:1]; by = o -> sum(abs2, o))
-const _CC_SUBBIN_GRID_3D = sort!([(_CC_SUBBIN_STEP * i, _CC_SUBBIN_STEP * j, _CC_SUBBIN_STEP * k)
-                                  for i in -1:1 for j in -1:1 for k in -1:1];
-                                 by = o -> sum(abs2, o))
+# Histogram bin-count cap for the registered CC-primary and :fft cross-correlations
+# (`findshift(...; maxcount)`): the CC then measures shared occupancy, so a bright
+# aggregate localized thousands of times in one bin cannot capture the peak.
+const _CC_MAXCOUNT = 4
 
 """
 Iterative quality tier - full intra↔inter convergence loop.
@@ -826,35 +821,19 @@ Fraction of a dataset's localizations (after applying `inter`) that fall within
 `radius` (μm) of a consensus localization in `tree`. Used by the CC-primary
 overlap arbiter as a model-free alignment-quality score.
 """
-_overlap_score(sd::SMLD, inter::Vector{Float64}, tree, radius::Float64, n_dims::Int) =
-    isempty(sd.emitters) ? 0.0 :
-        first(_overlap_stats(sd, inter, tree, radius, n_dims)) / length(sd.emitters)
-
-"""
-`(inliers, mean_distance)` for `sd` shifted by `inter`: how many of its localizations
-lie within `radius` (μm) of a localization in `tree`, and their mean nearest-neighbor
-distance (`Inf` when none does). Scalar `nn` queries on one reusable point buffer.
-"""
-function _overlap_stats(sd::SMLD, inter::Vector{Float64}, tree, radius::Float64, n_dims::Int)
+function _overlap_score(sd::SMLD, inter::Vector{Float64}, tree, radius::Float64, n_dims::Int)
+    isempty(sd.emitters) && return 0.0
+    cnt = 0
     pt = zeros(Float64, n_dims)
-    n_in, sum_in = 0, 0.0
     for e in sd.emitters
         pt[1] = e.x - inter[1]
         pt[2] = e.y - inter[2]
         n_dims == 3 && (pt[3] = e.z - inter[3])
-        _, d = nn(tree, pt)
-        if d < radius
-            n_in += 1
-            sum_in += d
-        end
+        _, dists = knn(tree, pt, 1)
+        dists[1] < radius && (cnt += 1)
     end
-    return n_in, n_in == 0 ? Inf : sum_in / n_in
+    return cnt / length(sd.emitters)
 end
-
-# Arbiter ranking of two `_overlap_stats` results for the same dataset: more inliers
-# wins; equal inliers, the smaller mean distance (the count saturates inside the radius).
-_better_overlap(a::Tuple{Int, Float64}, b::Tuple{Int, Float64}) =
-    a[1] > b[1] || (a[1] == b[1] && a[2] < b[2])
 
 """
 KDTree over an SMLD's localization coordinates (Float64), for `_overlap_score`.
@@ -869,59 +848,17 @@ function _coord_tree(sd::SMLD, n_dims::Int)
 end
 
 """
-Concrete arbiter candidate near `center`: the offset of the sub-bin grid
-(`_CC_SUBBIN_GRID_2D`/`_3D`, ±25 nm) whose `_overlap_stats` rank best, returned as
-`(stats, shift)` for that position. The 50 nm histogram CC can be ~35 nm off on sparse
-data, and an incumbent can sit just past `_CC_VERIFY_RADIUS` from the truth; scored only
-where it stands, either could lose its basin to a hot-spot-captured CC. The arbiter
-therefore searches the grid around both the CC and the incumbent (and also keeps the
-incumbent where it stands), applying whichever position it scores.
+Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` only if
+`cand` puts a larger fraction of `sd`'s localizations within `_CC_VERIFY_RADIUS` of a
+reference localization (`tree`) than the incumbent `inter` does. Returns whether
+`cand` was accepted.
 """
-function _grid_candidate(sd::SMLD, center::Vector{Float64}, tree, n_dims::Int)
-    grid = n_dims == 2 ? _CC_SUBBIN_GRID_2D : _CC_SUBBIN_GRID_3D
-    return _best_on_grid(sd, center, tree, grid)
-end
-
-# Function barrier: `grid` has a concrete NTuple element type here. Strict improvement
-# by `_better_overlap`, so a full tie keeps the first (smallest) offset.
-function _best_on_grid(sd::SMLD, center::Vector{Float64}, tree,
-                       grid::Vector{NTuple{N, Float64}}) where {N}
-    best, best_shift = (-1, Inf), copy(center)
-    s = similar(center)
-    for off in grid
-        for k in 1:N
-            s[k] = center[k] + off[k]
-        end
-        st = _overlap_stats(sd, s, tree, _CC_VERIFY_RADIUS, N)
-        if _better_overlap(st, best)
-            best = st
-            best_shift .= s
-        end
-    end
-    return best, best_shift
-end
-
-"""
-Overlap arbiter for a cross-correlation shift `cand` (`nothing` when the CC failed): set
-`inter` to the best-ranked (`_better_overlap`) of {the incumbent where it stands, the
-incumbent and the CC each at their best sub-bin offset (`_grid_candidate`)}; full ties
-keep the incumbent where it stands. Used by the `:fft` tier, the CC-primary cold start
-and the CC-primary seed. Returns whether `inter` changed.
-"""
-function _arbitrate_cc!(inter::Vector{Float64}, cand, sd::SMLD, tree, n_dims::Int)
-    best, best_shift = _overlap_stats(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims), inter
-    st, sh = _grid_candidate(sd, inter, tree, n_dims)
-    if _better_overlap(st, best)
-        best, best_shift = st, sh
-    end
-    if cand !== nothing
-        st, sh = _grid_candidate(sd, Float64.(cand[1:n_dims]), tree, n_dims)
-        if _better_overlap(st, best)
-            best, best_shift = st, sh
-        end
-    end
-    best_shift === inter && return false
-    inter .= best_shift
+function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree, n_dims::Int)
+    c = Float64.(cand[1:n_dims])
+    ov_cand = _overlap_score(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
+    ov_inc  = _overlap_score(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
+    ov_cand > ov_inc + 1e-9 || return false
+    inter .= c
     return true
 end
 
@@ -946,21 +883,21 @@ CC-primary inter-dataset alignment (registered mode).
 Cross-correlation is the *primary* per-dataset objective (globally robust — it finds
 the right alignment basin even where the merged-cloud entropy is blind to a single
 dataset's offset), and entropy is the *refinement* (locally precise). For each
-dataset: cross-correlate against the corrected consensus of the others; seed from the
-best-ranked of {incumbent where it stands, incumbent and CC each at their best ±25 nm
-sub-bin offset} (`_arbitrate_cc!`, ranked by consensus overlap, `_overlap_stats` /
-`_better_overlap`); entropy-refine from that seed (`findinter!`, `cc_init=false` so a
-zero seed is used as chosen); keep the refined shift unless the seed ranks strictly
-better. The overlap arbiter is required because the merged-cloud entropy is only ~1/N
-sensitive to one dataset, so neither a wrong CC peak nor a refine that drifted to a
-wrong local minimum shows up in the entropy value. The incumbent must be a candidate:
-the histogram CC argmax is unbounded and can be captured by a hot spot (a bright
-aggregate localized thousands of times in one bin, present in some datasets only),
-which puts the peak wherever the dataset's densest cluster lines up with the hot spot,
-microns away. Both the CC and the incumbent get the sub-bin search (the 50 nm CC can
-be ~35 nm off, an incumbent can sit just past the 30 nm radius), and every candidate is
-scored at the position that would be applied, so each step never lowers the dataset's
-consensus overlap as scored.
+dataset: cross-correlate against the corrected consensus of the others, seed from
+whichever of {CC shift, incumbent shift} has higher consensus overlap
+(`_overlap_score`), entropy-refine from that seed (`findinter!`), then keep whichever
+of {entropy-refined, CC, incumbent} has the highest overlap. The overlap arbiter is
+required because the merged-cloud entropy is only ~1/N sensitive to one dataset, so
+neither a wrong CC peak nor a refine that drifted to a wrong local minimum shows up
+in the entropy value. A raw-count histogram CC can be captured by a hot spot (a
+bright aggregate localized thousands of times in one bin, present in some datasets
+only): its peak then lands wherever the dataset's densest cluster lines up with the
+hot spot, microns away. The CCs here are therefore computed on bin-count-capped
+histograms (`findshift(...; maxcount=_CC_MAXCOUNT)`), so the CC measures shared
+occupancy and an aggregate weighs like ordinary structure; the incumbent stays a
+candidate as a backstop, so each step never lowers the dataset's consensus overlap
+as scored. The refine starts from the chosen seed even when it is zero
+(`findinter!(...; cc_init=false)`).
 The reference (DS1) is included so a misaligned reference is fixable; the result is
 re-anchored to inter[1]=0 (an image-invariant global shift). `init=true` first does
 a rough cross-correlation init vs DS1 (cold start), accepted only where it overlaps
@@ -982,9 +919,9 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             Threads.@threads for d in 2:n_datasets
                 sd = _intra_only_corrected(smld, model, d)
                 isempty(sd.emitters) && continue
-                cc = try findshift(ds1, sd; histbinsize=0.05) catch; continue end
+                cc = try findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT) catch; continue end
                 maximum(abs.(cc)) < 5.0 || continue
-                _arbitrate_cc!(model.inter[d].dm, cc, sd, tree1, n_dims)
+                _accept_if_better_overlap!(model.inter[d].dm, cc, sd, tree1, n_dims)
             end
         end
     end
@@ -999,26 +936,31 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             isempty(sd.emitters) && continue
 
             tree = _coord_tree(ref, n_dims)
+            inc = copy(model.inter[d].dm)
+            ov_inc = _overlap_score(sd, inc, tree, _CC_VERIFY_RADIUS, n_dims)
 
-            # Seed: the best-ranked of {incumbent where it stands, incumbent and CC each at
-            # their best sub-bin offset}, every candidate scored where it would be applied.
-            # A failed or absurd CC is simply not a candidate.
-            seed = copy(model.inter[d].dm)
-            cc = try findshift(ref, sd; histbinsize=0.05) catch; nothing end
-            (cc === nothing || maximum(abs.(cc)) > 5.0) && (cc = nothing)
-            _arbitrate_cc!(seed, cc, sd, tree, n_dims)
-            st_seed = _overlap_stats(sd, seed, tree, _CC_VERIFY_RADIUS, n_dims)
+            # CC candidate; a failed or absurd CC is simply not a candidate.
+            cc = try findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT) catch; nothing end
+            cc_v = (cc === nothing || maximum(abs.(cc)) > 5.0) ? nothing : Float64.(cc[1:n_dims])
+            ov_cc = cc_v === nothing ? -Inf : _overlap_score(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
 
-            # entropy-refine from the seed (no L2 reg: the seed is the anchor; cc_init=false
-            # so a zero seed is used as chosen, not replaced by a fresh CC)
+            # entropy-refine from the better seed (no L2 reg: the seed is the anchor)
+            seed = ov_cc > ov_inc ? cc_v : inc
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
                        precomputed_corrected = snap, regularization_lambda = 0.0,
                        cc_init = false)
+            ov_ref = _overlap_score(sd, copy(model.inter[d].dm), tree, _CC_VERIFY_RADIUS, n_dims)
 
-            # overlap arbiter: keep the refined shift unless the seed ranks strictly better
-            st_ref = _overlap_stats(sd, model.inter[d].dm, tree, _CC_VERIFY_RADIUS, n_dims)
-            _better_overlap(st_seed, st_ref) && (model.inter[d].dm .= seed)
+            # overlap arbiter over {refined, CC, incumbent}; ties keep the refined shift
+            best, ov_best = copy(model.inter[d].dm), ov_ref
+            if ov_cc > ov_best + 1e-9
+                best, ov_best = cc_v, ov_cc
+            end
+            if ov_inc > ov_best + 1e-9
+                best, ov_best = inc, ov_inc
+            end
+            model.inter[d].dm .= best
         end
     end
 
