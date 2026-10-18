@@ -9,7 +9,7 @@ AI-parseable API reference for SMLMDriftCorrection.jl. All distance units are in
 
 ## Key Concepts
 
-Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). In registered mode the inter step is **CC-primary**: per dataset a globally-robust cross-correlation seed is entropy-refined, and an overlap arbiter keeps whichever of the two better matches the consensus — needed because the global merged-cloud entropy is only ~1/N sensitive to a single dataset's offset (one dataset's misalignment barely moves the global cost). The `:iterative` tier converges on a parameter-movement test (`convergence_tol`, over both inter and intra), with an additional entropy-cost-plateau early exit in registered mode. Continuous mode instead seeds each inter-chunk shift by cross-correlating consecutive chunks (measuring the boundary rather than extrapolating polynomial endpoints, which keeps a single bad boundary from propagating down the chain); endpoint-chaining remains a per-boundary fallback. The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
+Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). In registered mode the inter step is **CC-primary**: per dataset a globally-robust cross-correlation seed is entropy-refined, and the CC is computed on bin-count-capped histograms (`findshift(...; maxcount)`, so a bright aggregate localized thousands of times in one bin cannot capture the peak), and an overlap arbiter keeps whichever of {refined, CC, incumbent} best matches the consensus as a backstop — needed because the global merged-cloud entropy is only ~1/N sensitive to a single dataset's offset (one dataset's misalignment barely moves the global cost). The `:iterative` tier converges on a parameter-movement test (`convergence_tol`, over both inter and intra), with an additional entropy-cost-plateau early exit in registered mode. Continuous mode instead seeds each inter-chunk shift by cross-correlating consecutive chunks (measuring the boundary rather than extrapolating polynomial endpoints, which keeps a single bad boundary from propagating down the chain); endpoint-chaining remains a per-boundary fallback. The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
 
 ## Types
 
@@ -224,9 +224,12 @@ Apply or correct drift using a model. `correctdrift` is the inverse of `applydri
 
 ### findshift
 ```julia
-findshift(smld1::SMLD, smld2::SMLD; histbinsize=0.1) -> Vector{Float64}
+findshift(smld1::SMLD, smld2::SMLD; histbinsize=1.0, maxcount=nothing) -> Vector{Float64}
 ```
 Find shift between two SMLDs via cross-correlation of histogram images. Returns `[dx, dy]` or `[dx, dy, dz]`.
+`maxcount` (a positive integer) clips each histogram bin to at most that many localizations before correlating,
+so a bright aggregate cannot outweigh the structure; `nothing` correlates raw counts. Registered CC-primary and
+`:fft` alignment use `maxcount=4`.
 
 ### find_affine_shift_field
 ```julia
@@ -377,9 +380,10 @@ Compute intensity-weighted cross-correlation between two 2D images.
 
 ### findshift_damped
 ```julia
-findshift_damped(smld1::SMLD, smld2::SMLD; histbinsize=1.0, prior_shift=[0.0, 0.0], prior_sigma=1.0) -> Vector{Float64}
+findshift_damped(smld1::SMLD, smld2::SMLD; histbinsize=1.0, prior_shift=[0.0, 0.0], prior_sigma=1.0,
+                 maxcount=nothing) -> Vector{Float64}
 ```
-Find shift with Gaussian damping centered at `prior_shift`. Used to refine outlier shifts by searching near an expected location. Applies a Gaussian weight to the cross-correlation centered at `prior_shift` with width `prior_sigma`.
+Find shift with Gaussian damping centered at `prior_shift` (`maxcount` as in `findshift`). Used to refine outlier shifts by searching near an expected location. Applies a Gaussian weight to the cross-correlation centered at `prior_shift` with width `prior_sigma`.
 
 ## Internal Optimization
 
@@ -395,9 +399,12 @@ Optimize intra-dataset drift using entropy minimization with adaptive KDTree reb
 ### findinter!
 ```julia
 findinter!(dm::AbstractIntraInter, smld::SMLD, dataset_n::Int, ref_datasets::Vector{Int}, maxn::Int;
-           precomputed_corrected=nothing, regularization_target=nothing, regularization_lambda=0.0)
+           precomputed_corrected=nothing, regularization_target=nothing, regularization_lambda=0.0,
+           cc_init=true)
 ```
 Optimize inter-dataset shift for `dataset_n` against `ref_datasets` using merged-cloud entropy. Optional regularization: `entropy + λ*||shift - target||²`.
+The optimizer starts from the current shift; when that shift is exactly zero and `cc_init=true` (default) it starts from a
+cross-correlation instead. Pass `cc_init=false` to start from a chosen zero seed (the CC-primary path does).
 
 ### NeighborState / InterNeighborState
 ```julia

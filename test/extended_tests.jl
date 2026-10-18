@@ -243,6 +243,98 @@ using Random
         @test all(abs(model2.inter[d].dm[k]) < 0.04 for d in 1:3, k in 1:2)
     end
 
+    # --- End-to-end registered driftcorrect vs a hot spot in early datasets ---
+    # 0.2.8 regression: a bright aggregate imaged only in DS1-2 captured the CC of
+    # the later datasets, which 0.2.8 accepted as micron inter shifts (real cohort
+    # cells came back 1.5-6 um off). Applies a known drift and checks that both
+    # registered tiers recover every dataset. With the capped CC the aggregate no
+    # longer captures the peak, so even DS6 (true inter ~100 nm, beyond the entropy
+    # refine's reach from zero) is recovered (0.2.9: <4 nm; v0.2.5 ~118 nm; 0.2.8
+    # 1.2-2.4 um; an overlap guard alone left it 80-115 nm off).
+    @testset "Registered driftcorrect: hot spot in early datasets" begin
+        Random.seed!(2026)
+        cam_hs = IdealCamera(1:64, 1:64, 0.1)
+        fluor_hs = GenericFluor(; photons=5000.0, k_on=1.0, k_off=50.0)
+        (s_struct, _) = simulate(StaticSMLMConfig(5.0, 0.13, 50, 6, 500, 50.0, 2, [0.0, 1.0]);
+            pattern=Nmer2D(n=4, d=0.2), molecule=fluor_hs, camera=cam_hs)
+        agg = [Emitter2DFit{Float64}(3.2, 3.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                     σ_xy=0.0, track_id=i) for i in 1:300]
+        (s_hot, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 500, 50.0, 2, [0.0, 1.0]);
+            starting_conditions=agg, molecule=fluor_hs, camera=cam_hs)
+        smld_hs = BasicSMLD(vcat(s_struct.emitters, s_hot.emitters), cam_hs, 500, 6,
+                            Dict{String,Any}())
+        drift_hs = DC.LegendrePolynomial(smld_hs; degree=2, initialize="random", rscale=0.05)
+        drift_hs.inter[1].dm .= 0.0
+        smld_hs_drift = DC.applydrift(smld_hs, drift_hs)
+        x0 = [e.x for e in smld_hs.emitters]; y0 = [e.y for e in smld_hs.emitters]
+        for q in (:singlepass, :iterative)
+            (sc, info_hs) = DC.driftcorrect(smld_hs_drift; quality=q, degree=2)
+            # residual per dataset after removing the global (image-invariant) offset
+            dx = [e.x for e in sc.emitters] .- x0; dy = [e.y for e in sc.emitters] .- y0
+            dsv = [e.dataset for e in sc.emitters]
+            gx, gy = sum(dx) / length(dx), sum(dy) / length(dy)
+            ds_err = [hypot(sum(dx[dsv .== d]) / count(dsv .== d) - gx,
+                            sum(dy[dsv .== d]) / count(dsv .== d) - gy) for d in 1:6]
+            print("hot spot $q: per-dataset offset error (nm) = $(round.(1000 .* ds_err, digits=1))\n")
+            @test maximum(ds_err) < 0.030
+        end
+    end
+
+    # --- A hot spot only in the dataset being scored ---
+    # An aggregate the consensus lacks makes up ~90% of DS1. With a raw-count CC the
+    # peak lays it on a consensus localization, and the localization-counted overlap
+    # score then prefers that wrong shift, throwing DS1 2-3.6 um (0.2.8 and the
+    # guard-only designs). The capped CC never proposes that shift.
+    @testset "Unshared hot spot in the scored dataset" begin
+        Random.seed!(1)
+        cam_u = IdealCamera(1:64, 1:64, 0.1)
+        (s_u, _) = simulate(StaticSMLMConfig(0.5, 0.13, 50, 3, 300, 50.0, 2, [0.0, 1.0]);
+            pattern=Nmer2D(n=4, d=0.2),
+            molecule=GenericFluor(; photons=5000.0, k_on=0.5, k_off=50.0), camera=cam_u)
+        agg_u = [Emitter2DFit{Float64}(3.2, 3.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                       σ_xy=0.0, track_id=i) for i in 1:100]
+        (h_u, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0]);
+            starting_conditions=agg_u,
+            molecule=GenericFluor(; photons=5000.0, k_on=5.0, k_off=50.0), camera=cam_u)
+        smld_u = BasicSMLD(vcat(s_u.emitters, h_u.emitters), cam_u, 300, 3, Dict{String,Any}())
+        model_u = DC.LegendrePolynomial(smld_u; degree=2)
+        DC._cc_primary_inter!(model_u, smld_u, 100; n_passes=2, init=true)
+        @test hypot((model_u.inter[1].dm .- model_u.inter[2].dm)...) < 0.050
+    end
+
+    # --- Known limit (0.2.9): :fft on a precise sparse cloud with a faint replica ---
+    # Reference = SMLMSim sites (~5 nm precision) plus a one-localization-per-site
+    # replica 25 nm short of the target position; target = the same sites shifted by
+    # truth. The 2D sub-pixel fit (gaussian_subpixel_2d) can move the CC peak ~1 bin
+    # the wrong way, and the :fft tier has no entropy refine to recover, so it ends
+    # hundreds of nm off (0.2.8: ~61 nm). The bounded 3-point sub-pixel fit planned for
+    # 0.2.10 turns this green. The registered path recovers to within ~30 nm here (CC
+    # precision plus the arbiter's near-tie rule, also a 0.2.10 item).
+    @testset "Known limit: :fft precise-replica fixture" begin
+        Random.seed!(1)
+        cam_p = IdealCamera(1:64, 1:64, 0.1)
+        (s_p, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 300, 50.0, 2, [0.0, 1.0]);
+            pattern=Nmer2D(n=1, d=0.0),
+            molecule=GenericFluor(; photons=5.0e4, k_on=1.0, k_off=50.0), camera=cam_p)
+        truth_p = [0.313, 0.313]
+        ref_p = [e for e in s_p.emitters if e.dataset == 1]
+        seen_p = Set{Int}(); rep_p = eltype(ref_p)[]
+        for e in ref_p
+            e.track_id in seen_p && continue
+            push!(seen_p, e.track_id)
+            r = deepcopy(e); r.x += truth_p[1] - 0.025; r.y += truth_p[2] - 0.025
+            push!(rep_p, r)
+        end
+        tgt_p = [deepcopy(e) for e in s_p.emitters if e.dataset == 2]
+        for e in tgt_p; e.x += truth_p[1]; e.y += truth_p[2]; end
+        smld_p = BasicSMLD(vcat(ref_p, rep_p, tgt_p), cam_p, 300, 2, Dict{String,Any}())
+        (_, info_p) = DC.driftcorrect(smld_p; quality=:fft)
+        @test_broken sqrt(sum(abs2, info_p.model.inter[2].dm .- info_p.model.inter[1].dm .- truth_p)) < 0.025
+        model_p = DC.LegendrePolynomial(smld_p; degree=2)
+        DC._cc_primary_inter!(model_p, smld_p, 100; n_passes=2, init=true)
+        @test sqrt(sum(abs2, model_p.inter[2].dm .- model_p.inter[1].dm .- truth_p)) < 0.050
+    end
+
     # --- Test warm start ---
     @testset "Warm start" begin
         (smld1, info1) = DC.driftcorrect(smld_drift; quality=:singlepass)

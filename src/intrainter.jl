@@ -385,6 +385,9 @@ then refines with entropy optimization.
 - `regularization_target`: target shift to regularize towards (default: nothing)
 - `regularization_lambda`: regularization strength (default: 0.0)
   Cost becomes: entropy + λ*||shift - target||²
+- `cc_init`: when the current shift is exactly zero, seed the optimizer from a
+  cross-correlation instead (default: true). Pass `false` when the caller has already
+  chosen the seed, zero included (`_cc_primary_inter!`).
 """
 function findinter!(dm::AbstractIntraInter,
     smld_uncorrected::SMLD,
@@ -393,7 +396,8 @@ function findinter!(dm::AbstractIntraInter,
     maxn::Int;
     precomputed_corrected::Union{Nothing, SMLD} = nothing,
     regularization_target::Union{Nothing, Vector{Float64}} = nothing,
-    regularization_lambda::Float64 = 0.0)
+    regularization_lambda::Float64 = 0.0,
+    cc_init::Bool = true)
 
     n_dims = nDims(smld_uncorrected)
 
@@ -437,9 +441,10 @@ function findinter!(dm::AbstractIntraInter,
 
     inter = dm.inter[dataset_n]
 
-    # Initial guess: use current inter value if non-zero, otherwise try CC
-    # This allows the second pass to refine from the first pass result.
-    if any(abs.(inter.dm) .> 1e-10)
+    # Initial guess: use current inter value if non-zero (or if the caller chose it,
+    # cc_init=false), otherwise try CC. This allows the second pass to refine from the
+    # first pass result.
+    if !cc_init || any(abs.(inter.dm) .> 1e-10)
         # Use current inter as starting point (preserves first pass result)
         θ0 = Float64.(inter.dm)
     else
