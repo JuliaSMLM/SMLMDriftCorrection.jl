@@ -488,9 +488,16 @@ const _ENTROPY_REL_TOL = 1.0e-4
 # reveal a wrong CC peak or a bad refine on its own.
 const _CC_VERIFY_RADIUS = 0.030
 
-# Sub-bin offsets (μm, per axis) searched around each arbiter candidate by
-# `_local_overlap`: the 50 nm histogram CC can be up to ~35 nm off on sparse data.
-const _CC_VERIFY_OFFSETS = (-0.025, 0.0, 0.025)
+# Sub-bin grid (μm) searched around a CC shift by `_refine_cc_candidate`: the 50 nm
+# histogram CC can be up to ~35 nm off on sparse data, more than `_CC_VERIFY_RADIUS`.
+# Offsets of 0 and ±25 nm per axis, ordered center first and then by increasing
+# displacement, so that among fully tied offsets the smallest move wins.
+const _CC_SUBBIN_STEP = 0.025
+const _CC_SUBBIN_GRID_2D = sort!([(_CC_SUBBIN_STEP * i, _CC_SUBBIN_STEP * j)
+                                  for i in -1:1 for j in -1:1]; by = o -> sum(abs2, o))
+const _CC_SUBBIN_GRID_3D = sort!([(_CC_SUBBIN_STEP * i, _CC_SUBBIN_STEP * j, _CC_SUBBIN_STEP * k)
+                                  for i in -1:1 for j in -1:1 for k in -1:1];
+                                 by = o -> sum(abs2, o))
 
 """
 Iterative quality tier - full intra↔inter convergence loop.
@@ -818,18 +825,31 @@ Fraction of a dataset's localizations (after applying `inter`) that fall within
 `radius` (μm) of a consensus localization in `tree`. Used by the CC-primary
 overlap arbiter as a model-free alignment-quality score.
 """
-function _overlap_score(sd::SMLD, inter::Vector{Float64}, tree, radius::Float64, n_dims::Int)
-    isempty(sd.emitters) && return 0.0
-    cnt = 0
-    pt = zeros(Float64, n_dims)
-    for e in sd.emitters
-        pt[1] = e.x - inter[1]
-        pt[2] = e.y - inter[2]
-        n_dims == 3 && (pt[3] = e.z - inter[3])
-        _, dists = knn(tree, pt, 1)
-        dists[1] < radius && (cnt += 1)
+_overlap_score(sd::SMLD, inter::Vector{Float64}, tree, radius::Float64, n_dims::Int) =
+    first(_overlap_stats(sd, inter, tree, radius, n_dims))
+
+"""
+`(fraction, mean_distance)`: the `_overlap_score` fraction and the mean nearest-neighbor
+distance (μm) of the localizations inside `radius` (`Inf` when none is). The distance
+breaks ties between equal fractions in `_best_on_grid`.
+"""
+function _overlap_stats(sd::SMLD, inter::Vector{Float64}, tree, radius::Float64, n_dims::Int)
+    isempty(sd.emitters) && return 0.0, Inf
+    pts = Matrix{Float64}(undef, n_dims, length(sd.emitters))
+    for (i, e) in enumerate(sd.emitters)
+        pts[1, i] = e.x - inter[1]
+        pts[2, i] = e.y - inter[2]
+        n_dims == 3 && (pts[3, i] = e.z - inter[3])
     end
-    return cnt / length(sd.emitters)
+    _, dists = nn(tree, pts)
+    n_in, sum_in = 0, 0.0
+    for d in dists
+        if d < radius
+            n_in += 1
+            sum_in += d
+        end
+    end
+    return n_in / length(dists), n_in == 0 ? Inf : sum_in / n_in
 end
 
 """
@@ -845,34 +865,48 @@ function _coord_tree(sd::SMLD, n_dims::Int)
 end
 
 """
-Best `_overlap_score` (radius `_CC_VERIFY_RADIUS`) over the sub-bin grid
-`center .+ _CC_VERIFY_OFFSETS` (per axis); returns `(score, shift)`. The histogram CC is
-quantized to its 50 nm bins (up to ~35 nm off on sparse data, more than the radius), so
-arbiter candidates are compared by the best overlap within ±25 nm rather than at one
-point. The center wins ties, so a candidate moves only when an offset is strictly better.
+Turn a cross-correlation shift into a concrete arbiter candidate: move it to the offset
+of the sub-bin grid (`_CC_SUBBIN_GRID_2D`/`_3D`) with the best `_overlap_score`, and
+return `(score, shift)` for that position. The histogram CC is quantized to 50 nm bins
+and can be ~35 nm off on sparse data, more than `_CC_VERIFY_RADIUS`, so at its raw
+position a CC in the right basin can score near zero. Only the CC is moved: every other
+candidate (incumbent, entropy-refined) is scored where it stands, so each candidate is
+scored at the position that would be applied.
 """
-function _local_overlap(sd::SMLD, center::Vector{Float64}, tree, n_dims::Int)
-    best = _overlap_score(sd, center, tree, _CC_VERIFY_RADIUS, n_dims)
-    best_shift = copy(center)
-    for off in Iterators.product(ntuple(_ -> _CC_VERIFY_OFFSETS, n_dims)...)
-        all(iszero, off) && continue
-        s = center .+ collect(off)
-        ov = _overlap_score(sd, s, tree, _CC_VERIFY_RADIUS, n_dims)
-        if ov > best + 1e-9
-            best, best_shift = ov, s
+function _refine_cc_candidate(sd::SMLD, cc::Vector{Float64}, tree, n_dims::Int)
+    grid = n_dims == 2 ? _CC_SUBBIN_GRID_2D : _CC_SUBBIN_GRID_3D
+    return _best_on_grid(sd, cc, tree, grid)
+end
+
+# Function barrier: `grid` has a concrete NTuple element type here. The overlap fraction
+# saturates within the radius (a 25 nm offset can already score 1), so equal fractions
+# are ranked by the inliers' mean distance; a full tie keeps the first, smallest offset.
+function _best_on_grid(sd::SMLD, center::Vector{Float64}, tree,
+                       grid::Vector{NTuple{N, Float64}}) where {N}
+    best, best_dist, best_shift = -1.0, Inf, copy(center)
+    s = similar(center)
+    for off in grid
+        for k in 1:N
+            s[k] = center[k] + off[k]
+        end
+        ov, dist = _overlap_stats(sd, s, tree, _CC_VERIFY_RADIUS, N)
+        if ov > best + 1e-9 || (ov > best - 1e-9 && dist < best_dist)
+            best, best_dist = ov, dist
+            best_shift .= s
         end
     end
     return best, best_shift
 end
 
 """
-Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` (moved to its
-best sub-bin offset) only if `cand` scores a larger `_local_overlap` with the reference
-(`tree`) than the incumbent `inter` does. Returns whether `cand` was accepted.
+Overlap guard for a cross-correlation shift: overwrite `inter` with `cand`, moved to its
+best sub-bin offset (`_refine_cc_candidate`), only if that position scores a larger
+`_overlap_score` with the reference (`tree`) than the incumbent `inter` does where it
+stands. Returns whether `cand` was accepted.
 """
 function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree, n_dims::Int)
-    ov_cand, c = _local_overlap(sd, Float64.(cand[1:n_dims]), tree, n_dims)
-    ov_inc, _ = _local_overlap(sd, inter, tree, n_dims)
+    ov_cand, c = _refine_cc_candidate(sd, Float64.(cand[1:n_dims]), tree, n_dims)
+    ov_inc = _overlap_score(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
     ov_cand > ov_inc + 1e-9 || return false
     inter .= c
     return true
@@ -910,7 +944,8 @@ unbounded and can be captured by a hot spot (a bright aggregate localized thousa
 of times in one bin, present in some datasets only), which puts the peak wherever
 the dataset's densest cluster lines up with the hot spot, microns away. Comparing
 against the incumbent makes each step never lower the dataset's consensus overlap as
-scored (`_local_overlap`: best overlap within ±25 nm, absorbing the CC's 50 nm bins).
+scored, each candidate at the position that would be applied (the CC first moved to its
+best sub-bin offset by `_refine_cc_candidate`, absorbing the CC's 50 nm bins).
 The refine starts from the chosen seed even when it is zero (`cc_init=false`).
 The reference (DS1) is included so a misaligned reference is fixable; the result is
 re-anchored to inter[1]=0 (an image-invariant global shift). `init=true` first does
@@ -951,14 +986,14 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
 
             tree = _coord_tree(ref, n_dims)
             inc = copy(model.inter[d].dm)
-            ov_inc, _ = _local_overlap(sd, inc, tree, n_dims)
+            ov_inc = _overlap_score(sd, inc, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # CC candidate (at its best sub-bin offset); a failed or absurd CC is simply
             # not a candidate.
             cc = try findshift(ref, sd; histbinsize=0.05) catch; nothing end
             cc_v, ov_cc = nothing, -Inf
             if cc !== nothing && maximum(abs.(cc)) <= 5.0
-                ov_cc, cc_v = _local_overlap(sd, Float64.(cc[1:n_dims]), tree, n_dims)
+                ov_cc, cc_v = _refine_cc_candidate(sd, Float64.(cc[1:n_dims]), tree, n_dims)
             end
 
             # entropy-refine from the better seed (no L2 reg: the seed is the anchor;
@@ -968,7 +1003,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             findinter!(model, smld, d, others, maxn;
                        precomputed_corrected = snap, regularization_lambda = 0.0,
                        cc_init = false)
-            ov_ref, _ = _local_overlap(sd, copy(model.inter[d].dm), tree, n_dims)
+            ov_ref = _overlap_score(sd, model.inter[d].dm, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # overlap arbiter over {refined, CC, incumbent}; ties keep the refined shift
             best, ov_best = copy(model.inter[d].dm), ov_ref
