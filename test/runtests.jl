@@ -391,6 +391,35 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # 3D cross-correlation on a thin stack (z range under 1 μm): the z ROI was
+    # round(min z)..round(max z) of smld1 alone, so a stack within ±0.5 μm got a
+    # zero-depth histogram and findshift threw (FFTW plan error), taking the
+    # :fft tier down with it.
+    # -----------------------------------------------------------------------
+    @testset "findshift 3D: thin z stack" begin
+        Random.seed!(1)
+        (s_z, _) = simulate(StaticSMLMConfig(5.0, 0.13, 50, 2, 300, 50.0, 3, [-0.1, 0.1]);
+            pattern = Nmer3D(n = 6, d = 0.2),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+            camera = IdealCamera(1:64, 1:64, 0.1))
+        truth_z = [0.10, -0.05, 0.05]
+        for e in s_z.emitters
+            if e.dataset == 2
+                e.x += truth_z[1]
+                e.y += truth_z[2]
+                e.z += truth_z[3]
+            end
+        end
+        @test maximum(abs(e.z) for e in s_z.emitters) < 0.5          # the thin-stack case
+        sh_z = DC.findshift(DC.filter_by_dataset(s_z, 1), DC.filter_by_dataset(s_z, 2);
+                            histbinsize = 0.05)
+        @test sqrt(sum(abs2, sh_z .- truth_z)) < 0.020
+        (_, info_z) = DC.driftcorrect(s_z; quality = :fft)
+        @test sqrt(sum(abs2, info_z.model.inter[2].dm .- info_z.model.inter[1].dm .-
+                             truth_z)) < 0.020
+    end
+
+    # -----------------------------------------------------------------------
     # align_smld smoke — known shift recovery on small data.
     # -----------------------------------------------------------------------
     @testset "align_smld smoke" begin

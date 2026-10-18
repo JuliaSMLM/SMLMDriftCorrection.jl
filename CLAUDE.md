@@ -76,7 +76,7 @@ AlignInfo <: AbstractSMLMInfo (output struct with shifts, transforms, timing)
 - `costfuns.jl`: `NeighborState`, adaptive entropy cost functions
 - `cost_entropy.jl`: Entropy calculations (KL divergence, `entropy_HD`, `ub_entropy`)
 - `utilities.jl`: `filter_emitters()`, `chunk_smld()`, `drift_trajectory()`
-- `crosscorr.jl`: Cross-correlation helpers (`findshift`, `histimage2D`, `crosscorr2D`)
+- `crosscorr.jl`: Cross-correlation helpers (`findshift`, `histimage2D`, `crosscorr2D`; `_shared_cc_roi` builds the histogram ROI: camera field in x/y, floor/ceil of both SMLDs' z range padded by one bin in 3D)
 - `roi_selection.jl`: Auto-ROI subsampling (`calculate_n_locs_required`, `find_dense_roi`)
 - `affine.jl`: Affine (similarity) transform functions: `apply_affine_2d/3d`, `correct_affine_2d/3d`, `apply_affine_transform!`
 - `align.jl`: `align_smld()` for alignment of independent SMLDs (shift or affine transform)
