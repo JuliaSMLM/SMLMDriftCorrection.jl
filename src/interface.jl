@@ -848,16 +848,18 @@ function _coord_tree(sd::SMLD, n_dims::Int)
 end
 
 """
-Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` only if
-`cand` puts a larger fraction of `sd`'s localizations within `_CC_VERIFY_RADIUS` of a
-reference localization (`tree`) than the incumbent `inter` does. Returns whether
-`cand` was accepted.
+Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` unless the
+incumbent `inter` puts a strictly larger fraction of `sd`'s localizations within
+`_CC_VERIFY_RADIUS` of a reference localization (`tree`). Ties go to the CC: with the
+CC computed on capped histograms, a tie (typically both zero, when a correct but
+bin-quantized CC lands just past the radius on sparse precise data) carries no
+evidence for the incumbent. Returns whether `cand` was accepted.
 """
 function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree, n_dims::Int)
     c = Float64.(cand[1:n_dims])
     ov_cand = _overlap_score(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
     ov_inc  = _overlap_score(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
-    ov_cand > ov_inc + 1e-9 || return false
+    ov_inc > ov_cand + 1e-9 && return false   # reject only on evidence: ties go to the CC
     inter .= c
     return true
 end
@@ -945,7 +947,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             ov_cc = cc_v === nothing ? -Inf : _overlap_score(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # entropy-refine from the better seed (no L2 reg: the seed is the anchor)
-            seed = ov_cc > ov_inc ? cc_v : inc
+            seed = (cc_v === nothing || ov_inc > ov_cc + 1e-9) ? inc : cc_v   # ties go to the CC
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
                        precomputed_corrected = snap, regularization_lambda = 0.0,
