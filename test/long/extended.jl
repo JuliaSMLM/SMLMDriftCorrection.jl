@@ -1,15 +1,13 @@
-# extended_tests.jl — Local / extended test suite.
+# extended.jl — Long group (lab test layout, admiral decision 0008), run on a lab machine.
 #
 # Contains the full integration coverage: SMLMSim-driven multi-method comparisons,
 # RMSD checks against known drift, multi-iteration runs, auto-ROI integration,
 # and the stochastic position_frame_correlation smoke. Some tests are
-# noise-sensitive and have proven flaky on Julia 1.10 thread schedules. Run
-# locally with:
+# noise-sensitive and have proven flaky on Julia 1.10 thread schedules. Run with:
 #
-#     julia --project test/extended_tests.jl
+#     GROUP=Long julia --project -e 'using Pkg; Pkg.test()'
 #
-# For CI / `Pkg.test()`, see test/runtests.jl which runs only the lightweight
-# interface + compat + deterministic-unit tests.
+# The Core group (test/core.jl) is what a plain `Pkg.test()` and CI run.
 
 using SMLMDriftCorrection
 DC = SMLMDriftCorrection
