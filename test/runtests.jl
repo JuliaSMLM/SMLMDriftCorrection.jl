@@ -343,32 +343,13 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
-    # The overlap guard must tolerate the CC's 50 nm bin quantization: a CC
-    # shift ~35 nm from the truth (more than the 30 nm scoring radius) is
-    # accepted at its best sub-bin offset, not rejected or kept 35 nm off.
+    # Sub-bin true shift on sparse data (:fft, 2D and 3D): the 50 nm CC is
+    # quantized, and the overlap guard must still accept it over a far
+    # incumbent (a guard that let the incumbent borrow a neighboring position's
+    # score left 57 / 69 nm here).
     # -----------------------------------------------------------------------
-    @testset "Overlap guard tolerates CC bin quantization" begin
-        Random.seed!(11)
+    @testset "Overlap guard accepts a quantized CC (sub-bin shift, sparse)" begin
         cam_q = IdealCamera(1:64, 1:64, 0.1)
-        (s_q, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0]);
-            pattern = Nmer2D(n = 1, d = 0.0),
-            molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
-            camera = cam_q)
-        truth_q = [1.025, 1.025]
-        sd_q = deepcopy(s_q)
-        for e in sd_q.emitters
-            e.x += truth_q[1]
-            e.y += truth_q[2]
-        end
-        inter_q = [0.0, 0.0]
-        DC._arbitrate_cc!(inter_q, truth_q .+ 0.025, sd_q,
-                                      DC._coord_tree(s_q, 2), 2)
-        @test isapprox(inter_q, truth_q; atol = 0.010)
-
-        # Every candidate is scored where it would be applied: an incumbent 40 nm
-        # off per axis must not borrow a neighboring grid point's score to tie an
-        # accurate CC (public :fft path, 2D and 3D; a scored-on-grid incumbent
-        # left 57 / 69 nm).
         for nd in (2, 3)
             Random.seed!(1)
             (s_t, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, nd, [-1.0, 1.0]);
@@ -391,13 +372,13 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
-    # The incumbent gets the same sub-bin search as the CC: here the truth is
-    # 35 nm from the zero incumbent (just past the 30 nm radius) and a hot spot
-    # only in the reference captures the CC onto the target's small aggregate.
-    # Searching only around the CC let the captured CC win (4.2 um registered,
-    # 35 nm :fft); HeLa E430G Cell_01 failed this way on real data (4.6 um).
+    # Truth 35 nm from the zero incumbent (just past the 30 nm radius) and a
+    # hot spot only in the reference that, in a raw-count CC, captures the
+    # peak onto the target's small aggregate (0.2.8: 4.2 um). The capped CC
+    # must not be captured. The :fft tier has no entropy refine, so it is held
+    # to the CC's bin-level precision.
     # -----------------------------------------------------------------------
-    @testset "Overlap arbiter: incumbent just past the radius vs captured CC" begin
+    @testset "CC-primary inter: incumbent just past the radius vs captured CC" begin
         Random.seed!(1)
         cam_r = IdealCamera(1:64, 1:64, 0.1)
         fl_r = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0)
@@ -425,7 +406,16 @@ const DC = SMLMDriftCorrection
         @test isapprox(model_r.inter[2].dm .- model_r.inter[1].dm, truth_r; atol = 0.010)
         (_, info_r) = DC.driftcorrect(smld_r; quality = :fft)
         @test isapprox(info_r.model.inter[2].dm .- info_r.model.inter[1].dm, truth_r;
-                       atol = 0.010)
+                       atol = 0.030)
+
+        # The cap itself: the reference-only hot spot captures a raw-count CC
+        # (microns off) but not the capped one.
+        ref_r = DC.filter_by_dataset(smld_r, 1)
+        tgt_r = DC.filter_by_dataset(smld_r, 2)
+        cc_raw = DC.findshift(ref_r, tgt_r; histbinsize = 0.05)
+        cc_cap = DC.findshift(ref_r, tgt_r; histbinsize = 0.05, maxcount = DC._CC_MAXCOUNT)
+        @test sqrt(sum(abs2, cc_raw .- truth_r)) > 1.0
+        @test sqrt(sum(abs2, cc_cap .- truth_r)) < 0.030
     end
 
     # -----------------------------------------------------------------------

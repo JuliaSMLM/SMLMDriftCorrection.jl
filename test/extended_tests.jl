@@ -247,10 +247,10 @@ using Random
     # 0.2.8 regression: a bright aggregate imaged only in DS1-2 captured the CC of
     # the later datasets, which 0.2.8 accepted as micron inter shifts (real cohort
     # cells came back 1.5-6 um off). Applies a known drift and checks that both
-    # registered tiers keep every dataset near the truth. The bound is loose on
-    # purpose: a dataset whose CC is captured by the hot spot falls back to its
-    # incumbent shift, and the entropy refine reaches only tens of nm, so DS6 (true
-    # inter ~100 nm) ends ~80-115 nm off (v0.2.5: ~118 nm; 0.2.8: 1.2-2.4 um).
+    # registered tiers recover every dataset. With the capped CC the aggregate no
+    # longer captures the peak, so even DS6 (true inter ~100 nm, beyond the entropy
+    # refine's reach from zero) is recovered (0.2.9: <4 nm; v0.2.5 ~118 nm; 0.2.8
+    # 1.2-2.4 um; an overlap guard alone left it 80-115 nm off).
     @testset "Registered driftcorrect: hot spot in early datasets" begin
         Random.seed!(2026)
         cam_hs = IdealCamera(1:64, 1:64, 0.1)
@@ -276,17 +276,16 @@ using Random
             ds_err = [hypot(sum(dx[dsv .== d]) / count(dsv .== d) - gx,
                             sum(dy[dsv .== d]) / count(dsv .== d) - gy) for d in 1:6]
             print("hot spot $q: per-dataset offset error (nm) = $(round.(1000 .* ds_err, digits=1))\n")
-            @test maximum(ds_err) < 0.150
+            @test maximum(ds_err) < 0.030
         end
     end
 
-    # --- Known limit: a hot spot only in the dataset being scored ---
-    # The overlap score counts localizations, so when an aggregate the consensus lacks
-    # makes up most of a dataset (here ~90% of DS1), a CC shift that lays it on any
-    # consensus localization outscores the true alignment and DS1 is thrown microns
-    # (2-3.6 um across seeds). Recorded as broken until the guard scores occupancy
-    # instead (see the bin-count proposal); an Unexpected Pass means that landed.
-    @testset "Known limit: unshared hot spot in the scored dataset" begin
+    # --- A hot spot only in the dataset being scored ---
+    # An aggregate the consensus lacks makes up ~90% of DS1. With a raw-count CC the
+    # peak lays it on a consensus localization, and the localization-counted overlap
+    # score then prefers that wrong shift, throwing DS1 2-3.6 um (0.2.8 and the
+    # guard-only designs). The capped CC never proposes that shift.
+    @testset "Unshared hot spot in the scored dataset" begin
         Random.seed!(1)
         cam_u = IdealCamera(1:64, 1:64, 0.1)
         (s_u, _) = simulate(StaticSMLMConfig(0.5, 0.13, 50, 3, 300, 50.0, 2, [0.0, 1.0]);
@@ -300,7 +299,40 @@ using Random
         smld_u = BasicSMLD(vcat(s_u.emitters, h_u.emitters), cam_u, 300, 3, Dict{String,Any}())
         model_u = DC.LegendrePolynomial(smld_u; degree=2)
         DC._cc_primary_inter!(model_u, smld_u, 100; n_passes=2, init=true)
-        @test_broken hypot((model_u.inter[1].dm .- model_u.inter[2].dm)...) < 0.050
+        @test hypot((model_u.inter[1].dm .- model_u.inter[2].dm)...) < 0.050
+    end
+
+    # --- Known limit (0.2.9): :fft on a precise sparse cloud with a faint replica ---
+    # Reference = SMLMSim sites (~5 nm precision) plus a one-localization-per-site
+    # replica 25 nm short of the target position; target = the same sites shifted by
+    # truth. The 2D sub-pixel fit (gaussian_subpixel_2d) can move the CC peak ~1 bin
+    # the wrong way, and the :fft tier has no entropy refine to recover, so it ends
+    # hundreds of nm off (0.2.8: ~61 nm). The bounded 3-point sub-pixel fit planned for
+    # 0.2.10 turns this green. The registered path recovers to within ~30 nm here (CC
+    # precision plus the arbiter's near-tie rule, also a 0.2.10 item).
+    @testset "Known limit: :fft precise-replica fixture" begin
+        Random.seed!(1)
+        cam_p = IdealCamera(1:64, 1:64, 0.1)
+        (s_p, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 300, 50.0, 2, [0.0, 1.0]);
+            pattern=Nmer2D(n=1, d=0.0),
+            molecule=GenericFluor(; photons=5.0e4, k_on=1.0, k_off=50.0), camera=cam_p)
+        truth_p = [0.313, 0.313]
+        ref_p = [e for e in s_p.emitters if e.dataset == 1]
+        seen_p = Set{Int}(); rep_p = eltype(ref_p)[]
+        for e in ref_p
+            e.track_id in seen_p && continue
+            push!(seen_p, e.track_id)
+            r = deepcopy(e); r.x += truth_p[1] - 0.025; r.y += truth_p[2] - 0.025
+            push!(rep_p, r)
+        end
+        tgt_p = [deepcopy(e) for e in s_p.emitters if e.dataset == 2]
+        for e in tgt_p; e.x += truth_p[1]; e.y += truth_p[2]; end
+        smld_p = BasicSMLD(vcat(ref_p, rep_p, tgt_p), cam_p, 300, 2, Dict{String,Any}())
+        (_, info_p) = DC.driftcorrect(smld_p; quality=:fft)
+        @test_broken sqrt(sum(abs2, info_p.model.inter[2].dm .- info_p.model.inter[1].dm .- truth_p)) < 0.025
+        model_p = DC.LegendrePolynomial(smld_p; degree=2)
+        DC._cc_primary_inter!(model_p, smld_p, 100; n_passes=2, init=true)
+        @test sqrt(sum(abs2, model_p.inter[2].dm .- model_p.inter[1].dm .- truth_p)) < 0.050
     end
 
     # --- Test warm start ---
