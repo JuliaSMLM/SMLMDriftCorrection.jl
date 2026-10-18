@@ -416,6 +416,8 @@ const DC = SMLMDriftCorrection
         cc_cap = DC.findshift(ref_r, tgt_r; histbinsize = 0.05, maxcount = DC._CC_MAXCOUNT)
         @test sqrt(sum(abs2, cc_raw .- truth_r)) > 1.0
         @test sqrt(sum(abs2, cc_cap .- truth_r)) < 0.030
+        @test_throws ArgumentError DC.findshift(ref_r, tgt_r; histbinsize = 0.05, maxcount = 0)
+        @test_throws ArgumentError DC.findshift_damped(ref_r, tgt_r; histbinsize = 0.05, maxcount = -1)
     end
 
     # -----------------------------------------------------------------------
