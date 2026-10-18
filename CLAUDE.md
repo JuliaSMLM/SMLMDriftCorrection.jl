@@ -10,7 +10,9 @@ SMLMDriftCorrection.jl is a Julia package for fiducial-free drift correction in 
 
 ```bash
 # Run all tests
-julia --project -e 'using Pkg; Pkg.test()'
+julia --project -e 'using Pkg; Pkg.test()'                    # Core group (what CI runs)
+GROUP=Long julia --project -e 'using Pkg; Pkg.test()'         # Long group (test/long/)
+GROUP=Everything julia --project -e 'using Pkg; Pkg.test()'   # Core + Long (the recorded run)
 
 # Build documentation
 julia --project=docs docs/make.jl
