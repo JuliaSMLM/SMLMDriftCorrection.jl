@@ -1,536 +1,167 @@
-# runtests.jl — CI / `Pkg.test()` suite.
-#
-# Lightweight subset that exercises the public interface, package
-# compatibility, edge-case guards, and deterministic-unit behavior. Designed
-# to run in ~1-2 minutes and to be insensitive to thread scheduling / RNG
-# differences across Julia versions.
-#
-# Stochastic SMLMSim-driven integration coverage (RMSD checks, multi-method
-# comparisons, multi-iteration runs, auto-ROI, the noisy
-# `position_frame_correlation` smoke) lives in `test/extended_tests.jl` and is
-# NOT executed by default. To run the full suite locally:
-#
-#     julia --project test/extended_tests.jl
+# Lab test runner (admiral decisions 0008, 0009). Identical in every package: do not edit;
+# declare groups in test_groups.toml and put tests in the group folders instead.
+# GROUP: unset or "Core" runs Core; "QA" or "GPU,Long" runs those; "Everything" runs every
+# declared group whose requirement is met on this machine. LAB_TEST_SUMMARY=<path> writes a
+# TOML summary there.
+using Test, TOML, Pkg
 
-using SMLMDriftCorrection
-using SMLMSim
-using Test
-using Random
+const GROUPS = ("Core", "QA", "GPU", "Data", "Long", "Hardware")
+const TESTDIR = @__DIR__
+const PKGROOT = dirname(TESTDIR)
+const CFG = TOML.parsefile(joinpath(TESTDIR, "test_groups.toml"))
 
-const DC = SMLMDriftCorrection
+folder(g) = g == "Core" ? TESTDIR : joinpath(TESTDIR, lowercase(g))
+testfiles(g) = sort(
+    [
+        joinpath(folder(g), f) for f in readdir(folder(g))
+            if endswith(f, ".jl") && f != "runtests.jl" && isfile(joinpath(folder(g), f))
+    ]
+)
 
-@testset "SMLMDriftCorrection.jl (CI)" begin
-    Random.seed!(42)
+# Layout check: a test file must never silently not run.
+for g in keys(CFG)
+    g in GROUPS ||
+        error("test_groups.toml: unknown group $g (allowed: $(join(GROUPS, ", ")))")
+    isdir(folder(g)) && !isempty(testfiles(g)) ||
+        error("group $g is declared but $(folder(g)) has no .jl files")
+end
+for d in readdir(TESTDIR)
+    isdir(joinpath(TESTDIR, d)) || continue
+    any(g -> g != "Core" && haskey(CFG, g) && lowercase(g) == d, GROUPS) ||
+        error("test/$d/ is not the folder of a group declared in test_groups.toml")
+end
 
-    # -----------------------------------------------------------------------
-    # Tiny simulated SMLD (1 dataset, 200 frames, density 5/μm² on a 32×32px
-    # camera @ 100 nm/pixel = 3.2 μm FOV). Used by smoke + interface tests.
-    # Kept deliberately small so any thread/RNG sensitivity stays bounded and
-    # nothing here makes a noisy "drift correction reduces correlation"-style
-    # assertion.
-    # -----------------------------------------------------------------------
-    params_small = StaticSMLMConfig(
-        5.0,    # density (emitters/μm²)
-        0.13,   # σ_psf
-        30,     # minphotons
-        1,      # ndatasets
-        200,    # nframes
-        50.0,   # framerate
-        2,      # ndims
-        [0.0, 1.0]
+# Returns nothing when every requirement of group g is met, else the reason it is not.
+function unmet(g)
+    for r in get(CFG[g], "requires", String[])
+        if r == "cuda"
+            Base.find_package("CUDA") === nothing &&
+                return "CUDA.jl is not in the $g environment"
+            Core.eval(Main, :(import CUDA))
+            Base.invokelatest(() -> Main.CUDA.functional()) ||
+                return "CUDA.functional() is false"
+        elseif r == "data"
+            p = expanduser(get(CFG[g], "data_path", ""))
+            isempty(p) && error("test_groups.toml: $g requires data but sets no data_path")
+            ispath(p) || return "data_path $p does not exist"
+        elseif r == "hardware"
+            get(ENV, "TEST_HARDWARE", "") == "1" || return "TEST_HARDWARE=1 is not set"
+        elseif r == "display"
+            Sys.islinux() && isempty(get(ENV, "DISPLAY", "")) &&
+                return "DISPLAY is not set (run under xvfb-run)"
+        else
+            error(
+                "test_groups.toml: $g has unknown requirement \"$r\" (cuda, data, hardware, display)"
+            )
+        end
+    end
+    return nothing
+end
+
+# A group with its own test/<group>/Project.toml runs in a fresh julia process, in a
+# temporary copy of that environment with the package developed into it, so its
+# dependencies (CUDA) never enter the Core env and the versions Core loaded never reach it.
+# The child runs this file for that group alone (LAB_TEST_CHILD set) and returns its
+# summary; a child that crashes or writes none is a failure, never a pass.
+const CHILD = haskey(ENV, "LAB_TEST_CHILD")
+ownenv(g) = !CHILD && g != "Core" && isfile(joinpath(folder(g), "Project.toml"))
+
+function runchild(g)
+    t0, prev, tmp = time(), Base.active_project(), mktempdir()
+    cp(joinpath(folder(g), "Project.toml"), joinpath(tmp, "Project.toml"))
+    Pkg.activate(tmp; io = devnull)
+    try
+        Pkg.develop(Pkg.PackageSpec(path = PKGROOT); io = devnull)
+        Pkg.instantiate(; io = devnull)
+    finally
+        Pkg.activate(prev; io = devnull)
+    end
+    out = joinpath(tmp, "summary.toml")
+    ni = Threads.nthreads(:interactive)  # Julia 1.10 and 1.11 reject an explicit ",0"
+    nt = "$(Threads.nthreads(:default))" * (ni > 0 ? ",$ni" : "")
+    cmd = `$(Base.julia_cmd()) --threads=$nt --project=$tmp $(@__FILE__)`
+    env = ("GROUP" => g, "LAB_TEST_CHILD" => "1", "LAB_TEST_SUMMARY" => out)
+    foreach(flush, (stdout, stderr))  # so Core's output prints before the child's
+    p = run(ignorestatus(addenv(cmd, env...)))
+    r = success(p) && isfile(out) ? get(TOML.parsefile(out)["groups"], g, nothing) : nothing
+    r === nothing || return r
+    return Dict{String, Any}(
+        "ran" => true, "passed" => false, "pass" => 0, "fail" => 0, "error" => 1,
+        "broken" => 0, "seconds" => round(time() - t0; digits = 1),
+        "reason" => "the $g process wrote no summary: exit code $(p.exitcode), " *
+            "signal $(p.termsignal)"
     )
-    (smld_small, _) = simulate(
-        params_small;
-        pattern  = Nmer2D(n = 4, d = 0.2),
-        molecule = GenericFluor(; photons = 5000.0, k_on = 0.05, k_off = 50.0),
-        camera   = IdealCamera(1:32, 1:32, 0.1)
+end
+
+function counts(ts)
+    c = Test.get_test_counts(ts)  # a Tuple before Julia 1.11, a TestCounts after
+    return c isa Tuple ? (pass = c[1] + c[5], fail = 0, error = 0, broken = c[4] + c[8]) :
+        (
+            pass = c.passes + c.cumulative_passes, fail = 0, error = 0,
+            broken = c.broken + c.cumulative_broken,
+        )
+end
+
+# Runs group g: each file in its own module (like SafeTestsets) and its own @testset.
+function rungroup(g)
+    t0 = time()
+    reason = unmet(g)
+    reason === nothing ||
+        return Dict{String, Any}("ran" => false, "passed" => false, "reason" => reason)
+    printstyled("GROUP $g\n"; bold = true)
+    c = try
+        counts(
+            @testset "$g" begin
+                for f in testfiles(g)
+                    @testset "$(relpath(f, TESTDIR))" begin
+                        Core.eval(
+                            Main, :(
+                                module $(gensym(:testfile))
+                                include($f)
+                                end
+                            )
+                        )
+                    end
+                end
+            end
+        )
+    catch e
+        e isa Test.TestSetException || rethrow()
+        (pass = e.pass, fail = e.fail, error = e.error, broken = e.broken)
+    end
+    return Dict{String, Any}(
+        "ran" => true, "passed" => c.fail + c.error == 0, "pass" => c.pass,
+        "fail" => c.fail, "error" => c.error, "broken" => c.broken,
+        "seconds" => round(time() - t0; digits = 1)
     )
+end
 
-    # -----------------------------------------------------------------------
-    # Type hierarchy + config dispatch
-    # -----------------------------------------------------------------------
-    @testset "Type hierarchy + config" begin
-        @test DC.DriftConfig <: DC.AbstractSMLMConfig
-        @test DC.DriftInfo  <: DC.AbstractSMLMInfo
-        @test DC.AlignConfig <: DC.AbstractSMLMConfig
-        @test DC.AlignInfo  <: DC.AbstractSMLMInfo
-        @test DC.ShiftTransform     <: DC.AbstractAlignTransform
-        @test DC.AffineTransform2D  <: DC.AbstractAlignTransform
-        @test DC.AffineTransform3D  <: DC.AbstractAlignTransform
+sel = strip(get(ENV, "GROUP", ""))
+sel = isempty(sel) ? "Core" : sel
+explicit = sel != "Everything"
+wanted = explicit ? strip.(split(sel, ",")) : [g for g in GROUPS if haskey(CFG, g)]
+for g in wanted
+    haskey(CFG, g) || error("GROUP=$sel: $g is not declared in test_groups.toml")
+end
 
-        cfg = DC.DriftConfig(; quality = :singlepass, degree = 2, verbose = 0)
-        @test cfg.quality == :singlepass
-        @test cfg.degree == 2
+results = Dict{String, Any}()
+for g in GROUPS
+    g in wanted || continue
+    results[g] = ownenv(g) ? runchild(g) : rungroup(g)
+    r = results[g]
+    r["ran"] || CHILD || println(explicit ? "ERROR" : "SKIPPED", " group $g: ", r["reason"])
+end
 
-        ac = DC.AlignConfig(method = :fft, transform = :affine, maxn = 50)
-        @test ac.method == :fft
-        @test ac.transform == :affine
-        @test ac.maxn == 50
-
-        # Bad arg validation
-        @test_throws Exception DC.driftcorrect(smld_small; quality = :nope)
-        @test_throws Exception DC.driftcorrect(smld_small; dataset_mode = :nope)
-        @test_throws ErrorException DC.align_smld([smld_small])
-        @test_throws ErrorException DC.align_smld([smld_small, smld_small]; method = :bad)
-        @test_throws ErrorException DC.align_smld([smld_small, smld_small]; transform = :bad)
-    end
-
-    # -----------------------------------------------------------------------
-    # Pure-function units — deterministic, no driftcorrect, no SMLMSim
-    # -----------------------------------------------------------------------
-    @testset "Pure-function units" begin
-        # normalize_frame
-        @test DC.normalize_frame(1, 1)   == 0.0    # n_frames=1 collapse safe
-        @test DC.normalize_frame(1, 100) == -1.0
-        @test DC.normalize_frame(100, 100) == +1.0
-        @test DC.normalize_frame(50, 99)  == 0.0   # midpoint
-
-        # LegendrePoly1D evaluate_at_frame stays finite at endpoints
-        poly = DC.LegendrePoly1D(2, 100)
-        poly.coefficients .= [0.5, 0.25]
-        @test isfinite(DC.evaluate_at_frame(poly, 1))
-        @test isfinite(DC.evaluate_at_frame(poly, 50))
-        @test isfinite(DC.evaluate_at_frame(poly, 100))
-        # n_frames=1 case
-        poly_1f = DC.LegendrePoly1D(2, 1)
-        poly_1f.coefficients .= [0.5, 0.25]
-        @test isfinite(DC.evaluate_at_frame(poly_1f, 1))
-
-        # compute_chunk_params guards
-        p1 = DC.compute_chunk_params(10; n_chunks = 20)
-        @test p1.n_chunks <= 10 && p1.frames_per_chunk >= 1
-        p2 = DC.compute_chunk_params(10; chunk_frames = 100)
-        @test p2.n_chunks == 1 && p2.frames_per_chunk == 10
-        @test DC.compute_chunk_params(1).n_chunks == 1
-        @test DC.compute_chunk_params(1).frames_per_chunk >= 1
-
-        # calculate_n_locs_required scaling (pure function on Float64s)
-        n_req_d2 = DC.calculate_n_locs_required(1000; degree = 2)
-        n_req_d3 = DC.calculate_n_locs_required(1000; degree = 3)
-        @test n_req_d2 isa Int && n_req_d2 > 0
-        @test n_req_d3 > n_req_d2
-        @test DC.calculate_n_locs_required(1000; σ_target = 0.0005) >
-              DC.calculate_n_locs_required(1000; σ_target = 0.002)
-        @test DC.calculate_n_locs_required(5000) >
-              DC.calculate_n_locs_required(1000)
-    end
-
-    # -----------------------------------------------------------------------
-    # Vector-delta rebuild gating (pure unit, no SMLD)
-    # -----------------------------------------------------------------------
-    @testset "Rebuild gating: vector delta" begin
-        # Same magnitude, opposite sign at the middle test frame — scalar
-        # max_drift_magnitude would miss this; vector delta must catch it.
-        last    = [0.0  0.05  0.0;
-                   0.0  0.00  0.0]
-        current = [0.0 -0.06  0.0;
-                   0.0  0.00  0.0]
-        @test DC.max_drift_vec_delta(current, last) ≈ 0.11 atol = 1e-12
-        @test DC.max_drift_vec_delta(last, last) == 0.0
-
-        # Translation (same direction, larger magnitude) still detected
-        current2 = [0.0  0.20  0.0;
-                    0.0  0.00  0.0]
-        @test DC.max_drift_vec_delta(current2, last) ≈ 0.15 atol = 1e-12
-
-        # NeighborState.last_drift_vecs initialised to +Inf so the first cost
-        # eval always rebuilds regardless of how small actual drift is.
-        st = DC.NeighborState(10, 5, 0.1, 2)
-        cur = [0.0 0.0 0.0; 0.0 0.0 0.0]
-        @test DC.max_drift_vec_delta(cur, st.last_drift_vecs) == Inf
-    end
-
-    # -----------------------------------------------------------------------
-    # correctdrift roundtrip (2D) — exact recovery of a known drift, no
-    # optimization involved. Deterministic.
-    # -----------------------------------------------------------------------
-    @testset "correctdrift roundtrip (2D)" begin
-        Random.seed!(123)
-        N = length(smld_small.emitters)
-        model = DC.LegendrePolynomial(smld_small; degree = 2,
-                                       initialize = "random", rscale = 0.1)
-        model.inter[1].dm .= 0.0     # DS1 reference
-        smld_drifted = DC.applydrift(smld_small, model)
-        smld_recovered = DC.correctdrift(smld_drifted, model)
-        rmsd = sqrt(sum((e1.x - e2.x)^2 + (e1.y - e2.y)^2
-                        for (e1, e2) in zip(smld_recovered.emitters, smld_small.emitters)) / N)
-        @test isapprox(rmsd, 0.0; atol = 1e-10)
-    end
-
-    # -----------------------------------------------------------------------
-    # findshift smoke — identity on small data
-    # -----------------------------------------------------------------------
-    @testset "findshift smoke" begin
-        @test isapprox(DC.findshift(smld_small, smld_small; histbinsize = 0.10),
-                       [0.0, 0.0])
-    end
-
-    # -----------------------------------------------------------------------
-    # position_frame_correlation deterministic unit
-    #
-    # Build a tiny SMLD with a KNOWN frame-correlated x-offset (linear in
-    # frame number) and verify the diagnostic returns a strong positive
-    # correlation in x and ~0 in y. Apply the inverse known offset and
-    # verify x correlation drops materially. No driftcorrect, no random
-    # init, no SMLMSim involvement.
-    # -----------------------------------------------------------------------
-    @testset "position_frame_correlation: deterministic unit" begin
-        if isdefined(SMLMDriftCorrection, :position_frame_correlation)
-            # Use simulate for a deterministic seeded baseline, then ADD a
-            # known linear x-drift. Frame numbers come from the simulation;
-            # the drift itself is hand-built and exact.
-            Random.seed!(7)
-            params_pfc = StaticSMLMConfig(20.0, 0.13, 30, 1, 200, 50.0, 2, [0.0, 1.0])
-            (smld_pfc, _) = simulate(params_pfc;
-                pattern  = Nmer2D(n = 4, d = 0.2),
-                molecule = GenericFluor(; photons = 5000.0, k_on = 0.05, k_off = 50.0),
-                camera   = IdealCamera(1:32, 1:32, 0.1))
-
-            # Hand-built linear drift in x only: c1 * P1(t) where t ∈ [-1,1].
-            # Magnitude (±300 nm at endpoints) is large vs inter-emitter spacing
-            # (~200 nm at density 20/μm² in this FOV), so the drift actually
-            # breaks local spatial clusters — without that the diagnostic
-            # correctly sees no change between drifted and (exactly) corrected.
-            poly_x = DC.LegendrePoly1D(1, smld_pfc.n_frames)
-            poly_x.coefficients .= [0.3]   # ±300 nm at endpoints, 0 at midpoint
-
-            smld_drifted = deepcopy(smld_pfc)
-            for e in smld_drifted.emitters
-                e.x += DC.evaluate_at_frame(poly_x, e.frame)
-                # y unchanged
-            end
-
-            res_d = DC.position_frame_correlation(smld_drifted; K = 20, mode = :intra)
-
-            # Shape / range checks
-            @test res_d.mode == :intra
-            @test res_d.K == 20
-            @test 0.0 <= res_d.summary.mean_abs_corr_x <= 1.0
-            @test 0.0 <= res_d.summary.mean_abs_corr_y <= 1.0
-            @test res_d.summary.mean_abs_corr_z === nothing
-
-            # Apply EXACT inverse drift — x residual correlation should drop
-            # essentially to where y already sits (no drift in y).
-            smld_corrected = deepcopy(smld_drifted)
-            for e in smld_corrected.emitters
-                e.x -= DC.evaluate_at_frame(poly_x, e.frame)
-            end
-            res_c = DC.position_frame_correlation(smld_corrected; K = 20, mode = :intra)
-
-            # The deterministic test: applying the EXACT inverse drift must
-            # reduce x-corr (compared to drifted) AND not significantly raise
-            # y-corr (since y was untouched). These are properties of the
-            # diagnostic itself, not of any optimizer.
-            @test res_c.summary.mean_abs_corr_x < res_d.summary.mean_abs_corr_x
-            @test res_c.summary.mean_abs_corr_y ≈ res_d.summary.mean_abs_corr_y atol = 0.05
-        end
-    end
-
-    # -----------------------------------------------------------------------
-    # driftcorrect interface smoke — verify return type / DriftInfo fields.
-    # Uses tiny multi-dataset data so inter alignment runs. Does NOT assert
-    # noisy RMSD values that would be sensitive to thread/RNG variance.
-    # -----------------------------------------------------------------------
-    @testset "driftcorrect interface smoke" begin
-        params_3ds = StaticSMLMConfig(5.0, 0.13, 30, 3, 200, 50.0, 2, [0.0, 1.0])
-        (smld_test, _) = simulate(params_3ds;
-            pattern  = Nmer2D(n = 4, d = 0.2),
-            molecule = GenericFluor(; photons = 5000.0, k_on = 0.05, k_off = 50.0),
-            camera   = IdealCamera(1:32, 1:32, 0.1))
-        Random.seed!(123)
-        model = DC.LegendrePolynomial(smld_test; degree = 2,
-                                       initialize = "random", rscale = 0.1)
-        model.inter[1].dm .= 0.0
-        smld_drifted = DC.applydrift(smld_test, model)
-
-        # Singlepass — default
-        (smld_c, info) = DC.driftcorrect(smld_drifted)
-        @test smld_c isa DC.SMLD
-        @test info isa DC.DriftInfo
-        @test info isa DC.AbstractSMLMInfo
-        @test info.model isa DC.LegendrePolynomial
-        @test info.elapsed_s > 0
-        @test info.backend == :cpu
-        @test info.iterations == 1                       # singlepass
-        @test info.converged == true
-        @test info.entropy isa Float64
-        @test info.history isa Vector{Float64}
-
-        # Config dispatch
-        cfg = DC.DriftConfig(; quality = :singlepass, degree = 2)
-        (smld_c2, info_c2) = DC.driftcorrect(smld_drifted, cfg)
-        @test smld_c2 isa DC.SMLD
-        @test info_c2 isa DC.DriftInfo
-        @test info_c2.iterations == 1
-
-        # FFT — quick path, no optimization, deterministic
-        (smld_fft, info_fft) = DC.driftcorrect(smld_drifted; quality = :fft)
-        @test info_fft.iterations == 0
-        @test info_fft.converged == true
-
-        # Warm-start path returns valid info
-        (smld_w, info_w) = DC.driftcorrect(smld_drifted; warm_start = info.model)
-        @test info_w isa DC.DriftInfo
-        @test info_w.elapsed_s > 0
-    end
-
-    # -----------------------------------------------------------------------
-    # Continuous mode smoke — exercises chunking + the CC-seed inter path
-    # (_ccseed_inter_continuous!). Tiny data, so assert only that it runs and
-    # returns valid output; full-sim drift recovery lives in extended_tests.jl.
-    # -----------------------------------------------------------------------
-    @testset "continuous mode smoke" begin
-        Random.seed!(7)
-        cmodel = DC.LegendrePolynomial(smld_small; degree = 2,
-                                        initialize = "random", rscale = 0.05)
-        cmodel.inter[1].dm .= 0.0
-        smld_cdrift = DC.applydrift(smld_small, cmodel)
-
-        (sc, cinfo) = DC.driftcorrect(smld_cdrift; dataset_mode = :continuous,
-                                       n_chunks = 2, degree = 2)
-        @test sc isa DC.SMLD
-        @test cinfo isa DC.DriftInfo
-        @test cinfo.model isa DC.LegendrePolynomial
-        @test length(sc.emitters) == length(smld_cdrift.emitters)
-        @test cinfo.elapsed_s > 0
-
-        # _ccseed_inter_continuous! runs without error on a 2-chunk model and
-        # produces one inter shift per chunk.
-        ci = DC.chunk_smld(smld_small; n_chunks = 2)
-        m2 = DC.LegendrePolynomial(ci.smld; degree = 2)
-        @test_nowarn DC._ccseed_inter_continuous!(m2, ci.smld)
-        @test length(m2.inter) == ci.smld.n_datasets
-    end
-
-    # -----------------------------------------------------------------------
-    # Registered CC-primary inter and the :fft tier vs a hot spot (0.2.8
-    # regression). A bright aggregate (300 fluorophores at one site) is imaged
-    # only in DS1-2, so the unnormalized histogram CC of DS3-4 against DS1 is
-    # captured by it: the peak lands where each dataset's densest cluster
-    # overlays the hot spot, microns away. 0.2.8 accepted that peak in both
-    # paths (1.3-3.4 um across seeds); the overlap guard must keep the
-    # incumbent instead. All datasets are mutually aligned (truth: every inter
-    # shift is 0).
-    # -----------------------------------------------------------------------
-    @testset "Hot spot in early datasets: CC-primary inter + :fft (registered)" begin
-        Random.seed!(2026)
-        cam_hs = IdealCamera(1:64, 1:64, 0.1)                  # 6.4 μm FOV
-        fluor_hs = GenericFluor(; photons = 5000.0, k_on = 1.0, k_off = 50.0)
-        (s_struct, _) = simulate(StaticSMLMConfig(5.0, 0.13, 50, 4, 300, 50.0, 2, [0.0, 1.0]);
-            pattern = Nmer2D(n = 4, d = 0.2), molecule = fluor_hs, camera = cam_hs)
-        agg = [Emitter2DFit{Float64}(3.2, 3.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
-                                     σ_xy = 0.0, track_id = i) for i in 1:300]
-        (s_hot, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 300, 50.0, 2, [0.0, 1.0]);
-            starting_conditions = agg, molecule = fluor_hs, camera = cam_hs)
-        smld_hs = BasicSMLD(vcat(s_struct.emitters, s_hot.emitters), cam_hs, 300, 4,
-                            Dict{String,Any}())
-        model_hs = DC.LegendrePolynomial(smld_hs; degree = 2)  # zeros: intra = 0, inter = 0
-        DC._cc_primary_inter!(model_hs, smld_hs, 100; n_passes = 2, init = true)
-        @test all(hypot(model_hs.inter[d].dm...) < 0.03 for d in 1:4)
-
-        (_, info_fft_hs) = DC.driftcorrect(smld_hs; quality = :fft)
-        @test all(hypot(info_fft_hs.model.inter[d].dm...) < 0.03 for d in 1:4)
-
-        # A zero incumbent chosen as the refine seed must be refined from, not replaced
-        # by findinter!'s own (hot-spot-captured) CC: DS3 displaced by a true 20 nm.
-        smld_hs20 = deepcopy(smld_hs)
-        for e in smld_hs20.emitters
-            e.dataset == 3 && (e.x += 0.020)
-        end
-        model_hs20 = DC.LegendrePolynomial(smld_hs20; degree = 2)
-        DC._cc_primary_inter!(model_hs20, smld_hs20, 100; n_passes = 2, init = true)
-        @test isapprox(model_hs20.inter[3].dm[1], 0.020; atol = 0.006)
-    end
-
-    # -----------------------------------------------------------------------
-    # Sub-bin true shift on sparse data (:fft, 2D and 3D): the 50 nm CC is
-    # quantized, and the overlap guard must still accept it over a far
-    # incumbent (a guard that let the incumbent borrow a neighboring position's
-    # score left 57 / 69 nm here).
-    # -----------------------------------------------------------------------
-    @testset "Overlap guard accepts a quantized CC (sub-bin shift, sparse)" begin
-        cam_q = IdealCamera(1:64, 1:64, 0.1)
-        for nd in (2, 3)
-            Random.seed!(1)
-            (s_t, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, nd, [-1.0, 1.0]);
-                pattern = nd == 2 ? Nmer2D(n = 1, d = 0.0) : Nmer3D(n = 1, d = 0.0),
-                molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
-                camera = cam_q)
-            truth_t = fill(0.040, nd)
-            e_t = deepcopy(s_t.emitters)
-            for e in e_t
-                e.x += truth_t[1]
-                e.y += truth_t[2]
-                nd == 3 && (e.z += truth_t[3])
-                e.dataset = 2
-            end
-            smld_t = BasicSMLD(vcat(s_t.emitters, e_t), cam_q, 300, 2, Dict{String,Any}())
-            (_, info_t) = DC.driftcorrect(smld_t; quality = :fft)
-            @test sqrt(sum(abs2, info_t.model.inter[2].dm .- info_t.model.inter[1].dm .-
-                                 truth_t)) < 0.025
-        end
-    end
-
-    # -----------------------------------------------------------------------
-    # Truth 35 nm from the zero incumbent (just past the 30 nm radius) and a
-    # hot spot only in the reference that, in a raw-count CC, captures the
-    # peak onto the target's small aggregate (0.2.8: 4.2 um). The capped CC
-    # must not be captured. The :fft tier has no entropy refine, so it is held
-    # to the CC's bin-level precision.
-    # -----------------------------------------------------------------------
-    @testset "CC-primary inter: incumbent just past the radius vs captured CC" begin
-        Random.seed!(1)
-        cam_r = IdealCamera(1:64, 1:64, 0.1)
-        fl_r = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0)
-        cfg_r = StaticSMLMConfig(8.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0])
-        (s_r, _) = simulate(cfg_r; pattern = Nmer2D(n = 1, d = 0.0), molecule = fl_r,
-                            camera = cam_r)
-        site(x, n) = [Emitter2DFit{Float64}(x, x, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
-                                            σ_xy = 0.0, track_id = i) for i in 1:n]
-        (small_r, _) = simulate(cfg_r; starting_conditions = site(1.2, 50), molecule = fl_r,
-                                camera = cam_r)
-        (hot_r, _) = simulate(cfg_r; starting_conditions = site(4.2, 300), molecule = fl_r,
-                              camera = cam_r)
-        structure_r = vcat(s_r.emitters, small_r.emitters)
-        truth_r = [0.025, 0.025]
-        target_r = deepcopy(structure_r)
-        for e in target_r
-            e.x += truth_r[1]
-            e.y += truth_r[2]
-            e.dataset = 2
-        end
-        smld_r = BasicSMLD(vcat(structure_r, hot_r.emitters, target_r), cam_r, 300, 2,
-                           Dict{String,Any}())
-        model_r = DC.LegendrePolynomial(smld_r; degree = 2)
-        DC._cc_primary_inter!(model_r, smld_r, 100; n_passes = 2, init = true)
-        @test isapprox(model_r.inter[2].dm .- model_r.inter[1].dm, truth_r; atol = 0.010)
-        (_, info_r) = DC.driftcorrect(smld_r; quality = :fft)
-        @test isapprox(info_r.model.inter[2].dm .- info_r.model.inter[1].dm, truth_r;
-                       atol = 0.030)
-
-        # The cap itself: the reference-only hot spot captures a raw-count CC
-        # (microns off) but not the capped one.
-        ref_r = DC.filter_by_dataset(smld_r, 1)
-        tgt_r = DC.filter_by_dataset(smld_r, 2)
-        cc_raw = DC.findshift(ref_r, tgt_r; histbinsize = 0.05)
-        cc_cap = DC.findshift(ref_r, tgt_r; histbinsize = 0.05, maxcount = DC._CC_MAXCOUNT)
-        @test sqrt(sum(abs2, cc_raw .- truth_r)) > 1.0
-        @test sqrt(sum(abs2, cc_cap .- truth_r)) < 0.030
-        @test_throws ArgumentError DC.findshift(ref_r, tgt_r; histbinsize = 0.05, maxcount = 0)
-        @test_throws ArgumentError DC.findshift_damped(ref_r, tgt_r; histbinsize = 0.05, maxcount = -1)
-    end
-
-    # -----------------------------------------------------------------------
-    # Zero-overlap tie: sparse isolated sites with near-noiseless localizations
-    # and a true shift near half a 50 nm bin. The CC is correct but ~35-40 nm
-    # off, so it and the far incumbent both score zero overlap within the 30 nm
-    # radius; the guard must give the tie to the CC (it kept the incumbent and
-    # ended 213 nm off). Built from SMLMSim with very high photon counts.
-    # -----------------------------------------------------------------------
-    @testset "Overlap guard: zero-overlap tie goes to the CC" begin
-        rng_t = MersenneTwister(3)
-        sites_t = [Tuple(0.05 .* rand(rng_t, 12:110, 3)) for _ in 1:15]
-        em_t = [Emitter3DFit{Float64}(p[1], p[2], p[3] - 2.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
-                                      track_id = i) for (i, p) in enumerate(sites_t)]
-        Random.seed!(3)
-        (s_t, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 300, 50.0, 3, [-1.0, 1.0]);
-            starting_conditions = em_t,
-            molecule = GenericFluor(; photons = 1.0e7, k_on = 0.4, k_off = 50.0),
-            camera = IdealCamera(1:64, 1:64, 0.1))
-        truth_t = fill(0.123, 3)
-        for e in s_t.emitters
-            if e.dataset == 2
-                e.x += truth_t[1]
-                e.y += truth_t[2]
-                e.z += truth_t[3]
-            end
-        end
-        (_, info_t) = DC.driftcorrect(s_t; quality = :fft)
-        @test sqrt(sum(abs2, info_t.model.inter[2].dm .- info_t.model.inter[1].dm .- truth_t)) < 0.050
-    end
-
-    # -----------------------------------------------------------------------
-    # 3D cross-correlation on a thin stack (z range under 1 μm): the z ROI was
-    # round(min z)..round(max z) of smld1 alone, so a stack within ±0.5 μm got a
-    # zero-depth histogram and findshift threw (FFTW plan error), taking the
-    # :fft tier down with it.
-    # -----------------------------------------------------------------------
-    @testset "findshift 3D: thin z stack" begin
-        Random.seed!(1)
-        (s_z, _) = simulate(StaticSMLMConfig(5.0, 0.13, 50, 2, 300, 50.0, 3, [-0.1, 0.1]);
-            pattern = Nmer3D(n = 6, d = 0.2),
-            molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
-            camera = IdealCamera(1:64, 1:64, 0.1))
-        truth_z = [0.10, -0.05, 0.05]
-        for e in s_z.emitters
-            if e.dataset == 2
-                e.x += truth_z[1]
-                e.y += truth_z[2]
-                e.z += truth_z[3]
-            end
-        end
-        @test maximum(abs(e.z) for e in s_z.emitters) < 0.5          # the thin-stack case
-        sh_z = DC.findshift(DC.filter_by_dataset(s_z, 1), DC.filter_by_dataset(s_z, 2);
-                            histbinsize = 0.05)
-        @test sqrt(sum(abs2, sh_z .- truth_z)) < 0.020
-        (_, info_z) = DC.driftcorrect(s_z; quality = :fft)
-        @test sqrt(sum(abs2, info_z.model.inter[2].dm .- info_z.model.inter[1].dm .-
-                             truth_z)) < 0.020
-    end
-
-    # -----------------------------------------------------------------------
-    # align_smld smoke — known shift recovery on small data.
-    # -----------------------------------------------------------------------
-    @testset "align_smld smoke" begin
-        # Use the dataset=1 subset as an "independent acquisition" baseline
-        # (smld_small is single-dataset already)
-        smld_base = smld_small
-        true_shift = [0.3, -0.2]
-        smld_shifted = deepcopy(smld_base)
-        for e in smld_shifted.emitters
-            e.x += true_shift[1]
-            e.y += true_shift[2]
-        end
-        (aligned, info) = DC.align_smld([smld_base, smld_shifted]; method = :fft)
-        @test info isa DC.AlignInfo
-        @test length(aligned) == 2
-        @test info.shifts[1] == [0.0, 0.0]
-        @test info.transforms[1] isa DC.ShiftTransform
-        # FFT recovery within 150 nm — generous tolerance for tiny data
-        @test isapprox(info.shifts[2], true_shift; atol = 0.150)
-    end
-
-    # -----------------------------------------------------------------------
-    # Edge-case guards
-    # -----------------------------------------------------------------------
-    @testset "Edge-case guards" begin
-        # findshift_damped with σ_px ≈ 0 → σ_px floor must prevent collapse
-        sh = DC.findshift_damped(smld_small, smld_small;
-                histbinsize = 0.10, prior_shift = [0.0, 0.0], prior_sigma = 0.0)
-        @test all(isfinite, sh)
-
-        # findshift_damped: known shift + prior centered on truth recovers
-        true_sh = [0.5, -0.3]
-        smld_shifted = deepcopy(smld_small)
-        for e in smld_shifted.emitters
-            e.x += true_sh[1]; e.y += true_sh[2]
-        end
-        sh = DC.findshift_damped(smld_small, smld_shifted;
-                histbinsize = 0.10, prior_shift = true_sh, prior_sigma = 1.0)
-        @test isapprox(sh, true_sh; atol = 0.15)
-
-        # filter_emitters to empty mask
-        empty_mask = falses(length(smld_small.emitters))
-        smld_empty = DC.filter_emitters(smld_small, empty_mask)
-        @test isempty(smld_empty.emitters)
-
-        # findintra! on empty per-dataset subset is a no-op
-        model = DC.LegendrePolynomial(smld_small; degree = 2)
-        @test_nowarn DC.findintra!(model.intra[1], smld_empty, 1, 50)
-
-        # find_dense_roi: requesting more than available returns all locs
-        n_total = length(smld_small.emitters)
-        idx_all = DC.find_dense_roi(smld_small, n_total + 100)
-        @test length(idx_all) == n_total
+if haskey(ENV, "LAB_TEST_SUMMARY")
+    open(ENV["LAB_TEST_SUMMARY"], "w") do io
+        TOML.print(
+            io, Dict(
+                "julia" => string(VERSION), "host" => first(split(gethostname(), '.')),
+                "selection" => sel, "groups" => results
+            ); sorted = true
+        )
     end
 end
+bad = [g for (g, r) in results if r["ran"] ? !r["passed"] : explicit]
+CHILD || isempty(bad) ||
+    error("test groups failed or could not run: $(join(sort(bad), ", "))")
