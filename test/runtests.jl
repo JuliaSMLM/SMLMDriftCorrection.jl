@@ -364,6 +364,30 @@ const DC = SMLMDriftCorrection
         DC._accept_if_better_overlap!(inter_q, truth_q .+ 0.025, sd_q,
                                       DC._coord_tree(s_q, 2), 2)
         @test isapprox(inter_q, truth_q; atol = 0.010)
+
+        # Every candidate is scored where it would be applied: an incumbent 40 nm
+        # off per axis must not borrow a neighboring grid point's score to tie an
+        # accurate CC (public :fft path, 2D and 3D; a scored-on-grid incumbent
+        # left 57 / 69 nm).
+        for nd in (2, 3)
+            Random.seed!(1)
+            (s_t, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, nd, [-1.0, 1.0]);
+                pattern = nd == 2 ? Nmer2D(n = 1, d = 0.0) : Nmer3D(n = 1, d = 0.0),
+                molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+                camera = cam_q)
+            truth_t = fill(0.040, nd)
+            e_t = deepcopy(s_t.emitters)
+            for e in e_t
+                e.x += truth_t[1]
+                e.y += truth_t[2]
+                nd == 3 && (e.z += truth_t[3])
+                e.dataset = 2
+            end
+            smld_t = BasicSMLD(vcat(s_t.emitters, e_t), cam_q, 300, 2, Dict{String,Any}())
+            (_, info_t) = DC.driftcorrect(smld_t; quality = :fft)
+            @test sqrt(sum(abs2, info_t.model.inter[2].dm .- info_t.model.inter[1].dm .-
+                                 truth_t)) < 0.025
+        end
     end
 
     # -----------------------------------------------------------------------
