@@ -349,19 +349,45 @@ function crosscorr2Dweighted(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
 end
 
 """
+Histogram ROI shared by two SMLDs for cross-correlation, in the coordinate type `T`
+(Float32 emitters need a Float32 ROI; `histimage2D/3D` take one `T` for coordinates,
+ROI and bin size). x/y: the camera field. z (3D): the floor/ceil of the z range of
+*both* SMLDs, padded by one bin on each side. Rounding smld1's range alone collapsed a
+stack thinner than ~1 μm to a zero-depth histogram (FFTW plan error), and the padding
+keeps localizations on the lower bound, which `histimage3D`'s 1-based binning drops.
+"""
+function _shared_cc_roi(smld1::SMLD, smld2::SMLD, n_dims::Int, ::Type{T}, histbinsize) where {T}
+    cam = smld1.camera
+    n_dims == 2 && return T[cam.pixel_edges_x[1], cam.pixel_edges_x[end],
+                            cam.pixel_edges_y[1], cam.pixel_edges_y[end]]
+    zmin = floor(min(minimum(e.z for e in smld1.emitters), minimum(e.z for e in smld2.emitters)))
+    zmax = ceil(max(maximum(e.z for e in smld1.emitters), maximum(e.z for e in smld2.emitters)))
+    return T[cam.pixel_edges_x[1], cam.pixel_edges_x[end],
+             cam.pixel_edges_y[1], cam.pixel_edges_y[end],
+             zmin - histbinsize, zmax + histbinsize]
+end
+
+"""
 Perform a cross-correlation between images representing localizations in two
 SMLD structures and compute the shift between the two original images.
 histbinsize is the size of the bins in the histogram image in the
-same units as the localization coordinates.
+same units as the localization coordinates. `maxcount`, when given, clips every
+histogram bin to at most that many localizations before correlating, so the CC
+measures shared occupancy and one bright aggregate (thousands of localizations in a
+bin) cannot outweigh the structure; `nothing` (default) correlates raw counts. It must
+be a positive integer.
 """
 function findshift(smld1::T, smld2::T;
-    histbinsize::Real=1.0
+    histbinsize::Real=1.0,
+    maxcount::Union{Nothing, Int}=nothing
 ) where {T<:SMLD}
 
     # Check for empty datasets
     if isempty(smld1.emitters)
         error("findshift: smld1 has no emitters")
     end
+    maxcount === nothing || maxcount > 0 ||
+        throw(ArgumentError("findshift: maxcount must be a positive integer, got $maxcount"))
     if isempty(smld2.emitters)
         error("findshift: smld2 has no emitters")
     end
@@ -379,28 +405,7 @@ function findshift(smld1::T, smld2::T;
        smld1.camera.pixel_edges_y[end] != smld2.camera.pixel_edges_y[end]
         error("Images must have the same size.")
     end
-    # Build ROI in the coordinate type (Float32 emitters need a Float32 ROI; histimage2D
-    # is parametrized on a single T shared by x/y/ROI/histbinsize). `float([...])` would
-    # force Float64 and TypeError against Float32 emitter data.
-    if n_dims == 2
-        ROI = coord_type[smld1.camera.pixel_edges_x[1],
-                         smld1.camera.pixel_edges_x[end],
-                         smld1.camera.pixel_edges_y[1],
-                         smld1.camera.pixel_edges_y[end]]
-    elseif n_dims == 3
-        smld1_z = [e.z for e in smld1.emitters]
-        ROI = coord_type[smld1.camera.pixel_edges_x[1],
-                         smld1.camera.pixel_edges_x[end],
-                         smld1.camera.pixel_edges_y[1],
-                         smld1.camera.pixel_edges_y[end],
-                         round(minimum(smld1_z)),
-                         round(maximum(smld1_z))]
-    end
-    imsz_x = smld1.camera.pixel_edges_x[end] - smld1.camera.pixel_edges_x[1]
-    imsz_y = smld1.camera.pixel_edges_y[end] - smld1.camera.pixel_edges_y[1]
-    if n_dims == 3
-        imsz_z = maximum(smld1_z) - minimum(smld1_z)
-    end
+    ROI = _shared_cc_roi(smld1, smld2, n_dims, coord_type, histbinsize)
     smld1_x = [e.x for e in smld1.emitters]
     smld1_y = [e.y for e in smld1.emitters]
     smld2_x = [e.x for e in smld2.emitters]
@@ -415,6 +420,10 @@ function findshift(smld1::T, smld2::T;
                           ROI=ROI, histbinsize=histbinsize)
         im2 = histimage3D(smld2_x, smld2_y, smld2_z;
                           ROI=ROI, histbinsize=histbinsize)
+    end
+    if maxcount !== nothing
+        im1 .= min.(im1, maxcount)
+        im2 .= min.(im2, maxcount)
     end
     # Compute the cross-correlation (with zero-padding)
     if n_dims == 2
@@ -468,17 +477,21 @@ end
 
 Find shift with Gaussian damping centered at prior_shift.
 Used to refine outlier shifts by searching near expected location.
+`maxcount` clips histogram bins as in `findshift` (a positive integer, or `nothing`).
 """
 function findshift_damped(smld1::T, smld2::T;
     histbinsize::Real=1.0,
     prior_shift::Vector{<:Real}=[0.0, 0.0],
-    prior_sigma::Real=1.0
+    prior_sigma::Real=1.0,
+    maxcount::Union{Nothing, Int}=nothing
 ) where {T<:SMLD}
 
     # Check for empty datasets
     if isempty(smld1.emitters)
         error("findshift_damped: smld1 has no emitters")
     end
+    maxcount === nothing || maxcount > 0 ||
+        throw(ArgumentError("findshift_damped: maxcount must be a positive integer, got $maxcount"))
     if isempty(smld2.emitters)
         error("findshift_damped: smld2 has no emitters")
     end
@@ -497,23 +510,7 @@ function findshift_damped(smld1::T, smld2::T;
         error("Images must have the same size.")
     end
 
-    # Build ROI in the coordinate type (Float32 emitters need a Float32 ROI; histimage2D
-    # is parametrized on a single T shared by x/y/ROI/histbinsize). `float([...])` would
-    # force Float64 and TypeError against Float32 emitter data.
-    if n_dims == 2
-        ROI = coord_type[smld1.camera.pixel_edges_x[1],
-                         smld1.camera.pixel_edges_x[end],
-                         smld1.camera.pixel_edges_y[1],
-                         smld1.camera.pixel_edges_y[end]]
-    elseif n_dims == 3
-        smld1_z = [e.z for e in smld1.emitters]
-        ROI = coord_type[smld1.camera.pixel_edges_x[1],
-                         smld1.camera.pixel_edges_x[end],
-                         smld1.camera.pixel_edges_y[1],
-                         smld1.camera.pixel_edges_y[end],
-                         round(minimum(smld1_z)),
-                         round(maximum(smld1_z))]
-    end
+    ROI = _shared_cc_roi(smld1, smld2, n_dims, coord_type, histbinsize)
 
     smld1_x = [e.x for e in smld1.emitters]
     smld1_y = [e.y for e in smld1.emitters]
@@ -523,12 +520,14 @@ function findshift_damped(smld1::T, smld2::T;
     if n_dims == 2
         im1 = histimage2D(smld1_x, smld1_y; ROI=ROI, histbinsize=histbinsize)
         im2 = histimage2D(smld2_x, smld2_y; ROI=ROI, histbinsize=histbinsize)
+        maxcount === nothing || (im1 .= min.(im1, maxcount); im2 .= min.(im2, maxcount))
         cc = crosscorr2D(im1, im2)
     elseif n_dims == 3
         smld1_z = [e.z for e in smld1.emitters]
         smld2_z = [e.z for e in smld2.emitters]
         im1 = histimage3D(smld1_x, smld1_y, smld1_z; ROI=ROI, histbinsize=histbinsize)
         im2 = histimage3D(smld2_x, smld2_y, smld2_z; ROI=ROI, histbinsize=histbinsize)
+        maxcount === nothing || (im1 .= min.(im1, maxcount); im2 .= min.(im2, maxcount))
         cc = crosscorr3D(im1, im2)
     end
 

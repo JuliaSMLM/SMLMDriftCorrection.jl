@@ -303,6 +303,182 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # Registered CC-primary inter and the :fft tier vs a hot spot (0.2.8
+    # regression). A bright aggregate (300 fluorophores at one site) is imaged
+    # only in DS1-2, so the unnormalized histogram CC of DS3-4 against DS1 is
+    # captured by it: the peak lands where each dataset's densest cluster
+    # overlays the hot spot, microns away. 0.2.8 accepted that peak in both
+    # paths (1.3-3.4 um across seeds); the overlap guard must keep the
+    # incumbent instead. All datasets are mutually aligned (truth: every inter
+    # shift is 0).
+    # -----------------------------------------------------------------------
+    @testset "Hot spot in early datasets: CC-primary inter + :fft (registered)" begin
+        Random.seed!(2026)
+        cam_hs = IdealCamera(1:64, 1:64, 0.1)                  # 6.4 μm FOV
+        fluor_hs = GenericFluor(; photons = 5000.0, k_on = 1.0, k_off = 50.0)
+        (s_struct, _) = simulate(StaticSMLMConfig(5.0, 0.13, 50, 4, 300, 50.0, 2, [0.0, 1.0]);
+            pattern = Nmer2D(n = 4, d = 0.2), molecule = fluor_hs, camera = cam_hs)
+        agg = [Emitter2DFit{Float64}(3.2, 3.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                     σ_xy = 0.0, track_id = i) for i in 1:300]
+        (s_hot, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 300, 50.0, 2, [0.0, 1.0]);
+            starting_conditions = agg, molecule = fluor_hs, camera = cam_hs)
+        smld_hs = BasicSMLD(vcat(s_struct.emitters, s_hot.emitters), cam_hs, 300, 4,
+                            Dict{String,Any}())
+        model_hs = DC.LegendrePolynomial(smld_hs; degree = 2)  # zeros: intra = 0, inter = 0
+        DC._cc_primary_inter!(model_hs, smld_hs, 100; n_passes = 2, init = true)
+        @test all(hypot(model_hs.inter[d].dm...) < 0.03 for d in 1:4)
+
+        (_, info_fft_hs) = DC.driftcorrect(smld_hs; quality = :fft)
+        @test all(hypot(info_fft_hs.model.inter[d].dm...) < 0.03 for d in 1:4)
+
+        # A zero incumbent chosen as the refine seed must be refined from, not replaced
+        # by findinter!'s own (hot-spot-captured) CC: DS3 displaced by a true 20 nm.
+        smld_hs20 = deepcopy(smld_hs)
+        for e in smld_hs20.emitters
+            e.dataset == 3 && (e.x += 0.020)
+        end
+        model_hs20 = DC.LegendrePolynomial(smld_hs20; degree = 2)
+        DC._cc_primary_inter!(model_hs20, smld_hs20, 100; n_passes = 2, init = true)
+        @test isapprox(model_hs20.inter[3].dm[1], 0.020; atol = 0.006)
+    end
+
+    # -----------------------------------------------------------------------
+    # Sub-bin true shift on sparse data (:fft, 2D and 3D): the 50 nm CC is
+    # quantized, and the overlap guard must still accept it over a far
+    # incumbent (a guard that let the incumbent borrow a neighboring position's
+    # score left 57 / 69 nm here).
+    # -----------------------------------------------------------------------
+    @testset "Overlap guard accepts a quantized CC (sub-bin shift, sparse)" begin
+        cam_q = IdealCamera(1:64, 1:64, 0.1)
+        for nd in (2, 3)
+            Random.seed!(1)
+            (s_t, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, nd, [-1.0, 1.0]);
+                pattern = nd == 2 ? Nmer2D(n = 1, d = 0.0) : Nmer3D(n = 1, d = 0.0),
+                molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+                camera = cam_q)
+            truth_t = fill(0.040, nd)
+            e_t = deepcopy(s_t.emitters)
+            for e in e_t
+                e.x += truth_t[1]
+                e.y += truth_t[2]
+                nd == 3 && (e.z += truth_t[3])
+                e.dataset = 2
+            end
+            smld_t = BasicSMLD(vcat(s_t.emitters, e_t), cam_q, 300, 2, Dict{String,Any}())
+            (_, info_t) = DC.driftcorrect(smld_t; quality = :fft)
+            @test sqrt(sum(abs2, info_t.model.inter[2].dm .- info_t.model.inter[1].dm .-
+                                 truth_t)) < 0.025
+        end
+    end
+
+    # -----------------------------------------------------------------------
+    # Truth 35 nm from the zero incumbent (just past the 30 nm radius) and a
+    # hot spot only in the reference that, in a raw-count CC, captures the
+    # peak onto the target's small aggregate (0.2.8: 4.2 um). The capped CC
+    # must not be captured. The :fft tier has no entropy refine, so it is held
+    # to the CC's bin-level precision.
+    # -----------------------------------------------------------------------
+    @testset "CC-primary inter: incumbent just past the radius vs captured CC" begin
+        Random.seed!(1)
+        cam_r = IdealCamera(1:64, 1:64, 0.1)
+        fl_r = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0)
+        cfg_r = StaticSMLMConfig(8.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0])
+        (s_r, _) = simulate(cfg_r; pattern = Nmer2D(n = 1, d = 0.0), molecule = fl_r,
+                            camera = cam_r)
+        site(x, n) = [Emitter2DFit{Float64}(x, x, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                            σ_xy = 0.0, track_id = i) for i in 1:n]
+        (small_r, _) = simulate(cfg_r; starting_conditions = site(1.2, 50), molecule = fl_r,
+                                camera = cam_r)
+        (hot_r, _) = simulate(cfg_r; starting_conditions = site(4.2, 300), molecule = fl_r,
+                              camera = cam_r)
+        structure_r = vcat(s_r.emitters, small_r.emitters)
+        truth_r = [0.025, 0.025]
+        target_r = deepcopy(structure_r)
+        for e in target_r
+            e.x += truth_r[1]
+            e.y += truth_r[2]
+            e.dataset = 2
+        end
+        smld_r = BasicSMLD(vcat(structure_r, hot_r.emitters, target_r), cam_r, 300, 2,
+                           Dict{String,Any}())
+        model_r = DC.LegendrePolynomial(smld_r; degree = 2)
+        DC._cc_primary_inter!(model_r, smld_r, 100; n_passes = 2, init = true)
+        @test isapprox(model_r.inter[2].dm .- model_r.inter[1].dm, truth_r; atol = 0.010)
+        (_, info_r) = DC.driftcorrect(smld_r; quality = :fft)
+        @test isapprox(info_r.model.inter[2].dm .- info_r.model.inter[1].dm, truth_r;
+                       atol = 0.030)
+
+        # The cap itself: the reference-only hot spot captures a raw-count CC
+        # (microns off) but not the capped one.
+        ref_r = DC.filter_by_dataset(smld_r, 1)
+        tgt_r = DC.filter_by_dataset(smld_r, 2)
+        cc_raw = DC.findshift(ref_r, tgt_r; histbinsize = 0.05)
+        cc_cap = DC.findshift(ref_r, tgt_r; histbinsize = 0.05, maxcount = DC._CC_MAXCOUNT)
+        @test sqrt(sum(abs2, cc_raw .- truth_r)) > 1.0
+        @test sqrt(sum(abs2, cc_cap .- truth_r)) < 0.030
+        @test_throws ArgumentError DC.findshift(ref_r, tgt_r; histbinsize = 0.05, maxcount = 0)
+        @test_throws ArgumentError DC.findshift_damped(ref_r, tgt_r; histbinsize = 0.05, maxcount = -1)
+    end
+
+    # -----------------------------------------------------------------------
+    # Zero-overlap tie: sparse isolated sites with near-noiseless localizations
+    # and a true shift near half a 50 nm bin. The CC is correct but ~35-40 nm
+    # off, so it and the far incumbent both score zero overlap within the 30 nm
+    # radius; the guard must give the tie to the CC (it kept the incumbent and
+    # ended 213 nm off). Built from SMLMSim with very high photon counts.
+    # -----------------------------------------------------------------------
+    @testset "Overlap guard: zero-overlap tie goes to the CC" begin
+        rng_t = MersenneTwister(3)
+        sites_t = [Tuple(0.05 .* rand(rng_t, 12:110, 3)) for _ in 1:15]
+        em_t = [Emitter3DFit{Float64}(p[1], p[2], p[3] - 2.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                      track_id = i) for (i, p) in enumerate(sites_t)]
+        Random.seed!(3)
+        (s_t, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 300, 50.0, 3, [-1.0, 1.0]);
+            starting_conditions = em_t,
+            molecule = GenericFluor(; photons = 1.0e7, k_on = 0.4, k_off = 50.0),
+            camera = IdealCamera(1:64, 1:64, 0.1))
+        truth_t = fill(0.123, 3)
+        for e in s_t.emitters
+            if e.dataset == 2
+                e.x += truth_t[1]
+                e.y += truth_t[2]
+                e.z += truth_t[3]
+            end
+        end
+        (_, info_t) = DC.driftcorrect(s_t; quality = :fft)
+        @test sqrt(sum(abs2, info_t.model.inter[2].dm .- info_t.model.inter[1].dm .- truth_t)) < 0.050
+    end
+
+    # -----------------------------------------------------------------------
+    # 3D cross-correlation on a thin stack (z range under 1 μm): the z ROI was
+    # round(min z)..round(max z) of smld1 alone, so a stack within ±0.5 μm got a
+    # zero-depth histogram and findshift threw (FFTW plan error), taking the
+    # :fft tier down with it.
+    # -----------------------------------------------------------------------
+    @testset "findshift 3D: thin z stack" begin
+        Random.seed!(1)
+        (s_z, _) = simulate(StaticSMLMConfig(5.0, 0.13, 50, 2, 300, 50.0, 3, [-0.1, 0.1]);
+            pattern = Nmer3D(n = 6, d = 0.2),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+            camera = IdealCamera(1:64, 1:64, 0.1))
+        truth_z = [0.10, -0.05, 0.05]
+        for e in s_z.emitters
+            if e.dataset == 2
+                e.x += truth_z[1]
+                e.y += truth_z[2]
+                e.z += truth_z[3]
+            end
+        end
+        @test maximum(abs(e.z) for e in s_z.emitters) < 0.5          # the thin-stack case
+        sh_z = DC.findshift(DC.filter_by_dataset(s_z, 1), DC.filter_by_dataset(s_z, 2);
+                            histbinsize = 0.05)
+        @test sqrt(sum(abs2, sh_z .- truth_z)) < 0.020
+        (_, info_z) = DC.driftcorrect(s_z; quality = :fft)
+        @test sqrt(sum(abs2, info_z.model.inter[2].dm .- info_z.model.inter[1].dm .-
+                             truth_z)) < 0.020
+    end
+
+    # -----------------------------------------------------------------------
     # align_smld smoke — known shift recovery on small data.
     # -----------------------------------------------------------------------
     @testset "align_smld smoke" begin
