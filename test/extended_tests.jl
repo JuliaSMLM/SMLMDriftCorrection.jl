@@ -280,6 +280,29 @@ using Random
         end
     end
 
+    # --- Known limit: a hot spot only in the dataset being scored ---
+    # The overlap score counts localizations, so when an aggregate the consensus lacks
+    # makes up most of a dataset (here ~90% of DS1), a CC shift that lays it on any
+    # consensus localization outscores the true alignment and DS1 is thrown microns
+    # (2-3.6 um across seeds). Recorded as broken until the guard scores occupancy
+    # instead (see the bin-count proposal); an Unexpected Pass means that landed.
+    @testset "Known limit: unshared hot spot in the scored dataset" begin
+        Random.seed!(1)
+        cam_u = IdealCamera(1:64, 1:64, 0.1)
+        (s_u, _) = simulate(StaticSMLMConfig(0.5, 0.13, 50, 3, 300, 50.0, 2, [0.0, 1.0]);
+            pattern=Nmer2D(n=4, d=0.2),
+            molecule=GenericFluor(; photons=5000.0, k_on=0.5, k_off=50.0), camera=cam_u)
+        agg_u = [Emitter2DFit{Float64}(3.2, 3.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                       σ_xy=0.0, track_id=i) for i in 1:100]
+        (h_u, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0]);
+            starting_conditions=agg_u,
+            molecule=GenericFluor(; photons=5000.0, k_on=5.0, k_off=50.0), camera=cam_u)
+        smld_u = BasicSMLD(vcat(s_u.emitters, h_u.emitters), cam_u, 300, 3, Dict{String,Any}())
+        model_u = DC.LegendrePolynomial(smld_u; degree=2)
+        DC._cc_primary_inter!(model_u, smld_u, 100; n_passes=2, init=true)
+        @test_broken hypot((model_u.inter[1].dm .- model_u.inter[2].dm)...) < 0.050
+    end
+
     # --- Test warm start ---
     @testset "Warm start" begin
         (smld1, info1) = DC.driftcorrect(smld_drift; quality=:singlepass)
