@@ -330,6 +330,40 @@ const DC = SMLMDriftCorrection
 
         (_, info_fft_hs) = DC.driftcorrect(smld_hs; quality = :fft)
         @test all(hypot(info_fft_hs.model.inter[d].dm...) < 0.03 for d in 1:4)
+
+        # A zero incumbent chosen as the refine seed must be refined from, not replaced
+        # by findinter!'s own (hot-spot-captured) CC: DS3 displaced by a true 20 nm.
+        smld_hs20 = deepcopy(smld_hs)
+        for e in smld_hs20.emitters
+            e.dataset == 3 && (e.x += 0.020)
+        end
+        model_hs20 = DC.LegendrePolynomial(smld_hs20; degree = 2)
+        DC._cc_primary_inter!(model_hs20, smld_hs20, 100; n_passes = 2, init = true)
+        @test isapprox(model_hs20.inter[3].dm[1], 0.020; atol = 0.006)
+    end
+
+    # -----------------------------------------------------------------------
+    # The overlap guard must tolerate the CC's 50 nm bin quantization: a CC
+    # shift ~35 nm from the truth (more than the 30 nm scoring radius) is
+    # accepted at its best sub-bin offset, not rejected or kept 35 nm off.
+    # -----------------------------------------------------------------------
+    @testset "Overlap guard tolerates CC bin quantization" begin
+        Random.seed!(11)
+        cam_q = IdealCamera(1:64, 1:64, 0.1)
+        (s_q, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0]);
+            pattern = Nmer2D(n = 1, d = 0.0),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+            camera = cam_q)
+        truth_q = [1.025, 1.025]
+        sd_q = deepcopy(s_q)
+        for e in sd_q.emitters
+            e.x += truth_q[1]
+            e.y += truth_q[2]
+        end
+        inter_q = [0.0, 0.0]
+        DC._accept_if_better_overlap!(inter_q, truth_q .+ 0.025, sd_q,
+                                      DC._coord_tree(s_q, 2), 2)
+        @test isapprox(inter_q, truth_q; atol = 0.010)
     end
 
     # -----------------------------------------------------------------------
