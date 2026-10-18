@@ -28,6 +28,9 @@ entropy-based cost function and adaptive KDTree neighbor building.
 - `σ_loc=0.010`: Typical localization precision (μm) for ROI sizing
 - `σ_target=0.001`: Target drift precision (μm) for ROI sizing
 - `roi_safety_factor=4.0`: Safety multiplier for required localizations
+- `shift_scale=1.0`: Has no effect: no dataset mode reads it (registered mode stopped using
+  it as an L2 inter-shift prior in 0.2.7). Kept so existing calls and configs still
+  construct; a non-default value logs a warning.
 
 # Quality Tiers
 - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
@@ -102,6 +105,13 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
     # Validate dataset_mode
     if dataset_mode ∉ (:registered, :continuous)
         error("Unknown dataset_mode: $dataset_mode. Use :registered or :continuous")
+    end
+
+    # shift_scale is accepted for compatibility but read by no mode (see docstring)
+    if shift_scale != 1.0
+        @warn("SMLMDriftCorrection: shift_scale=$shift_scale has no effect; no dataset mode " *
+              "reads it (registered mode stopped using it as an inter-shift prior in 0.2.7)",
+              maxlog=1)
     end
 
     # Handle chunking for continuous mode
@@ -274,6 +284,8 @@ FFT quality tier - fast cross-correlation only, no entropy optimization.
 Two-pass approach:
 1. First pass: align each dataset to dataset 1 (rough alignment)
 2. Second pass: align each dataset to all others (refinement)
+Each CC shift (and the pass-3 outlier re-alignment) replaces the incumbent only where
+it raises the dataset's overlap with the reference (`_accept_if_better_overlap!`).
 """
 function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                             dataset_mode::Symbol, verbose::Int)
@@ -288,17 +300,21 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
         return (iterations=0, converged=true, history=Float64[])
     end
 
+    # Every CC shift below is overlap-guarded (`_accept_if_better_overlap!`): the
+    # unnormalized histogram CC argmax can be captured by a hot spot present in some
+    # datasets only and land microns away, so a CC shift replaces the incumbent only
+    # where it puts more of the dataset near the reference (see `_cc_primary_inter!`).
+
     # Pass 1: Align each dataset to dataset 1 (rough alignment)
     # findshift(A, B) returns the shift of B relative to A
     # To correct B back to A's frame, correctdrift does: x - inter.dm
     # So inter.dm should equal the shift (positive)
     smld_ref = filter_by_dataset(smld, 1)
+    tree_ref = _coord_tree(smld_ref, n_dims)
     for nn = 2:n_datasets
         smld_n = filter_by_dataset(smld, nn)
         cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05)
-        for dim in 1:n_dims
-            model.inter[nn].dm[dim] = cc_shift[dim]
-        end
+        _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
     end
 
     if verbose > 0
@@ -336,9 +352,8 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
         )
 
         cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05)
-        for dim in 1:n_dims
-            model.inter[nn].dm[dim] = cc_shift[dim]
-        end
+        _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n,
+                                   _coord_tree(smld_merged, n_dims), n_dims)
     end
 
     if verbose > 0
@@ -376,9 +391,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                         histbinsize=0.05,
                         prior_shift=median_dm,
                         prior_sigma=prior_sigma)
-                    for dim in 1:n_dims
-                        model.inter[nn].dm[dim] = cc_shift[dim]
-                    end
+                    _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
                     if verbose > 0
                         new_mag = sqrt(sum(model.inter[nn].dm.^2)) * 1000
                         @info("SMLMDriftCorrection: DS$nn re-aligned: $(round(new_mag, digits=1)) nm")
@@ -427,7 +440,8 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
     # Step 2: Inter-dataset alignment — mode-specific.
     if dataset_mode == :registered
         # CC-primary: cross-correlation seeds each dataset (globally robust), entropy
-        # refines (locally precise), and the overlap arbiter keeps the better. Subsumes
+        # refines (locally precise), and the overlap arbiter keeps the best of
+        # {refined, CC, incumbent}. Subsumes
         # the old entropy-first pass1/pass2 + the post-hoc CC-rescue. Continuous keeps
         # endpoint-chaining below — CC-primary isn't built for temporal chunks whose
         # global consensus is smeared by across-chunk drift.
@@ -467,10 +481,11 @@ end
 const _ENTROPY_REL_TOL = 1.0e-4
 
 # Neighbor radius (μm) for the CC-primary overlap arbiter: per dataset, whichever of
-# {CC seed, entropy-refined shift} places a larger fraction of the dataset's
+# {entropy-refined, CC, incumbent} places the largest fraction of the dataset's
 # localizations within this distance of a consensus localization is kept. This makes
-# each inter step strictly ≥ CC quality even though the merged-cloud entropy is only
-# ~1/N sensitive to one dataset's offset and so cannot reveal a bad refine on its own.
+# each inter step never lower a dataset's consensus overlap even though the
+# merged-cloud entropy is only ~1/N sensitive to one dataset's offset and so cannot
+# reveal a wrong CC peak or a bad refine on its own.
 const _CC_VERIFY_RADIUS = 0.030
 
 """
@@ -814,6 +829,33 @@ function _overlap_score(sd::SMLD, inter::Vector{Float64}, tree, radius::Float64,
 end
 
 """
+KDTree over an SMLD's localization coordinates (Float64), for `_overlap_score`.
+"""
+function _coord_tree(sd::SMLD, n_dims::Int)
+    mat = if n_dims == 2
+        permutedims([Float64[e.x for e in sd.emitters] Float64[e.y for e in sd.emitters]])
+    else
+        permutedims([Float64[e.x for e in sd.emitters] Float64[e.y for e in sd.emitters] Float64[e.z for e in sd.emitters]])
+    end
+    return KDTree(mat; leafsize=10)
+end
+
+"""
+Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` only if
+`cand` puts a larger fraction of `sd`'s localizations within `_CC_VERIFY_RADIUS` of a
+reference localization (`tree`) than the incumbent `inter` does. Returns whether
+`cand` was accepted.
+"""
+function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree, n_dims::Int)
+    c = Float64.(cand[1:n_dims])
+    ov_cand = _overlap_score(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
+    ov_inc  = _overlap_score(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
+    ov_cand > ov_inc + 1e-9 || return false
+    inter .= c
+    return true
+end
+
+"""
 Return a copy of dataset `d` with ONLY its intra-drift removed (inter shift left in),
 so cross-correlation/overlap against the consensus recovers the total inter shift.
 """
@@ -834,16 +876,22 @@ CC-primary inter-dataset alignment (registered mode).
 Cross-correlation is the *primary* per-dataset objective (globally robust — it finds
 the right alignment basin even where the merged-cloud entropy is blind to a single
 dataset's offset), and entropy is the *refinement* (locally precise). For each
-dataset: seed from the cross-correlation shift to the corrected consensus of the
-others, entropy-refine from that seed (`findinter!`), then keep whichever of
-{CC seed, entropy-refined} has higher consensus overlap (`_overlap_score`). The
-overlap arbiter is required because the merged-cloud entropy is only ~1/N sensitive
-to one dataset, so the refine can drift toward a wrong local minimum without the
-entropy value revealing it; keeping the better-by-overlap candidate makes the step
-strictly ≥ CC quality. The reference (DS1) is included so a misaligned reference is
-fixable; the result is re-anchored to inter[1]=0 (an image-invariant global shift).
-`init=true` first does a rough cross-correlation init vs DS1 (cold start). Jacobi:
-each pass uses one corrected snapshot. Subsumes the old post-hoc CC-rescue.
+dataset: cross-correlate against the corrected consensus of the others, seed from
+whichever of {CC shift, incumbent shift} has higher consensus overlap
+(`_overlap_score`), entropy-refine from that seed (`findinter!`), then keep whichever
+of {entropy-refined, CC, incumbent} has the highest overlap. The overlap arbiter is
+required because the merged-cloud entropy is only ~1/N sensitive to one dataset, so
+neither a wrong CC peak nor a refine that drifted to a wrong local minimum shows up
+in the entropy value. The incumbent must be a candidate: the histogram CC argmax is
+unbounded and can be captured by a hot spot (a bright aggregate localized thousands
+of times in one bin, present in some datasets only), which puts the peak wherever
+the dataset's densest cluster lines up with the hot spot, microns away. Comparing
+against the incumbent makes each step never lower the dataset's consensus overlap.
+The reference (DS1) is included so a misaligned reference is fixable; the result is
+re-anchored to inter[1]=0 (an image-invariant global shift). `init=true` first does
+a rough cross-correlation init vs DS1 (cold start), accepted only where it overlaps
+DS1 better than the incumbent (zero for registered data). Jacobi: each pass uses one
+corrected snapshot. Subsumes the old post-hoc CC-rescue.
 """
 function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
                              n_passes::Int=2, init::Bool=false, verbose::Int=0)
@@ -851,13 +899,19 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
     n_datasets = smld.n_datasets
     n_datasets < 2 && return
 
-    # Cold start: rough CC alignment of each dataset to DS1.
+    # Cold start: rough CC alignment of each dataset to DS1, kept only if it beats the
+    # incumbent on DS1 overlap (a hot-spot-captured CC peak lands microns away).
     if init
         ds1 = _intra_only_corrected(smld, model, 1)
-        Threads.@threads for d in 2:n_datasets
-            sd = _intra_only_corrected(smld, model, d)
-            cc = try findshift(ds1, sd; histbinsize=0.05) catch; continue end
-            maximum(abs.(cc)) < 5.0 && (model.inter[d].dm .= Float64.(cc[1:n_dims]))
+        if !isempty(ds1.emitters)
+            tree1 = _coord_tree(ds1, n_dims)
+            Threads.@threads for d in 2:n_datasets
+                sd = _intra_only_corrected(smld, model, d)
+                isempty(sd.emitters) && continue
+                cc = try findshift(ds1, sd; histbinsize=0.05) catch; continue end
+                maximum(abs.(cc)) < 5.0 || continue
+                _accept_if_better_overlap!(model.inter[d].dm, cc, sd, tree1, n_dims)
+            end
         end
     end
 
@@ -870,26 +924,31 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             sd = _intra_only_corrected(smld, model, d)
             isempty(sd.emitters) && continue
 
-            cc = try findshift(ref, sd; histbinsize=0.05) catch; continue end
-            maximum(abs.(cc)) > 5.0 && continue       # reject absurd CC
+            tree = _coord_tree(ref, n_dims)
+            inc = copy(model.inter[d].dm)
+            ov_inc = _overlap_score(sd, inc, tree, _CC_VERIFY_RADIUS, n_dims)
 
-            refmat = if n_dims == 2
-                permutedims([Float64[e.x for e in ref.emitters] Float64[e.y for e in ref.emitters]])
-            else
-                permutedims([Float64[e.x for e in ref.emitters] Float64[e.y for e in ref.emitters] Float64[e.z for e in ref.emitters]])
-            end
-            tree = KDTree(refmat; leafsize=10)
-            ov_cc = _overlap_score(sd, Float64.(cc[1:n_dims]), tree, _CC_VERIFY_RADIUS, n_dims)
+            # CC candidate; a failed or absurd CC is simply not a candidate.
+            cc = try findshift(ref, sd; histbinsize=0.05) catch; nothing end
+            cc_v = (cc === nothing || maximum(abs.(cc)) > 5.0) ? nothing : Float64.(cc[1:n_dims])
+            ov_cc = cc_v === nothing ? -Inf : _overlap_score(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
 
-            # entropy-refine from the CC seed (no L2 reg: CC provides the anchor)
-            for k in 1:n_dims; model.inter[d].dm[k] = Float64(cc[k]); end
+            # entropy-refine from the better seed (no L2 reg: the seed is the anchor)
+            seed = ov_cc > ov_inc ? cc_v : inc
+            model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
                        precomputed_corrected = snap, regularization_lambda = 0.0)
             ov_ref = _overlap_score(sd, copy(model.inter[d].dm), tree, _CC_VERIFY_RADIUS, n_dims)
 
-            if ov_ref + 1e-9 < ov_cc                   # overlap arbiter: refine drifted → keep CC
-                for k in 1:n_dims; model.inter[d].dm[k] = Float64(cc[k]); end
+            # overlap arbiter over {refined, CC, incumbent}; ties keep the refined shift
+            best, ov_best = copy(model.inter[d].dm), ov_ref
+            if ov_cc > ov_best + 1e-9
+                best, ov_best = cc_v, ov_cc
             end
+            if ov_inc > ov_best + 1e-9
+                best, ov_best = inc, ov_inc
+            end
+            model.inter[d].dm .= best
         end
     end
 
@@ -1046,76 +1105,6 @@ function _estimate_continuous_lambda(model::LegendrePolynomial, n_frames::Int, v
     end
 
     return λ
-end
-
-"""
-Estimate regularization lambda for registered mode from the distribution of
-effective shifts at t=1 (inter + startpoint_drift) across datasets.
-
-After the first inter-dataset pass, outlier-robust spread of effective shifts
-gives the expected scale. Returns (λ, warmstart_values) for the second pass.
-"""
-function _estimate_registered_lambda(model::LegendrePolynomial, smld::SMLD, verbose::Int)
-    ndims = model.intra[1].ndims
-    n_datasets = model.ndatasets
-
-    # Effective shift at t=1 for each dataset: inter + startpoint_drift(intra)
-    effective_shifts = Vector{Vector{Float64}}(undef, n_datasets)
-    for nn in 1:n_datasets
-        sp = startpoint_drift(model.intra[nn])
-        effective_shifts[nn] = model.inter[nn].dm .+ sp
-    end
-
-    # Collect per-dimension values from datasets 2..N
-    all_vals = [Float64[effective_shifts[nn][d] for nn in 2:n_datasets] for d in 1:ndims]
-
-    # IQR-based outlier detection, per dimension
-    # Track which datasets are outliers in ANY dimension
-    is_outlier = falses(n_datasets)
-    σ_vals = Float64[]
-    median_shift = zeros(ndims)
-    for (d, vals) in enumerate(all_vals)
-        q1, q3 = quantile(vals, 0.25), quantile(vals, 0.75)
-        iqr = q3 - q1
-        mask = (vals .>= q1 - 1.5 * iqr) .& (vals .<= q3 + 1.5 * iqr)
-        clean = vals[mask]
-        median_shift[d] = median(vals[mask])
-        # Mark outlier datasets (offset by 1 since vals is for datasets 2..N)
-        for (i, v) in enumerate(vals)
-            if !mask[i]
-                is_outlier[i + 1] = true
-            end
-        end
-        if length(clean) >= 2
-            push!(σ_vals, std(clean))
-        else
-            push!(σ_vals, std(vals))
-        end
-    end
-
-    σ = max(mean(σ_vals), 0.010)  # floor at 10nm
-    λ = 1.0 / σ^2
-
-    n_outliers = count(is_outlier)
-    if verbose > 0
-        @info("SMLMDriftCorrection: registered regularization σ=$(round(σ*1000, digits=1))nm, λ=$(round(λ, digits=1)), outliers=$n_outliers/$(n_datasets-1)")
-    end
-
-    # Targets: first-pass values for non-outliers, median shift for outliers
-    # This pulls outlier datasets toward the population center in the second pass
-    warmstart_values = Vector{Vector{Float64}}(undef, n_datasets)
-    warmstart_values[1] = zeros(ndims)  # DS1 is reference
-    for nn in 2:n_datasets
-        if is_outlier[nn]
-            # Outlier: regularize toward median effective shift, converted back to inter-shift
-            sp = startpoint_drift(model.intra[nn])
-            warmstart_values[nn] = median_shift .- sp
-        else
-            warmstart_values[nn] = copy(model.inter[nn].dm)
-        end
-    end
-
-    return λ, warmstart_values
 end
 
 """

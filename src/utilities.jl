@@ -203,6 +203,11 @@ Extract drift trajectory from a drift model for plotting.
   Useful for registered acquisitions where you want to visualize what drift
   would look like without stage registration. Default: false.
 
+With `cumulative=false` each point is the *total* drift of its dataset at that frame,
+`inter[ds] + intra[ds](frame)`: the inter-dataset shift is included, so the extrema of
+`x`/`y` mix the inter shift with the intra-dataset drift. For the intra-dataset drift
+alone, subtract `model.inter[ds].dm` (or evaluate `model.intra[ds]`).
+
 # Returns
 NamedTuple with fields ready for plotting:
 - `frames`: frame numbers (global if multiple datasets)

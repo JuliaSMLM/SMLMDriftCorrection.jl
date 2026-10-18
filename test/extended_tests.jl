@@ -243,6 +243,43 @@ using Random
         @test all(abs(model2.inter[d].dm[k]) < 0.04 for d in 1:3, k in 1:2)
     end
 
+    # --- End-to-end registered driftcorrect vs a hot spot in early datasets ---
+    # 0.2.8 regression: a bright aggregate imaged only in DS1-2 captured the CC of
+    # the later datasets, which 0.2.8 accepted as micron inter shifts (real cohort
+    # cells came back 1.5-6 um off). Applies a known drift and checks that both
+    # registered tiers keep every dataset near the truth. The bound is loose on
+    # purpose: a dataset whose CC is captured by the hot spot falls back to its
+    # incumbent shift, and the entropy refine reaches only tens of nm, so DS6 (true
+    # inter ~100 nm) ends ~80-115 nm off (v0.2.5: ~118 nm; 0.2.8: 1.2-2.4 um).
+    @testset "Registered driftcorrect: hot spot in early datasets" begin
+        Random.seed!(2026)
+        cam_hs = IdealCamera(1:64, 1:64, 0.1)
+        fluor_hs = GenericFluor(; photons=5000.0, k_on=1.0, k_off=50.0)
+        (s_struct, _) = simulate(StaticSMLMConfig(5.0, 0.13, 50, 6, 500, 50.0, 2, [0.0, 1.0]);
+            pattern=Nmer2D(n=4, d=0.2), molecule=fluor_hs, camera=cam_hs)
+        agg = [Emitter2DFit{Float64}(3.2, 3.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                     σ_xy=0.0, track_id=i) for i in 1:300]
+        (s_hot, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 500, 50.0, 2, [0.0, 1.0]);
+            starting_conditions=agg, molecule=fluor_hs, camera=cam_hs)
+        smld_hs = BasicSMLD(vcat(s_struct.emitters, s_hot.emitters), cam_hs, 500, 6,
+                            Dict{String,Any}())
+        drift_hs = DC.LegendrePolynomial(smld_hs; degree=2, initialize="random", rscale=0.05)
+        drift_hs.inter[1].dm .= 0.0
+        smld_hs_drift = DC.applydrift(smld_hs, drift_hs)
+        x0 = [e.x for e in smld_hs.emitters]; y0 = [e.y for e in smld_hs.emitters]
+        for q in (:singlepass, :iterative)
+            (sc, info_hs) = DC.driftcorrect(smld_hs_drift; quality=q, degree=2)
+            # residual per dataset after removing the global (image-invariant) offset
+            dx = [e.x for e in sc.emitters] .- x0; dy = [e.y for e in sc.emitters] .- y0
+            dsv = [e.dataset for e in sc.emitters]
+            gx, gy = sum(dx) / length(dx), sum(dy) / length(dy)
+            ds_err = [hypot(sum(dx[dsv .== d]) / count(dsv .== d) - gx,
+                            sum(dy[dsv .== d]) / count(dsv .== d) - gy) for d in 1:6]
+            print("hot spot $q: per-dataset offset error (nm) = $(round.(1000 .* ds_err, digits=1))\n")
+            @test maximum(ds_err) < 0.150
+        end
+    end
+
     # --- Test warm start ---
     @testset "Warm start" begin
         (smld1, info1) = DC.driftcorrect(smld_drift; quality=:singlepass)

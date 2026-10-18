@@ -303,6 +303,36 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # Registered CC-primary inter and the :fft tier vs a hot spot (0.2.8
+    # regression). A bright aggregate (300 fluorophores at one site) is imaged
+    # only in DS1-2, so the unnormalized histogram CC of DS3-4 against DS1 is
+    # captured by it: the peak lands where each dataset's densest cluster
+    # overlays the hot spot, microns away. 0.2.8 accepted that peak in both
+    # paths (1.3-3.4 um across seeds); the overlap guard must keep the
+    # incumbent instead. All datasets are mutually aligned (truth: every inter
+    # shift is 0).
+    # -----------------------------------------------------------------------
+    @testset "Hot spot in early datasets: CC-primary inter + :fft (registered)" begin
+        Random.seed!(2026)
+        cam_hs = IdealCamera(1:64, 1:64, 0.1)                  # 6.4 μm FOV
+        fluor_hs = GenericFluor(; photons = 5000.0, k_on = 1.0, k_off = 50.0)
+        (s_struct, _) = simulate(StaticSMLMConfig(5.0, 0.13, 50, 4, 300, 50.0, 2, [0.0, 1.0]);
+            pattern = Nmer2D(n = 4, d = 0.2), molecule = fluor_hs, camera = cam_hs)
+        agg = [Emitter2DFit{Float64}(3.2, 3.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                     σ_xy = 0.0, track_id = i) for i in 1:300]
+        (s_hot, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 300, 50.0, 2, [0.0, 1.0]);
+            starting_conditions = agg, molecule = fluor_hs, camera = cam_hs)
+        smld_hs = BasicSMLD(vcat(s_struct.emitters, s_hot.emitters), cam_hs, 300, 4,
+                            Dict{String,Any}())
+        model_hs = DC.LegendrePolynomial(smld_hs; degree = 2)  # zeros: intra = 0, inter = 0
+        DC._cc_primary_inter!(model_hs, smld_hs, 100; n_passes = 2, init = true)
+        @test all(hypot(model_hs.inter[d].dm...) < 0.03 for d in 1:4)
+
+        (_, info_fft_hs) = DC.driftcorrect(smld_hs; quality = :fft)
+        @test all(hypot(info_fft_hs.model.inter[d].dm...) < 0.03 for d in 1:4)
+    end
+
+    # -----------------------------------------------------------------------
     # align_smld smoke — known shift recovery on small data.
     # -----------------------------------------------------------------------
     @testset "align_smld smoke" begin
