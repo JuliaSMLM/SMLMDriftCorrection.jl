@@ -421,6 +421,35 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # Zero-overlap tie: sparse isolated sites with near-noiseless localizations
+    # and a true shift near half a 50 nm bin. The CC is correct but ~35-40 nm
+    # off, so it and the far incumbent both score zero overlap within the 30 nm
+    # radius; the guard must give the tie to the CC (it kept the incumbent and
+    # ended 213 nm off). Built from SMLMSim with very high photon counts.
+    # -----------------------------------------------------------------------
+    @testset "Overlap guard: zero-overlap tie goes to the CC" begin
+        rng_t = MersenneTwister(3)
+        sites_t = [Tuple(0.05 .* rand(rng_t, 12:110, 3)) for _ in 1:15]
+        em_t = [Emitter3DFit{Float64}(p[1], p[2], p[3] - 2.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                      track_id = i) for (i, p) in enumerate(sites_t)]
+        Random.seed!(3)
+        (s_t, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 2, 300, 50.0, 3, [-1.0, 1.0]);
+            starting_conditions = em_t,
+            molecule = GenericFluor(; photons = 1.0e7, k_on = 0.4, k_off = 50.0),
+            camera = IdealCamera(1:64, 1:64, 0.1))
+        truth_t = fill(0.123, 3)
+        for e in s_t.emitters
+            if e.dataset == 2
+                e.x += truth_t[1]
+                e.y += truth_t[2]
+                e.z += truth_t[3]
+            end
+        end
+        (_, info_t) = DC.driftcorrect(s_t; quality = :fft)
+        @test sqrt(sum(abs2, info_t.model.inter[2].dm .- info_t.model.inter[1].dm .- truth_t)) < 0.050
+    end
+
+    # -----------------------------------------------------------------------
     # 3D cross-correlation on a thin stack (z range under 1 μm): the z ROI was
     # round(min z)..round(max z) of smld1 alone, so a stack within ±0.5 μm got a
     # zero-depth histogram and findshift threw (FFTW plan error), taking the
