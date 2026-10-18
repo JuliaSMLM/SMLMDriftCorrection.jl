@@ -85,6 +85,7 @@ arguments; all fields have sensible defaults.
 | `σ_loc` | `0.010` | Typical localization precision (μm) for ROI sizing |
 | `σ_target` | `0.001` | Target drift precision (μm) for ROI sizing |
 | `roi_safety_factor` | `4.0` | Safety multiplier for required localizations |
+| `shift_scale` | `1.0` | No effect: read by no dataset mode since 0.2.7 (kept for compatibility; a non-default value logs a warning) |
 
 # Example
 ```jldoctest
