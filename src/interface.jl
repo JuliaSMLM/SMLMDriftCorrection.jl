@@ -286,8 +286,8 @@ Two-pass approach:
 2. Second pass: align each dataset to all others (refinement)
 Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`), so a bright
 aggregate cannot capture the peak, and each CC shift (and the pass-3 outlier re-alignment)
-replaces the incumbent only where it raises the dataset's overlap with the reference
-(`_accept_if_better_overlap!`).
+replaces the incumbent unless the incumbent overlaps the reference strictly better
+(`_accept_if_better_overlap!`; ties go to the CC).
 """
 function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                             dataset_mode::Symbol, verbose::Int)
@@ -902,8 +902,8 @@ as scored. The refine starts from the chosen seed even when it is zero
 (`findinter!(...; cc_init=false)`).
 The reference (DS1) is included so a misaligned reference is fixable; the result is
 re-anchored to inter[1]=0 (an image-invariant global shift). `init=true` first does
-a rough cross-correlation init vs DS1 (cold start), accepted only where it overlaps
-DS1 better than the incumbent (zero for registered data). Jacobi: each pass uses one
+a rough cross-correlation init vs DS1 (cold start), accepted unless the incumbent
+(zero for registered data) overlaps DS1 strictly better. Jacobi: each pass uses one
 corrected snapshot. Subsumes the old post-hoc CC-rescue.
 """
 function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
@@ -912,8 +912,8 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
     n_datasets = smld.n_datasets
     n_datasets < 2 && return
 
-    # Cold start: rough CC alignment of each dataset to DS1, kept only if it beats the
-    # incumbent on DS1 overlap (a hot-spot-captured CC peak lands microns away).
+    # Cold start: rough CC alignment of each dataset to DS1, kept unless the incumbent
+    # overlaps DS1 strictly better (ties go to the CC).
     if init
         ds1 = _intra_only_corrected(smld, model, 1)
         if !isempty(ds1.emitters)
