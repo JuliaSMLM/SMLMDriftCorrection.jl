@@ -361,7 +361,7 @@ const DC = SMLMDriftCorrection
             e.y += truth_q[2]
         end
         inter_q = [0.0, 0.0]
-        DC._accept_if_better_overlap!(inter_q, truth_q .+ 0.025, sd_q,
+        DC._arbitrate_cc!(inter_q, truth_q .+ 0.025, sd_q,
                                       DC._coord_tree(s_q, 2), 2)
         @test isapprox(inter_q, truth_q; atol = 0.010)
 
@@ -388,6 +388,44 @@ const DC = SMLMDriftCorrection
             @test sqrt(sum(abs2, info_t.model.inter[2].dm .- info_t.model.inter[1].dm .-
                                  truth_t)) < 0.025
         end
+    end
+
+    # -----------------------------------------------------------------------
+    # The incumbent gets the same sub-bin search as the CC: here the truth is
+    # 35 nm from the zero incumbent (just past the 30 nm radius) and a hot spot
+    # only in the reference captures the CC onto the target's small aggregate.
+    # Searching only around the CC let the captured CC win (4.2 um registered,
+    # 35 nm :fft); HeLa E430G Cell_01 failed this way on real data (4.6 um).
+    # -----------------------------------------------------------------------
+    @testset "Overlap arbiter: incumbent just past the radius vs captured CC" begin
+        Random.seed!(1)
+        cam_r = IdealCamera(1:64, 1:64, 0.1)
+        fl_r = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0)
+        cfg_r = StaticSMLMConfig(8.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0])
+        (s_r, _) = simulate(cfg_r; pattern = Nmer2D(n = 1, d = 0.0), molecule = fl_r,
+                            camera = cam_r)
+        site(x, n) = [Emitter2DFit{Float64}(x, x, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                                            σ_xy = 0.0, track_id = i) for i in 1:n]
+        (small_r, _) = simulate(cfg_r; starting_conditions = site(1.2, 50), molecule = fl_r,
+                                camera = cam_r)
+        (hot_r, _) = simulate(cfg_r; starting_conditions = site(4.2, 300), molecule = fl_r,
+                              camera = cam_r)
+        structure_r = vcat(s_r.emitters, small_r.emitters)
+        truth_r = [0.025, 0.025]
+        target_r = deepcopy(structure_r)
+        for e in target_r
+            e.x += truth_r[1]
+            e.y += truth_r[2]
+            e.dataset = 2
+        end
+        smld_r = BasicSMLD(vcat(structure_r, hot_r.emitters, target_r), cam_r, 300, 2,
+                           Dict{String,Any}())
+        model_r = DC.LegendrePolynomial(smld_r; degree = 2)
+        DC._cc_primary_inter!(model_r, smld_r, 100; n_passes = 2, init = true)
+        @test isapprox(model_r.inter[2].dm .- model_r.inter[1].dm, truth_r; atol = 0.010)
+        (_, info_r) = DC.driftcorrect(smld_r; quality = :fft)
+        @test isapprox(info_r.model.inter[2].dm .- info_r.model.inter[1].dm, truth_r;
+                       atol = 0.010)
     end
 
     # -----------------------------------------------------------------------
