@@ -239,7 +239,8 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
     # Continue with iterative refinement
     iter_result = _driftcorrect_iterate!(model, smld_work, dataset_mode, maxn, max_iterations,
                                           convergence_tol, verbose,
-                                          info.iterations, copy(info.history))
+                                          info.iterations, copy(info.history);
+                                          warned=fill(false, smld_work.n_datasets))
 
     # Apply corrections
     smld_corrected = correctdrift(smld_work, model)
@@ -418,7 +419,8 @@ Matches original algorithm: intra first, then inter vs DS1, then inter vs earlie
 function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
                                     dataset_mode::Symbol, maxn::Int, verbose::Int,
                                     shift_scale::Float64=1.0;
-                                    skip_init::Bool=false)
+                                    skip_init::Bool=false,
+                                    warned::Union{Nothing,Vector{Bool}}=nothing)
     if verbose > 0
         @info("SMLMDriftCorrection: singlepass mode")
     end
@@ -450,7 +452,8 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         if verbose > 0
             @info("SMLMDriftCorrection: CC-primary inter-dataset alignment")
         end
-        _cc_primary_inter!(model, smld, maxn; n_passes=2, init=true, verbose=verbose)
+        _cc_primary_inter!(model, smld, maxn; n_passes=2, init=true, verbose=verbose,
+                           warned=warned)
     else  # :continuous
         # CC-seeded inter shifts: measure each chunk boundary by cross-correlation
         # (endpoint-chaining kept only as a per-boundary fallback), then entropy-refine
@@ -508,7 +511,10 @@ function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
     end
 
     # First run singlepass to initialize (preserves warm start when skip_init=true)
-    _driftcorrect_singlepass!(model, smld, dataset_mode, maxn, verbose, shift_scale; skip_init=skip_init)
+    # one stage-move warning per dataset across the singlepass init, iterations and retries
+    warned = fill(false, smld.n_datasets)
+    _driftcorrect_singlepass!(model, smld, dataset_mode, maxn, verbose, shift_scale;
+                              skip_init=skip_init, warned=warned)
 
     # Compute initial entropy
     smld_corrected = correctdrift(smld, model)
@@ -521,7 +527,7 @@ function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
 
     # Continue with iterative refinement
     result = _driftcorrect_iterate!(model, smld, dataset_mode, maxn, max_iterations - 1,
-                                     convergence_tol, verbose, 1, history, shift_scale)
+                                     convergence_tol, verbose, 1, history, shift_scale; warned=warned)
 
     # Automatic warm-start retry if not converged: the iterative loop can get
     # stuck in a local minimum where intra and inter fight each other. Restarting
@@ -536,7 +542,8 @@ function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
         end
         result = _driftcorrect_iterate!(model, smld, dataset_mode, maxn, max_iterations,
                                          convergence_tol, verbose,
-                                         result.iterations, copy(result.history), shift_scale)
+                                         result.iterations, copy(result.history), shift_scale;
+                                         warned=warned)
     end
 
     return result
@@ -549,7 +556,8 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
                                  dataset_mode::Symbol, maxn::Int, max_iterations::Int,
                                  convergence_tol::Float64, verbose::Int,
                                  starting_iteration::Int, history::Vector{Float64},
-                                 shift_scale::Float64=1.0)
+                                 shift_scale::Float64=1.0;
+                                 warned::Union{Nothing,Vector{Bool}}=nothing)
 
     n_datasets = smld.n_datasets
     n_dims = model.intra[1].ndims
@@ -707,7 +715,7 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
             # CC-primary, one Jacobi pass per iteration (the loop provides the iteration):
             # CC seed + entropy refine + overlap arbiter, reference included + re-anchored.
             _cc_primary_inter!(model, smld, maxn; n_passes=1, init=false,
-                               verbose = verbose > 1 ? verbose : 0)
+                               verbose = verbose > 1 ? verbose : 0, warned=warned)
         else  # :continuous
             # Endpoint-chained inter; do NOT re-chain from polynomial endpoints per
             # iteration (b463bd1) — refine continuously from the previous iteration;
@@ -935,7 +943,10 @@ histograms (`findshift(...; maxcount=_CC_MAXCOUNT)`), so the CC measures shared
 occupancy and an aggregate weighs like ordinary structure; the incumbent stays a
 candidate as a backstop, so each step never lowers the dataset's consensus overlap
 as scored. The refine starts from the chosen seed even when it is zero
-(`findinter!(...; cc_init=false)`).
+(`findinter!(...; cc_init=false)`). A CC with a component over 5 μm is not a candidate; if
+such a CC leads the shift a dataset ends with (`_overlap_leads`), one `@warn` names it
+(a stage that moved between acquisitions), once per dataset per `warned` (the iterative
+tier passes one vector across its iterations). The applied shift is not changed.
 The reference (DS1) is included so a misaligned reference is fixable; the result is
 re-anchored to inter[1]=0 (an image-invariant global shift). `init=true` first does
 a rough cross-correlation init vs DS1 (cold start), accepted unless the incumbent
@@ -943,10 +954,14 @@ a rough cross-correlation init vs DS1 (cold start), accepted unless the incumben
 corrected snapshot. Subsumes the old post-hoc CC-rescue.
 """
 function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
-                             n_passes::Int=2, init::Bool=false, verbose::Int=0)
+                             n_passes::Int=2, init::Bool=false, verbose::Int=0,
+                             warned::Union{Nothing,Vector{Bool}}=nothing)
     n_dims = nDims(smld)
     n_datasets = smld.n_datasets
     n_datasets < 2 && return
+    warned === nothing && (warned = fill(false, n_datasets))
+    # last CC shift dropped as absurd (> 5 μm) per dataset; checked against the final shift below
+    dropped = Vector{Union{Nothing,Vector{Float64}}}(nothing, n_datasets)
 
     # Cold start: rough CC alignment of each dataset to DS1, kept unless the incumbent
     # overlaps DS1 significantly better (ties and small leads go to the CC).
@@ -958,7 +973,10 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
                 sd = _intra_only_corrected(smld, model, d)
                 isempty(sd.emitters) && continue
                 cc = try findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT) catch; continue end
-                maximum(abs.(cc)) < 5.0 || continue
+                if maximum(abs.(cc)) >= 5.0
+                    dropped[d] = Float64.(cc[1:n_dims])
+                    continue
+                end
                 _accept_if_better_overlap!(model.inter[d].dm, cc, sd, tree1, n_dims)
             end
         end
@@ -980,6 +998,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             # CC candidate; a failed or absurd CC is simply not a candidate.
             cc = try findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT) catch; nothing end
             cc_v = (cc === nothing || maximum(abs.(cc)) > 5.0) ? nothing : Float64.(cc[1:n_dims])
+            cc !== nothing && cc_v === nothing && (dropped[d] = Float64.(cc[1:n_dims]))
             in_cc = cc_v === nothing ? nothing : _overlap_inliers(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # entropy-refine from the CC seed unless the incumbent leads it (no L2 reg:
@@ -1001,6 +1020,31 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
                 best, in_best = inc, in_inc
             end
             model.inter[d].dm .= best
+        end
+    end
+
+    # A CC over 5 μm is never applied; say so where it would have overlapped clearly better
+    # than the shift the dataset ends with (a stage that moved between acquisitions).
+    if any(!isnothing, dropped)
+        snap = correctdrift(smld, model)
+        for d in 1:n_datasets
+            (dropped[d] === nothing || warned[d]) && continue
+            ref = filter_by_dataset(snap, [x for x in 1:n_datasets if x != d])
+            isempty(ref.emitters) && continue
+            sd = _intra_only_corrected(smld, model, d)
+            isempty(sd.emitters) && continue
+            tree = _coord_tree(ref, n_dims)
+            in_cc = _overlap_inliers(sd, dropped[d], tree, _CC_VERIFY_RADIUS, n_dims)
+            in_kept = _overlap_inliers(sd, copy(model.inter[d].dm), tree, _CC_VERIFY_RADIUS, n_dims)
+            if _overlap_leads(in_cc, in_kept)
+                warned[d] = true
+                @warn("SMLMDriftCorrection: dataset $d: a cross-correlation shift of " *
+                      "$(round.(dropped[d], digits=2)) μm (over 5 μm, not applied) puts " *
+                      "$(round(100 * mean(in_cc), digits=1))% of its localizations within " *
+                      "$(round(1000 * _CC_VERIFY_RADIUS, digits=0)) nm of the other datasets, against " *
+                      "$(round(100 * mean(in_kept), digits=1))% at the kept shift; the dataset was " *
+                      "left at the kept shift (possible stage move; check the data)")
+            end
         end
     end
 

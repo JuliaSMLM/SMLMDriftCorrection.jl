@@ -16,6 +16,7 @@ using SMLMDriftCorrection
 using SMLMSim
 using Test
 using Random
+using Logging
 
 const DC = SMLMDriftCorrection
 
@@ -205,6 +206,29 @@ const DC = SMLMDriftCorrection
         @test !DC._overlap_leads(mk(0, 0, 50)...)      # identical flags
         @test !DC._overlap_leads(mk(30, 30, 50)...)    # symmetric
         @test !DC._overlap_leads(reverse(mk(100, 10, 50))...)  # the trailing side never leads
+    end
+
+    # -----------------------------------------------------------------------
+    # A CC over 5 um is never applied; when it would have overlapped clearly better
+    # than the kept shift (a stage that moved), driftcorrect warns once per dataset.
+    # -----------------------------------------------------------------------
+    @testset "stage-move warning" begin
+        Random.seed!(7)
+        (s_big, _) = simulate(StaticSMLMConfig(0.2, 0.13, 50, 3, 300, 50.0, 2, [0.0, 1.0]);
+            pattern  = Nmer2D(n = 1, d = 0.0),
+            molecule = GenericFluor(; photons = 2.0e4, k_on = 1.0, k_off = 50.0),
+            camera   = IdealCamera(1:200, 1:200, 0.1))
+        moved = deepcopy(s_big)
+        for e in moved.emitters
+            e.dataset == 3 && (e.x += 10.0)
+        end
+        @test_logs (:warn, r"dataset 3: .*possible stage move") match_mode = :any DC.driftcorrect(
+            moved; quality = :singlepass, degree = 1)
+        # ordinary small inter shift: nothing to warn about
+        for e in s_big.emitters
+            e.dataset == 3 && (e.x += 0.1)
+        end
+        @test_logs min_level = Logging.Warn DC.driftcorrect(s_big; quality = :singlepass, degree = 1)
     end
 
     # -----------------------------------------------------------------------
