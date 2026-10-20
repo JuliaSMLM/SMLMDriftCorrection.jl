@@ -302,7 +302,7 @@ using Random
         @test hypot((model_u.inter[1].dm .- model_u.inter[2].dm)...) < 0.050
     end
 
-    # --- Known limit (0.2.9): :fft on a precise sparse cloud with a faint replica ---
+    # --- Known limit (0.2.9, closed in 0.2.10): :fft on a precise sparse cloud with a faint replica ---
     # Reference = SMLMSim sites (~5 nm precision) plus a one-localization-per-site
     # replica 25 nm short of the target position; target = the same sites shifted by
     # truth. The 2D sub-pixel fit (gaussian_subpixel_2d) can move the CC peak ~1 bin
@@ -329,7 +329,7 @@ using Random
         for e in tgt_p; e.x += truth_p[1]; e.y += truth_p[2]; end
         smld_p = BasicSMLD(vcat(ref_p, rep_p, tgt_p), cam_p, 300, 2, Dict{String,Any}())
         (_, info_p) = DC.driftcorrect(smld_p; quality=:fft)
-        @test_broken sqrt(sum(abs2, info_p.model.inter[2].dm .- info_p.model.inter[1].dm .- truth_p)) < 0.025
+        @test sqrt(sum(abs2, info_p.model.inter[2].dm .- info_p.model.inter[1].dm .- truth_p)) < 0.025
         model_p = DC.LegendrePolynomial(smld_p; degree=2)
         DC._cc_primary_inter!(model_p, smld_p, 100; n_passes=2, init=true)
         @test sqrt(sum(abs2, model_p.inter[2].dm .- model_p.inter[1].dm .- truth_p)) < 0.050

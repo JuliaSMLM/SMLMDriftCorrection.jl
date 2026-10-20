@@ -166,6 +166,34 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # findshift sub-bin refinement — two SMLMSim datasets of the same sites,
+    # DS2 shifted by known sub-bin amounts (a 5×5 grid of bin phases). The
+    # integer CC peak is within half a bin (25 nm) per axis, so the refinement
+    # must land well inside that; a 7×7 log-quadratic fit was pulled up to
+    # 3 bins off by pair counts around the peak.
+    # -----------------------------------------------------------------------
+    @testset "findshift sub-bin accuracy" begin
+        Random.seed!(3)
+        (smld_pair, _) = simulate(
+            StaticSMLMConfig(5.0, 0.13, 30, 2, 300, 50.0, 2, [0.0, 1.0]);
+            pattern  = Nmer2D(n = 1, d = 0.0),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 1.0, k_off = 50.0),
+            camera   = IdealCamera(1:64, 1:64, 0.1))
+        ref = DC.filter_by_dataset(smld_pair, 1)
+        tgt0 = DC.filter_by_dataset(smld_pair, 2)
+        err = Float64[]
+        for fx in 0:0.2:0.8, fy in 0:0.2:0.8
+            truth = [0.3 + 0.05 * fx, 0.4 + 0.05 * fy]
+            tgt = deepcopy(tgt0)
+            for e in tgt.emitters
+                e.x += truth[1]; e.y += truth[2]
+            end
+            push!(err, maximum(abs.(DC.findshift(ref, tgt; histbinsize = 0.05) .- truth)))
+        end
+        @test maximum(err) < 0.015
+    end
+
+    # -----------------------------------------------------------------------
     # position_frame_correlation deterministic unit
     #
     # Build a tiny SMLD with a KNOWN frame-correlated x-offset (linear in
