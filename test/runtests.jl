@@ -194,6 +194,20 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # Overlap decisions need a significant lead: McNemar's z on the discordant
+    # localizations (inlier under one shift only) must exceed _OVERLAP_Z.
+    # -----------------------------------------------------------------------
+    @testset "overlap leads (McNemar)" begin
+        mk(nb, nc, nboth) = (BitVector(vcat(trues(nb), falses(nc), trues(nboth))),
+                             BitVector(vcat(falses(nb), trues(nc), trues(nboth))))
+        @test !DC._overlap_leads(mk(3, 0, 50)...)      # a 3-localization lead is noise
+        @test DC._overlap_leads(mk(100, 10, 50)...)
+        @test !DC._overlap_leads(mk(0, 0, 50)...)      # identical flags
+        @test !DC._overlap_leads(mk(30, 30, 50)...)    # symmetric
+        @test !DC._overlap_leads(reverse(mk(100, 10, 50))...)  # the trailing side never leads
+    end
+
+    # -----------------------------------------------------------------------
     # position_frame_correlation deterministic unit
     #
     # Build a tiny SMLD with a KNOWN frame-correlated x-offset (linear in
