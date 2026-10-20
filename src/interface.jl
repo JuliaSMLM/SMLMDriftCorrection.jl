@@ -287,8 +287,9 @@ Two-pass approach:
 2. Second pass: align each dataset to all others (refinement)
 Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`), so a bright
 aggregate cannot capture the peak, and each CC shift (and the pass-3 outlier re-alignment)
-replaces the incumbent unless the incumbent overlaps the reference significantly better
-(`_accept_if_better_overlap!`; ties and small leads go to the CC).
+replaces the incumbent unless the incumbent beats it in overlap with the reference
+(`_accept_if_better_overlap!`; `_overlap_beats`: ties and small leads between nearby
+shifts go to the CC). This tier has no 5 μm cut on a CC shift.
 """
 function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                             dataset_mode::Symbol, verbose::Int)
@@ -878,6 +879,18 @@ function _overlap_leads(a::BitVector, b::BitVector)
 end
 
 """
+Whether shift `sa` (inlier flags `a`) beats shift `sb` (flags `b`). Between nearby shifts
+(closer than `_CC_VERIFY_RADIUS`) the difference is a precision question and needs a
+significant lead (`_overlap_leads`). Between distant shifts it is a basin question: the
+discordant localizations are not noise, and a plain larger inlier count decides, so a
+correct basin holding fewer localizations than the wrong one is not vetoed by a margin.
+"""
+function _overlap_beats(a::BitVector, sa, b::BitVector, sb)
+    sqrt(sum(abs2, sa .- sb)) < _CC_VERIFY_RADIUS && return _overlap_leads(a, b)
+    return count(a) > count(b)
+end
+
+"""
 KDTree over an SMLD's localization coordinates (Float64), for `_overlap_score`.
 """
 function _coord_tree(sd::SMLD, n_dims::Int)
@@ -891,7 +904,7 @@ end
 
 """
 Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` unless the
-incumbent `inter` leads it significantly (`_overlap_leads`) in the localizations within
+incumbent `inter` beats it (`_overlap_beats`) in the localizations within
 `_CC_VERIFY_RADIUS` of a reference localization (`tree`). Otherwise the CC is used: with
 the CC computed on capped histograms, a tie or a lead of a few localizations (typically
 a correct but bin-quantized CC landing just past the radius on sparse precise data)
@@ -901,7 +914,7 @@ function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree
     c = Float64.(cand[1:n_dims])
     in_cand = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
     in_inc  = _overlap_inliers(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
-    _overlap_leads(in_inc, in_cand) && return false   # reject only on a significant lead
+    _overlap_beats(in_inc, inter, in_cand, c) && return false   # reject only on a clear lead
     inter .= c
     return true
 end
@@ -922,17 +935,59 @@ function _intra_only_corrected(smld::SMLD, model::LegendrePolynomial, d::Int)
 end
 
 """
+Warn, once per dataset (`warned`), where a CC shift dropped for exceeding 5 μm
+(`dropped[d]`, else `nothing`) would have overlapped clearly better (`_overlap_leads`) than
+the shift the dataset ends with: a stage that moved between acquisitions. The dropped CC
+was measured against an earlier consensus (DS1 for the cold start), so a fresh CC against
+the final consensus is scored as well. The applied shift is not changed.
+"""
+function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
+                           dropped::Vector{Union{Nothing,Vector{Float64}}}, warned::Vector{Bool})
+    n_dims = nDims(smld)
+    n_datasets = smld.n_datasets
+    any(!isnothing, dropped) || return
+    snap = correctdrift(smld, model)
+    for d in 1:n_datasets
+        (dropped[d] === nothing || warned[d]) && continue
+        ref = filter_by_dataset(snap, [x for x in 1:n_datasets if x != d])
+        isempty(ref.emitters) && continue
+        sd = _intra_only_corrected(smld, model, d)
+        isempty(sd.emitters) && continue
+        tree = _coord_tree(ref, n_dims)
+        kept = copy(model.inter[d].dm)
+        in_kept = _overlap_inliers(sd, kept, tree, _CC_VERIFY_RADIUS, n_dims)
+        cands = [dropped[d]]
+        fresh = try findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT) catch; nothing end
+        fresh !== nothing && maximum(abs.(fresh)) > 5.0 && push!(cands, Float64.(fresh[1:n_dims]))
+        for c in cands
+            in_c = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
+            _overlap_leads(in_c, in_kept) || continue
+            warned[d] = true
+            @warn("SMLMDriftCorrection: dataset $d: a cross-correlation shift of " *
+                  "$(round.(c, digits=2)) μm (over 5 μm, not applied) puts " *
+                  "$(round(100 * mean(in_c), digits=1))% of its localizations within " *
+                  "$(round(1000 * _CC_VERIFY_RADIUS, digits=0)) nm of the other datasets, against " *
+                  "$(round(100 * mean(in_kept), digits=1))% at the kept shift; the dataset was " *
+                  "left at the kept shift (possible stage move; check the data)")
+            break
+        end
+    end
+    return
+end
+
+"""
 CC-primary inter-dataset alignment (registered mode).
 
 Cross-correlation is the *primary* per-dataset objective (globally robust — it finds
 the right alignment basin even where the merged-cloud entropy is blind to a single
 dataset's offset), and entropy is the *refinement* (locally precise). For each
 dataset: cross-correlate against the corrected consensus of the others, seed from
-the CC shift unless the incumbent shift leads it in consensus overlap
-(`_overlap_leads`), entropy-refine from that seed (`findinter!`), then keep the refined
-shift unless the CC leads it, and then the incumbent unless it leads that. A lead is
-significant when McNemar's z on the localizations inlier under one shift only exceeds
-`_OVERLAP_Z` (a few localizations decide nothing on sparse data). The overlap arbiter is
+the CC shift unless the incumbent shift beats it in consensus overlap
+(`_overlap_beats`), entropy-refine from that seed (`findinter!`), then keep the refined
+shift unless the CC beats it, and then the incumbent unless it beats that. Between shifts
+closer than `_CC_VERIFY_RADIUS` a win must be significant (McNemar's z on the localizations
+inlier under one shift only exceeds `_OVERLAP_Z`, so a few localizations decide nothing on
+sparse data); between distant shifts (different basins) the larger inlier count wins. The overlap arbiter is
 required because the merged-cloud entropy is only ~1/N sensitive to one dataset, so
 neither a wrong CC peak nor a refine that drifted to a wrong local minimum shows up
 in the entropy value. A raw-count histogram CC can be captured by a hot spot (a
@@ -943,14 +998,14 @@ histograms (`findshift(...; maxcount=_CC_MAXCOUNT)`), so the CC measures shared
 occupancy and an aggregate weighs like ordinary structure; the incumbent stays a
 candidate as a backstop, so each step never lowers the dataset's consensus overlap
 as scored. The refine starts from the chosen seed even when it is zero
-(`findinter!(...; cc_init=false)`). A CC with a component over 5 μm is not a candidate; if
-such a CC leads the shift a dataset ends with (`_overlap_leads`), one `@warn` names it
+(`findinter!(...; cc_init=false)`). In this registered CC-primary path (not `:fft`), a CC with a
+component over 5 μm is not a candidate; if such a CC leads the shift a dataset ends with (`_overlap_leads`), one `@warn` names it
 (a stage that moved between acquisitions), once per dataset per `warned` (the iterative
 tier passes one vector across its iterations). The applied shift is not changed.
 The reference (DS1) is included so a misaligned reference is fixable; the result is
 re-anchored to inter[1]=0 (an image-invariant global shift). `init=true` first does
 a rough cross-correlation init vs DS1 (cold start), accepted unless the incumbent
-(zero for registered data) overlaps DS1 significantly better. Jacobi: each pass uses one
+(zero for registered data) beats it in overlap with DS1 (`_overlap_beats`). Jacobi: each pass uses one
 corrected snapshot. Subsumes the old post-hoc CC-rescue.
 """
 function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
@@ -964,7 +1019,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
     dropped = Vector{Union{Nothing,Vector{Float64}}}(nothing, n_datasets)
 
     # Cold start: rough CC alignment of each dataset to DS1, kept unless the incumbent
-    # overlaps DS1 significantly better (ties and small leads go to the CC).
+    # beats it in overlap with DS1 (ties and small leads between nearby shifts go to the CC).
     if init
         ds1 = _intra_only_corrected(smld, model, 1)
         if !isempty(ds1.emitters)
@@ -1003,7 +1058,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
 
             # entropy-refine from the CC seed unless the incumbent leads it (no L2 reg:
             # the seed is the anchor)
-            seed = (cc_v === nothing || _overlap_leads(in_inc, in_cc)) ? inc : cc_v
+            seed = (cc_v === nothing || _overlap_beats(in_inc, inc, in_cc, cc_v)) ? inc : cc_v
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
                        precomputed_corrected = snap, regularization_lambda = 0.0,
@@ -1013,40 +1068,17 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
 
             # overlap arbiter: the refined shift stands unless the CC leads it, then the
             # incumbent unless it leads the current best
-            if in_cc !== nothing && _overlap_leads(in_cc, in_best)
+            if in_cc !== nothing && _overlap_beats(in_cc, cc_v, in_best, best)
                 best, in_best = cc_v, in_cc
             end
-            if _overlap_leads(in_inc, in_best)
+            if _overlap_beats(in_inc, inc, in_best, best)
                 best, in_best = inc, in_inc
             end
             model.inter[d].dm .= best
         end
     end
 
-    # A CC over 5 μm is never applied; say so where it would have overlapped clearly better
-    # than the shift the dataset ends with (a stage that moved between acquisitions).
-    if any(!isnothing, dropped)
-        snap = correctdrift(smld, model)
-        for d in 1:n_datasets
-            (dropped[d] === nothing || warned[d]) && continue
-            ref = filter_by_dataset(snap, [x for x in 1:n_datasets if x != d])
-            isempty(ref.emitters) && continue
-            sd = _intra_only_corrected(smld, model, d)
-            isempty(sd.emitters) && continue
-            tree = _coord_tree(ref, n_dims)
-            in_cc = _overlap_inliers(sd, dropped[d], tree, _CC_VERIFY_RADIUS, n_dims)
-            in_kept = _overlap_inliers(sd, copy(model.inter[d].dm), tree, _CC_VERIFY_RADIUS, n_dims)
-            if _overlap_leads(in_cc, in_kept)
-                warned[d] = true
-                @warn("SMLMDriftCorrection: dataset $d: a cross-correlation shift of " *
-                      "$(round.(dropped[d], digits=2)) μm (over 5 μm, not applied) puts " *
-                      "$(round(100 * mean(in_cc), digits=1))% of its localizations within " *
-                      "$(round(1000 * _CC_VERIFY_RADIUS, digits=0)) nm of the other datasets, against " *
-                      "$(round(100 * mean(in_kept), digits=1))% at the kept shift; the dataset was " *
-                      "left at the kept shift (possible stage move; check the data)")
-            end
-        end
-    end
+    _warn_dropped_cc!(model, smld, dropped, warned)
 
     # Re-anchor to inter[1]=0 (global frame shift, image-invariant) if the reference moved.
     if any(abs.(model.inter[1].dm) .> 1e-12)

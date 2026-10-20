@@ -105,10 +105,14 @@ end
 Sub-bin offset of a peak from its integer maximum `f0`, given the neighbours at -1 (`fm`)
 and +1 (`fp`): the vertex of the Gaussian through the three samples. Lies in [-1/2, 1/2], so
 the estimate stays in the maximum's bin, where a noiseless unimodal peak has its maximum. A
-neighbour <= 0 means a peak narrower than one bin (the bin-sampled triangle), for which the
+neighbour <= 1e-6 * `f0` (zero up to FFT roundoff) means a peak narrower than one bin (the bin-sampled triangle), for which the
 3-point centroid is exact.
 """
 function peak_offset_3pt(fm::Real, f0::Real, fp::Real)
+    f0 > 0 || return 0.0
+    # FFT roundoff leaves a mathematically zero neighbour at ~1e-16 of the peak
+    fm <= 1e-6 * f0 && (fm = 0)
+    fp <= 1e-6 * f0 && (fp = 0)
     if fm > 0 && fp > 0
         lm, l0, lp = log(fm), log(f0), log(fp)
         den = lm - 2 * l0 + lp

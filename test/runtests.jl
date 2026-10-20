@@ -209,6 +209,48 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # Cross-basin decisions use the plain inlier count, not the significance margin:
+    # a reference with 50 matching sites plus 4 copies of 30 others displaced by
+    # (3, 3) um. The capped CC proposes the wrong basin, which holds fewer of the
+    # target's localizations (30 vs ~46 of 80), but z = 20/sqrt(80) < 3.
+    # -----------------------------------------------------------------------
+    @testset "cross-basin overlap decision" begin
+        Random.seed!(3)
+        cam = IdealCamera(1:64, 1:64, 0.1)
+        (s, _) = simulate(StaticSMLMConfig(2.5, 0.13, 50, 2, 300, 50.0, 2, [0.0, 1.0]);
+            pattern  = Nmer2D(n = 1, d = 0.0),
+            molecule = GenericFluor(; photons = 5.0e4, k_on = 1.0, k_off = 50.0), camera = cam)
+        sites = sort(collect(intersect((Set(e.track_id for e in s.emitters if e.dataset == d)
+                                        for d in 1:2)...)))[1:80]
+        in_ds(d, tid) = [e for e in s.emitters if e.dataset == d && e.track_id == tid]
+        ref = [first(in_ds(1, tid)) for tid in sites[1:50]]
+        for tid in sites[51:80], e in in_ds(1, tid)[1:min(4, end)]
+            r = deepcopy(e); r.x += 3.0; r.y += 3.0
+            push!(ref, r)
+        end
+        tgt = [deepcopy(first(in_ds(2, tid))) for tid in sites]
+        smld = BasicSMLD(vcat(ref, tgt), cam, 300, 2, Dict{String,Any}())
+        (_, info) = DC.driftcorrect(smld; quality = :fft)
+        @test hypot((info.model.inter[2].dm .- info.model.inter[1].dm)...) < 0.050
+        # the guard behind it: the zero incumbent must veto the (-3, -3) candidate
+        sd2 = DC.filter_by_dataset(smld, 2)
+        tree1 = DC._coord_tree(DC.filter_by_dataset(smld, 1), 2)
+        inter = [0.0, 0.0]
+        @test !DC._accept_if_better_overlap!(inter, [-3.0, -3.0], sd2, tree1, 2)
+        @test inter == [0.0, 0.0]
+    end
+
+    # -----------------------------------------------------------------------
+    # peak_offset_3pt: a zero neighbour is zero up to FFT roundoff (~1e-16 of the peak).
+    # -----------------------------------------------------------------------
+    @testset "peak_offset_3pt roundoff neighbour" begin
+        @test DC.peak_offset_3pt(10.0, 90.0, 3.79e-16) == DC.peak_offset_3pt(10.0, 90.0, 0.0)
+        @test DC.peak_offset_3pt(3.79e-16, 90.0, 10.0) == DC.peak_offset_3pt(0.0, 90.0, 10.0)
+        @test DC.peak_offset_3pt(1.0, 0.0, 1.0) == 0.0
+        @test isapprox(DC.peak_offset_3pt(10.0, 90.0, 0.0), -0.1; atol = 1e-12)
+    end
+
+    # -----------------------------------------------------------------------
     # A CC over 5 um is never applied; when it would have overlapped clearly better
     # than the kept shift (a stage that moved), driftcorrect warns once per dataset.
     # -----------------------------------------------------------------------
@@ -229,6 +271,46 @@ const DC = SMLMDriftCorrection
             e.dataset == 3 && (e.x += 0.1)
         end
         @test_logs min_level = Logging.Warn DC.driftcorrect(s_big; quality = :singlepass, degree = 1)
+    end
+
+    @testset "stage-move warning, once per dataset (:iterative)" begin
+        Random.seed!(7)
+        (s_big, _) = simulate(StaticSMLMConfig(0.2, 0.13, 50, 3, 300, 50.0, 2, [0.0, 1.0]);
+            pattern  = Nmer2D(n = 1, d = 0.0),
+            molecule = GenericFluor(; photons = 2.0e4, k_on = 1.0, k_off = 50.0),
+            camera   = IdealCamera(1:200, 1:200, 0.1))
+        for e in s_big.emitters
+            e.dataset == 3 && (e.x += 10.0)
+        end
+        (logs, res) = Test.collect_test_logs(; min_level = Logging.Warn) do
+            DC.driftcorrect(s_big; quality = :iterative, degree = 1, max_iterations = 3)
+        end
+        moves = filter(l -> occursin("possible stage move", l.message), logs)
+        @test length(moves) == 1
+        @test occursin("dataset 3:", moves[1].message)
+        # the 10 um CC was reported, not applied
+        @test maximum(abs.(res[2].model.inter[3].dm .- res[2].model.inter[1].dm)) < 5.0
+    end
+
+    # The dropped CC was measured against an earlier consensus; the check also scores a
+    # fresh CC against the final one. A stale cached shift that overlaps nothing must not
+    # hide a displaced dataset.
+    @testset "stage-move warning scores a fresh CC" begin
+        Random.seed!(7)
+        (s_big, _) = simulate(StaticSMLMConfig(0.2, 0.13, 50, 3, 300, 50.0, 2, [0.0, 1.0]);
+            pattern  = Nmer2D(n = 1, d = 0.0),
+            molecule = GenericFluor(; photons = 2.0e4, k_on = 1.0, k_off = 50.0),
+            camera   = IdealCamera(1:200, 1:200, 0.1))
+        for e in s_big.emitters
+            e.dataset == 3 && (e.x += 10.0)
+        end
+        model = DC.LegendrePolynomial(s_big; degree = 0)
+        dropped = Vector{Union{Nothing,Vector{Float64}}}(nothing, 3)
+        dropped[3] = [0.0, 7.0]    # stale: overlaps nothing at the final consensus
+        warned = fill(false, 3)
+        @test_logs (:warn, r"dataset 3: .*possible stage move") match_mode = :any DC._warn_dropped_cc!(
+            model, s_big, dropped, warned)
+        @test warned == [false, false, true]
     end
 
     # -----------------------------------------------------------------------
