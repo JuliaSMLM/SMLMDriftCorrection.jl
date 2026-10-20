@@ -287,9 +287,8 @@ Two-pass approach:
 2. Second pass: align each dataset to all others (refinement)
 Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`), so a bright
 aggregate cannot capture the peak, and each CC shift (and the pass-3 outlier re-alignment)
-replaces the incumbent unless the incumbent beats it in overlap with the reference
-(`_accept_if_better_overlap!`; `_overlap_beats`: ties and small leads between nearby
-shifts go to the CC). This tier has no 5 μm cut on a CC shift.
+replaces the incumbent unless the incumbent overlaps the reference strictly better
+(`_accept_if_better_overlap!`; ties go to the CC). This tier has no 5 μm cut on a CC shift.
 """
 function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                             dataset_mode::Symbol, verbose::Int)
@@ -879,15 +878,25 @@ function _overlap_leads(a::BitVector, b::BitVector)
 end
 
 """
-Whether shift `sa` (inlier flags `a`) beats shift `sb` (flags `b`). Between nearby shifts
-(closer than `_CC_VERIFY_RADIUS`) the difference is a precision question and needs a
-significant lead (`_overlap_leads`). Between distant shifts it is a basin question: the
-discordant localizations are not noise, and a plain larger inlier count decides, so a
-correct basin holding fewer localizations than the wrong one is not vetoed by a margin.
+Overlap arbiter over {refined, CC, incumbent} (`cc` and `in_cc` may be `nothing`): the
+candidate with the largest inlier count wins, ties keeping refined, then CC, then the
+incumbent. If the winner is not the refined shift, lies within `_CC_VERIFY_RADIUS` of it
+(a hard threshold) and does not lead it by McNemar (`_overlap_leads`), the refined shift
+is kept: between nearby shifts a few localizations are noise, and the refine is the more
+precise estimate. Between distant shifts (different basins) the larger count decides.
 """
-function _overlap_beats(a::BitVector, sa, b::BitVector, sb)
-    sqrt(sum(abs2, sa .- sb)) < _CC_VERIFY_RADIUS && return _overlap_leads(a, b)
-    return count(a) > count(b)
+function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVector)
+    win, in_win = refined, in_ref
+    if cc !== nothing && count(in_cc) > count(in_win)
+        win, in_win = cc, in_cc
+    end
+    if count(in_inc) > count(in_win)
+        win, in_win = inc, in_inc
+    end
+    win === refined && return refined
+    sqrt(sum(abs2, win .- refined)) < _CC_VERIFY_RADIUS && !_overlap_leads(in_win, in_ref) &&
+        return refined
+    return win
 end
 
 """
@@ -904,17 +913,17 @@ end
 
 """
 Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` unless the
-incumbent `inter` beats it (`_overlap_beats`) in the localizations within
-`_CC_VERIFY_RADIUS` of a reference localization (`tree`). Otherwise the CC is used: with
-the CC computed on capped histograms, a tie or a lead of a few localizations (typically
-a correct but bin-quantized CC landing just past the radius on sparse precise data)
-carries no evidence for the incumbent. Returns whether `cand` was accepted.
+incumbent `inter` puts a strictly larger fraction of `sd`'s localizations within
+`_CC_VERIFY_RADIUS` of a reference localization (`tree`). Ties go to the CC: with the
+CC computed on capped histograms, a tie (typically both zero, when a correct but
+bin-quantized CC lands just past the radius on sparse precise data) carries no
+evidence for the incumbent. Returns whether `cand` was accepted.
 """
 function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree, n_dims::Int)
     c = Float64.(cand[1:n_dims])
     in_cand = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
     in_inc  = _overlap_inliers(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
-    _overlap_beats(in_inc, inter, in_cand, c) && return false   # reject only on a clear lead
+    count(in_inc) > count(in_cand) && return false   # reject only on evidence: ties go to the CC
     inter .= c
     return true
 end
@@ -982,12 +991,12 @@ Cross-correlation is the *primary* per-dataset objective (globally robust — it
 the right alignment basin even where the merged-cloud entropy is blind to a single
 dataset's offset), and entropy is the *refinement* (locally precise). For each
 dataset: cross-correlate against the corrected consensus of the others, seed from
-the CC shift unless the incumbent shift beats it in consensus overlap
-(`_overlap_beats`), entropy-refine from that seed (`findinter!`), then keep the refined
-shift unless the CC beats it, and then the incumbent unless it beats that. Between shifts
-closer than `_CC_VERIFY_RADIUS` a win must be significant (McNemar's z on the localizations
-inlier under one shift only exceeds `_OVERLAP_Z`, so a few localizations decide nothing on
-sparse data); between distant shifts (different basins) the larger inlier count wins. The overlap arbiter is
+the CC shift unless the incumbent shift overlaps strictly better,
+entropy-refine from that seed (`findinter!`), then arbitrate {refined, CC, incumbent}
+(`_arbitrate`): the largest inlier count wins, except that a winner within
+`_CC_VERIFY_RADIUS` of the refined shift must lead it significantly (McNemar's z on the
+localizations inlier under one shift only exceeds `_OVERLAP_Z`) or the refined shift is
+kept, so a few localizations decide nothing on sparse data. The overlap arbiter is
 required because the merged-cloud entropy is only ~1/N sensitive to one dataset, so
 neither a wrong CC peak nor a refine that drifted to a wrong local minimum shows up
 in the entropy value. A raw-count histogram CC can be captured by a hot spot (a
@@ -1005,7 +1014,7 @@ tier passes one vector across its iterations). The applied shift is not changed.
 The reference (DS1) is included so a misaligned reference is fixable; the result is
 re-anchored to inter[1]=0 (an image-invariant global shift). `init=true` first does
 a rough cross-correlation init vs DS1 (cold start), accepted unless the incumbent
-(zero for registered data) beats it in overlap with DS1 (`_overlap_beats`). Jacobi: each pass uses one
+(zero for registered data) overlaps DS1 strictly better. Jacobi: each pass uses one
 corrected snapshot. Subsumes the old post-hoc CC-rescue.
 """
 function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
@@ -1019,7 +1028,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
     dropped = Vector{Union{Nothing,Vector{Float64}}}(nothing, n_datasets)
 
     # Cold start: rough CC alignment of each dataset to DS1, kept unless the incumbent
-    # beats it in overlap with DS1 (ties and small leads between nearby shifts go to the CC).
+    # overlaps DS1 strictly better (ties go to the CC).
     if init
         ds1 = _intra_only_corrected(smld, model, 1)
         if !isempty(ds1.emitters)
@@ -1056,24 +1065,18 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             cc !== nothing && cc_v === nothing && (dropped[d] = Float64.(cc[1:n_dims]))
             in_cc = cc_v === nothing ? nothing : _overlap_inliers(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
 
-            # entropy-refine from the CC seed unless the incumbent leads it (no L2 reg:
+            # entropy-refine from the CC seed unless the incumbent overlaps strictly better (no L2 reg:
             # the seed is the anchor)
-            seed = (cc_v === nothing || _overlap_beats(in_inc, inc, in_cc, cc_v)) ? inc : cc_v
+            seed = (cc_v === nothing || count(in_inc) > count(in_cc)) ? inc : cc_v
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
                        precomputed_corrected = snap, regularization_lambda = 0.0,
                        cc_init = false)
-            best = copy(model.inter[d].dm)
-            in_best = _overlap_inliers(sd, best, tree, _CC_VERIFY_RADIUS, n_dims)
+            refined = copy(model.inter[d].dm)
+            in_ref = _overlap_inliers(sd, refined, tree, _CC_VERIFY_RADIUS, n_dims)
 
-            # overlap arbiter: the refined shift stands unless the CC leads it, then the
-            # incumbent unless it leads the current best
-            if in_cc !== nothing && _overlap_beats(in_cc, cc_v, in_best, best)
-                best, in_best = cc_v, in_cc
-            end
-            if _overlap_beats(in_inc, inc, in_best, best)
-                best, in_best = inc, in_inc
-            end
+            # overlap arbiter over {refined, CC, incumbent}
+            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc)
             model.inter[d].dm .= best
         end
     end

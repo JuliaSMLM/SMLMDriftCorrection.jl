@@ -209,6 +209,47 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
+    # Arbiter: the largest inlier count wins; a winner within _CC_VERIFY_RADIUS of the
+    # refined shift must also lead it by McNemar, else the refined shift is kept.
+    # -----------------------------------------------------------------------
+    @testset "arbiter" begin
+        # flags from group sizes: (refined only, cc only, both) ; incumbent separately
+        flags(; r = 0, c = 0, rc = 0, i = 0, ri = 0, ci = 0, rci = 0) = begin
+            n = r + c + rc + i + ri + ci + rci
+            grp = vcat(fill(1, r), fill(2, c), fill(3, rc), fill(4, i), fill(5, ri),
+                       fill(6, ci), fill(7, rci))
+            inR = BitVector(g in (1, 3, 5, 7) for g in grp)
+            inC = BitVector(g in (2, 3, 6, 7) for g in grp)
+            inI = BitVector(g in (4, 5, 6, 7) for g in grp)
+            (inR, inC, inI)
+        end
+        ref, cc, inc = [0.0, 0.0], [0.020, 0.0], [0.040, 0.0]
+        # Codex's intransitive state: counts R 100, C 120, I 101; the CC wins on count
+        # but z = (60 - 40) / sqrt(100) = 2 against refined, so refined stands.
+        (inR, inC, inI) = flags(r = 40, c = 19, ci = 41, rci = 60)
+        @test (count(inR), count(inC), count(inI)) == (100, 120, 101)
+        @test DC._arbitrate(ref, inR, cc, inC, inc, inI) === ref
+        # near winner with a significant lead
+        (inR, inC, inI) = flags(r = 10, c = 80, rc = 50)
+        @test DC._arbitrate(ref, inR, cc, inC, inc, falses(length(inR))) === cc
+        # far winner with a small count lead (different basin): the 0.2.9 rule
+        far = [3.0, 3.0]
+        (inR, inC, inI) = flags(r = 0, c = 3, rc = 50)
+        @test DC._arbitrate(ref, inR, far, inC, inc, falses(length(inR))) === far
+        # near winner with a 3-localization lead on sparse flags
+        (inR, inC, inI) = flags(r = 0, c = 3, rc = 50)
+        @test DC._arbitrate(ref, inR, cc, inC, inc, falses(length(inR))) === ref
+        # no CC candidate: the incumbent wins only on a larger count
+        (inR, inC, inI) = flags(r = 5, i = 2, ri = 30)
+        @test DC._arbitrate(ref, inR, nothing, nothing, far, inI) === ref
+        (inR, inC, inI) = flags(r = 5, i = 30, ri = 30)
+        @test DC._arbitrate(ref, inR, nothing, nothing, far, inI) === far
+        # ties keep the refined shift
+        (inR, inC, inI) = flags(rc = 50)
+        @test DC._arbitrate(ref, inR, far, inC, inc, inI) === ref
+    end
+
+    # -----------------------------------------------------------------------
     # Cross-basin decisions use the plain inlier count, not the significance margin:
     # a reference with 50 matching sites plus 4 copies of 30 others displaced by
     # (3, 3) um. The capped CC proposes the wrong basin, which holds fewer of the
