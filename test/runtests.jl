@@ -274,6 +274,31 @@ const DC = SMLMDriftCorrection
         @test DC._arbitrate(ref, flag(1:5), nothing, nothing, inc, flag(6:10); score = occ) === ref
     end
 
+    # Near ties: the occupancy winner picks the basin; among candidates within
+    # _CC_VERIFY_RADIUS of it, the lowest entropy cost is kept (stub cost by shift x).
+    @testset "arbiter: near ties go to the lowest entropy cost" begin
+        flag(idx) = (f = falses(16); f[idx] .= true; f)
+        ref, cc, inc = [0.0, 0.0], [0.015, 0.0], [0.5, 0.0]
+        cost_of(d) = θ -> d[round(θ[1], digits = 3)]
+        # CC leads by occupancy but lies 15 nm from refined, which costs less: refined
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:8), inc, falses(16);
+                            score = count, cost = cost_of(Dict(0.0 => 1.0, 0.015 => 2.0, 0.5 => 0.0))) === ref
+        # the near candidate costs more: the winner stays
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:8), inc, falses(16);
+                            score = count, cost = cost_of(Dict(0.0 => 3.0, 0.015 => 2.0, 0.5 => 0.0))) === cc
+        # a far candidate is never compared, however low its cost
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:4), inc, flag(1:9);
+                            score = count, cost = cost_of(Dict(0.0 => 5.0, 0.015 => 5.0, 0.5 => 0.0))) === inc
+        # equal costs keep the order refined, CC, incumbent
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:8), inc, falses(16);
+                            score = count, cost = cost_of(Dict(0.0 => 1.0, 0.015 => 1.0, 0.5 => 1.0))) === ref
+        @test DC._arbitrate(ref, flag(1:3), cc, flag(1:8), [0.02, 0.0], falses(16);
+                            score = count, cost = cost_of(Dict(0.0 => 1.0, 0.015 => 1.0, 0.02 => 1.0))) === ref
+        # no cost call when the winner is alone in its neighborhood
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:4), inc, flag(1:9);
+                            score = count, cost = _ -> error("cost evaluated")) === inc
+    end
+
     # -----------------------------------------------------------------------
     # Cross-basin decisions are scored by occupancy, not by inlier count: a
     # reference with 50 matching sites plus 4 copies of 30 others displaced by
@@ -347,7 +372,7 @@ const DC = SMLMDriftCorrection
         for e in moved.emitters
             e.dataset == 3 && (e.x += 10.0)
         end
-        @test_logs (:warn, r"dataset 3: .*possible stage move") match_mode = :any DC.driftcorrect(
+        @test_logs (:warn, r"dataset 3: .*likely a collection failure") match_mode = :any DC.driftcorrect(
             moved; quality = :singlepass, degree = 1)
         # ordinary small inter shift: nothing to warn about
         for e in s_big.emitters
@@ -368,7 +393,7 @@ const DC = SMLMDriftCorrection
         (logs, res) = Test.collect_test_logs(; min_level = Logging.Warn) do
             DC.driftcorrect(s_big; quality = :iterative, degree = 1, max_iterations = 3)
         end
-        moves = filter(l -> occursin("possible stage move", l.message), logs)
+        moves = filter(l -> occursin("likely a collection failure", l.message), logs)
         @test length(moves) == 1
         @test occursin("dataset 3:", moves[1].message)
         # the 10 um CC was reported, not applied
@@ -391,7 +416,7 @@ const DC = SMLMDriftCorrection
         dropped = Vector{Union{Nothing,Vector{Float64}}}(nothing, 3)
         dropped[3] = [0.0, 7.0]    # stale: overlaps nothing at the final consensus
         warned = fill(false, 3)
-        @test_logs (:warn, r"dataset 3: .*possible stage move") match_mode = :any DC._warn_dropped_cc!(
+        @test_logs (:warn, r"dataset 3: .*likely a collection failure") match_mode = :any DC._warn_dropped_cc!(
             model, s_big, dropped, warned)
         @test warned == [false, false, true]
     end
