@@ -275,9 +275,11 @@ const DC = SMLMDriftCorrection
     end
 
     # Near ties: the occupancy winner picks the basin; among candidates within
-    # _CC_VERIFY_RADIUS of it, the lowest entropy cost is kept (stub cost by shift x).
+    # _CC_VERIFY_RADIUS of it that it does not lead significantly at the site level, the
+    # lowest entropy cost is kept (stub cost by shift x); equal costs keep incumbent,
+    # refined, CC.
     @testset "arbiter: near ties go to the lowest entropy cost" begin
-        flag(idx) = (f = falses(16); f[idx] .= true; f)
+        flag(idx; n = 16) = (f = falses(n); f[idx] .= true; f)
         ref, cc, inc = [0.0, 0.0], [0.015, 0.0], [0.5, 0.0]
         cost_of(d) = θ -> d[round(θ[1], digits = 3)]
         # CC leads by occupancy but lies 15 nm from refined, which costs less: refined
@@ -289,14 +291,123 @@ const DC = SMLMDriftCorrection
         # a far candidate is never compared, however low its cost
         @test DC._arbitrate(ref, flag(1:5), cc, flag(1:4), inc, flag(1:9);
                             score = count, cost = cost_of(Dict(0.0 => 5.0, 0.015 => 5.0, 0.5 => 0.0))) === inc
-        # equal costs keep the order refined, CC, incumbent
+        # equal costs keep the incumbent, then refined, then CC
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:8), [0.02, 0.0], flag(1:7);
+                            score = count, cost = cost_of(Dict(0.0 => 1.0, 0.015 => 1.0, 0.02 => 1.0))) == [0.02, 0.0]
         @test DC._arbitrate(ref, flag(1:5), cc, flag(1:8), inc, falses(16);
                             score = count, cost = cost_of(Dict(0.0 => 1.0, 0.015 => 1.0, 0.5 => 1.0))) === ref
-        @test DC._arbitrate(ref, flag(1:3), cc, flag(1:8), [0.02, 0.0], falses(16);
-                            score = count, cost = cost_of(Dict(0.0 => 1.0, 0.015 => 1.0, 0.02 => 1.0))) === ref
+        # costs equal within _COST_RTOL count as equal
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:8), [0.02, 0.0], flag(1:7);
+                            score = count, cost = cost_of(Dict(0.0 => 1.0, 0.015 => 1.0 - 1e-12, 0.02 => 1.0))) == [0.02, 0.0]
+        # a near candidate the winner leads significantly (20 sites vs 3; 4 vs 0 is not significant) is excluded, however low its cost
+        @test DC._arbitrate(ref, flag(1:3; n = 25), cc, flag(1:20; n = 25), inc, falses(25);
+                            score = count, cost = cost_of(Dict(0.0 => 0.0, 0.015 => 5.0, 0.5 => 5.0))) === cc
+        @test DC._arbitrate(ref, flag(1:16; n = 25), cc, flag(1:20; n = 25), inc, falses(25);
+                            score = count, cost = cost_of(Dict(0.0 => 0.0, 0.015 => 5.0, 0.5 => 5.0))) === ref
+        # a duplicated shift costs one evaluation
+        calls = Ref(0)
+        @test DC._arbitrate(ref, flag(1:5), copy(ref), flag(1:5), [0.01, 0.0], flag(1:5);
+                            score = count, cost = θ -> (calls[] += 1; 0.0)) == [0.01, 0.0]
+        @test calls[] == 2
         # no cost call when the winner is alone in its neighborhood
         @test DC._arbitrate(ref, flag(1:5), cc, flag(1:4), inc, flag(1:9);
                             score = count, cost = _ -> error("cost evaluated")) === inc
+    end
+
+    # -----------------------------------------------------------------------
+    # Occupancy counts fixed sites, so it is monotone in the flags and independent of
+    # the emitter order.
+    # -----------------------------------------------------------------------
+    @testset "occupancy is monotone and order independent" begin
+        Random.seed!(11)
+        (s_m, _) = simulate(StaticSMLMConfig(3.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0]);
+            pattern  = Nmer2D(n = 3, d = 0.03),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+            camera   = IdealCamera(1:64, 1:64, 0.1))
+        n = length(s_m.emitters)
+        sites = DC._site_ids(s_m)
+        rng = Random.MersenneTwister(3)
+        for _ in 1:50
+            sub = rand(rng, n) .< 0.3
+            sup = sub .| (rand(rng, n) .< 0.3)
+            @test DC._occupancy(sites, BitVector(sub)) <= DC._occupancy(sites, BitVector(sup))
+        end
+        perm = Random.randperm(rng, n)
+        s_p = BasicSMLD(s_m.emitters[perm], s_m.camera, 300, 1, Dict{String,Any}())
+        f = rand(rng, n) .< 0.5
+        @test DC._occupancy(DC._site_ids(s_p), BitVector(f[perm])) <= count(f)
+        @test DC._occupancy(sites, BitVector(trues(n))) == length(unique(sites))
+    end
+
+    # -----------------------------------------------------------------------
+    # Codex review of b2795da. Target triples straddle a site boundary; a wrong CC (3 um)
+    # covers four target localizations on false reference sites, zero covers all seven.
+    # Greedy per-candidate thinning scored zero 3 against 4 and `:fft` applied 3 um.
+    # -----------------------------------------------------------------------
+    sim_ds_points(pts_by_ds) = begin
+        Random.seed!(5)
+        (s_o, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [-1.0, 1.0]);
+            pattern  = Nmer2D(n = 1, d = 0.0),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+            camera   = IdealCamera(1:64, 1:64, 0.1))
+        em = []
+        for (d, pts) in enumerate(pts_by_ds), p in pts
+            e = deepcopy(s_o.emitters[1]); e.x = p[1]; e.y = p[2]; e.dataset = d
+            push!(em, e)
+        end
+        BasicSMLD(identity.(em), s_o.camera, 300, length(pts_by_ds), Dict{String,Any}())
+    end
+    @testset "occupancy: a superset of inliers never loses (Codex P1)" begin
+        tgt = Tuple{Float64,Float64}[]
+        for δ in (0.0, -0.018, 0.018)
+            push!(tgt, (4.010 + δ, 1.0)); push!(tgt, (4.030 + δ, 2.0))
+        end
+        push!(tgt, (5.0, 3.0))
+        ref = [(4.010, 1.0), (4.030, 2.0), (5.0, 3.0)]
+        for sgn in (-1, 1), _ in 1:4
+            push!(ref, (1.010 + sgn * 0.034, 1.0)); push!(ref, (1.030 + sgn * 0.034, 2.0))
+        end
+        for order in (identity, reverse)
+            smld = sim_ds_points([ref, order(tgt)])
+            (_, info) = DC.driftcorrect(smld; quality = :fft, degree = 0)
+            @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
+        end
+    end
+
+    # Codex P2: the zero incumbent covers 49 sites, a refine ~16 nm away 40, and the real
+    # entropy cost prefers the biased reference; the 40-site shift must not win.
+    @testset "entropy cannot buy back lost coverage (Codex P2)" begin
+        g = [(1.0 + 0.2 * i, 1.0 + 0.2 * j) for i in 0:6 for j in 0:6]
+        ref = Tuple{Float64,Float64}[]
+        for p in g[1:40]
+            push!(ref, p)
+            for _ in 1:10; push!(ref, (p[1] - 0.020, p[2])); end
+        end
+        for p in g[41:49]; push!(ref, (p[1] + 0.020, p[2])); end
+        smld = sim_ds_points([ref, g])
+        (_, info) = DC.driftcorrect(smld; quality = :singlepass, degree = 0)
+        @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
+    end
+
+    # Flat entropy cost (the dense dataset's own neighbors dominate): the incumbent stays
+    # (battery gridphase_replica seed 2: 8.6 nm with refined ahead of the incumbent).
+    @testset "flat entropy cost keeps the incumbent (gridphase_replica seed 2)" begin
+        cam = IdealCamera(1:64, 1:64, 0.1)
+        site(x, y, n) = [Emitter2DFit{Float64}(x, y, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0; σ_xy = 0.0, track_id = i) for i in 1:n]
+        cfg1 = StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0])
+        rng = Random.MersenneTwister(2)
+        pos = [(0.6 + 5.0 * rand(rng), 0.6 + 5.0 * rand(rng)) for _ in 1:60]
+        ref = reduce(vcat, [site(p[1], p[2], 4) for p in pos])
+        for (i, e) in enumerate(ref); e.track_id = i; end
+        Random.seed!(2)
+        (r, _) = simulate(cfg1; starting_conditions = ref,
+            molecule = GenericFluor(; photons = 5000.0, k_on = 2.0, k_off = 50.0), camera = cam)
+        rep_em = [Emitter2DFit{Float64}(p[1] + 1.013 - 0.025 + 0.001 * randn(rng), p[2] + 1.013 - 0.025 + 0.001 * randn(rng), 5000.0, 0.0, 0.002, 0.002, 0.0, 0.0; σ_xy = 0.0, frame = 1, dataset = 1, track_id = 0, id = 0) for p in pos]
+        tgt = [Emitter2DFit{Float64}(p[1] + 1.013, p[2] + 1.013, 5000.0, 0.0, 0.002, 0.002, 0.0, 0.0; σ_xy = 0.0, frame = 1, dataset = 2, track_id = 0, id = 0) for p in pos]
+        smld = BasicSMLD(vcat(r.emitters, rep_em, tgt), cam, 300, 2, Dict{String,Any}())
+        m = DC.LegendrePolynomial(smld; degree = 2)
+        DC._cc_primary_inter!(m, smld, 100; n_passes = 2, init = true)
+        @test hypot((m.inter[2].dm .- m.inter[1].dm .- [1.013, 1.013])...) < 0.002
     end
 
     # -----------------------------------------------------------------------
