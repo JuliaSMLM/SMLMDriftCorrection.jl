@@ -209,54 +209,80 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
-    # Arbiter: the largest inlier count wins; a winner within _CC_VERIFY_RADIUS of the
-    # refined shift must also lead it by McNemar, else the refined shift is kept.
+    # Occupancy: inlier localizations kept when each is dropped if an already-kept
+    # inlier lies within _OCC_SEP, so a site localized many times counts once.
     # -----------------------------------------------------------------------
-    @testset "arbiter" begin
-        # flags from group sizes: (refined only, cc only, both) ; incumbent separately
-        flags(; r = 0, c = 0, rc = 0, i = 0, ri = 0, ci = 0, rci = 0) = begin
-            n = r + c + rc + i + ri + ci + rci
-            grp = vcat(fill(1, r), fill(2, c), fill(3, rc), fill(4, i), fill(5, ri),
-                       fill(6, ci), fill(7, rci))
-            inR = BitVector(g in (1, 3, 5, 7) for g in grp)
-            inC = BitVector(g in (2, 3, 6, 7) for g in grp)
-            inI = BitVector(g in (4, 5, 6, 7) for g in grp)
-            (inR, inC, inI)
+    # SMLMSim emitters repositioned at the given (x, y[, z]) points
+    sim_points(nd, pts) = begin
+        Random.seed!(5)
+        (s_o, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, nd, [-1.0, 1.0]);
+            pattern  = nd == 2 ? Nmer2D(n = 1, d = 0.0) : Nmer3D(n = 1, d = 0.0),
+            molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+            camera   = IdealCamera(1:64, 1:64, 0.1))
+        em = [deepcopy(s_o.emitters[1]) for _ in pts]
+        for (e, p) in zip(em, pts)
+            e.x = p[1]; e.y = p[2]
+            nd == 3 && (e.z = p[3])
         end
-        ref, cc, inc = [0.0, 0.0], [0.020, 0.0], [0.040, 0.0]
-        # Codex's intransitive state: counts R 100, C 120, I 101; the CC wins on count
-        # but z = (60 - 40) / sqrt(100) = 2 against refined, so refined stands.
-        (inR, inC, inI) = flags(r = 40, c = 19, ci = 41, rci = 60)
-        @test (count(inR), count(inC), count(inI)) == (100, 120, 101)
-        @test DC._arbitrate(ref, inR, cc, inC, inc, inI) === ref
-        # near winner with a significant lead
-        (inR, inC, inI) = flags(r = 10, c = 80, rc = 50)
-        @test DC._arbitrate(ref, inR, cc, inC, inc, falses(length(inR))) === cc
-        # far winner with a small count lead (different basin): the 0.2.9 rule
-        far = [3.0, 3.0]
-        (inR, inC, inI) = flags(r = 0, c = 3, rc = 50)
-        @test DC._arbitrate(ref, inR, far, inC, inc, falses(length(inR))) === far
-        # near winner with a 3-localization lead on sparse flags
-        (inR, inC, inI) = flags(r = 0, c = 3, rc = 50)
-        @test DC._arbitrate(ref, inR, cc, inC, inc, falses(length(inR))) === ref
-        # no CC candidate: the incumbent wins only on a larger count
-        (inR, inC, inI) = flags(r = 5, i = 2, ri = 30)
-        @test DC._arbitrate(ref, inR, nothing, nothing, far, inI) === ref
-        (inR, inC, inI) = flags(r = 5, i = 30, ri = 30)
-        @test DC._arbitrate(ref, inR, nothing, nothing, far, inI) === far
-        # ties keep the refined shift
-        (inR, inC, inI) = flags(rc = 50)
-        @test DC._arbitrate(ref, inR, far, inC, inc, inI) === ref
+        BasicSMLD(em, s_o.camera, 300, 1, Dict{String,Any}())
+    end
+
+    @testset "occupancy" begin
+        # 4 sites 1 um apart, each localized 10 times within 3 nm: occupancy 4, count 40
+        pts = [(i + 0.001 * j, 2.0 + 0.001 * j) for i in 1:4 for j in 0:9]
+        sd = sim_points(2, pts)
+        all_in = trues(length(pts))
+        @test DC._occupancy(sd, all_in) == 4
+        # two localizations 40 nm apart are two sites
+        sd = sim_points(2, [(1.0, 1.0), (1.040, 1.0)])
+        @test DC._occupancy(sd, trues(2)) == 2
+        # only flagged localizations count
+        sd = sim_points(2, [(1.0, 1.0), (2.0, 1.0), (3.0, 1.0), (3.001, 1.0)])
+        @test DC._occupancy(sd, BitVector([1, 0, 1, 1])) == 2
+        @test DC._occupancy(sd, falses(4)) == 0
+        # 3D uses z: same (x, y), 40 nm apart in z are two sites, 3 nm apart one
+        sd = sim_points(3, [(1.0, 1.0, 0.0), (1.0, 1.0, 0.040)])
+        @test DC._occupancy(sd, trues(2)) == 2
+        sd = sim_points(3, [(1.0, 1.0, 0.0), (1.0, 1.0, 0.003)])
+        @test DC._occupancy(sd, trues(2)) == 1
     end
 
     # -----------------------------------------------------------------------
-    # Cross-basin decisions use the plain inlier count, not the significance margin:
-    # a reference with 50 matching sites plus 4 copies of 30 others displaced by
-    # (3, 3) um. The capped CC proposes the wrong basin, which holds fewer of the
-    # target's localizations (30 vs ~46 of 80), but z = 20/sqrt(80) < 3.
+    # Arbiter: the candidate with the largest score wins (occupancy in
+    # _cc_primary_inter!); ties keep refined, then CC, then the incumbent.
     # -----------------------------------------------------------------------
-    @testset "cross-basin overlap decision" begin
-        Random.seed!(3)
+    @testset "arbiter" begin
+        # 10 sites of one localization each (indices 1:10), 6 more sites (11:16), and
+        # one site localized 30 times (17:46)
+        pts = vcat([(Float64(i), 1.0) for i in 1:16], [(20.0 + 0.001 * j, 1.0) for j in 1:30])
+        sd = sim_points(2, pts)
+        flag(idx) = (f = falses(length(pts)); f[idx] .= true; f)
+        occ(f) = DC._occupancy(sd, f)
+        ref, cc, inc = [0.0, 0.0], [0.020, 0.0], [0.040, 0.0]
+        inR, inC, inI = flag(1:10), flag(17:46), falses(length(pts))
+        # the count prefers the CC (30 > 10); occupancy prefers refined (10 > 1)
+        @test DC._arbitrate(ref, inR, cc, inC, inc, inI) === cc
+        @test DC._arbitrate(ref, inR, cc, inC, inc, inI; score = occ) === ref
+        # a strictly larger occupancy wins, from the CC or the incumbent
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:6), inc, falses(16)) === cc
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(1:6), inc, flag(1:7); score = occ) === inc
+        # no CC candidate
+        @test DC._arbitrate(ref, flag(1:5), nothing, nothing, inc, flag(1:6); score = occ) === inc
+        # ties: refined over CC and incumbent, then CC over incumbent
+        @test DC._arbitrate(ref, flag(1:5), cc, flag(6:10), inc, flag(11:15); score = occ) === ref
+        @test DC._arbitrate(ref, flag(1:4), cc, flag(6:10), inc, flag(11:15); score = occ) === cc
+        @test DC._arbitrate(ref, flag(1:5), nothing, nothing, inc, flag(6:10); score = occ) === ref
+    end
+
+    # -----------------------------------------------------------------------
+    # Cross-basin decisions are scored by occupancy, not by inlier count: a
+    # reference with 50 matching sites plus 4 copies of 30 others displaced by
+    # (3, 3) um. The capped CC proposes the wrong basin, which holds fewer of the
+    # target's sites (30 vs 80) but, by repeated localizations, more inlier
+    # localizations than the true shift.
+    # -----------------------------------------------------------------------
+    xbasin_smld(seed) = begin
+        Random.seed!(seed)
         cam = IdealCamera(1:64, 1:64, 0.1)
         (s, _) = simulate(StaticSMLMConfig(2.5, 0.13, 50, 2, 300, 50.0, 2, [0.0, 1.0]);
             pattern  = Nmer2D(n = 1, d = 0.0),
@@ -270,7 +296,11 @@ const DC = SMLMDriftCorrection
             push!(ref, r)
         end
         tgt = [deepcopy(first(in_ds(2, tid))) for tid in sites]
-        smld = BasicSMLD(vcat(ref, tgt), cam, 300, 2, Dict{String,Any}())
+        BasicSMLD(vcat(ref, tgt), cam, 300, 2, Dict{String,Any}())
+    end
+
+    @testset "cross-basin overlap decision" begin
+        smld = xbasin_smld(3)
         (_, info) = DC.driftcorrect(smld; quality = :fft)
         @test hypot((info.model.inter[2].dm .- info.model.inter[1].dm)...) < 0.050
         # the guard behind it: the zero incumbent must veto the (-3, -3) candidate
@@ -279,6 +309,18 @@ const DC = SMLMDriftCorrection
         inter = [0.0, 0.0]
         @test !DC._accept_if_better_overlap!(inter, [-3.0, -3.0], sd2, tree1, 2)
         @test inter == [0.0, 0.0]
+    end
+
+    # End to end through the registered tiers: the seed choice and the arbiter score by
+    # occupancy too (seed 2 left 4.2 um in 0.2.9; seeds 2 and 3 without occupancy in
+    # the arbiter).
+    @testset "cross-basin overlap decision, registered tiers" begin
+        for seed in (2, 3), q in (:singlepass, :iterative)
+            smld = xbasin_smld(seed)
+            kw = q == :iterative ? (; max_iterations = 4) : (;)
+            (_, info) = DC.driftcorrect(smld; quality = q, degree = 0, kw...)
+            @test hypot((info.model.inter[2].dm .- info.model.inter[1].dm)...) < 0.050
+        end
     end
 
     # -----------------------------------------------------------------------
