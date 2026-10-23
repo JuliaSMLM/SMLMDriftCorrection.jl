@@ -361,6 +361,48 @@ const DC = SMLMDriftCorrection
         end
         BasicSMLD(identity.(em), s_o.camera, 300, length(pts_by_ds), Dict{String,Any}())
     end
+    # Codex review of 4323bf9: occupancy sums that are equal in exact arithmetic differ in the
+    # last bits (10.0 vs 9.999999999999982) and must not decide the guard. Ten A and ten B
+    # compact motifs; the target holds 6:15 copies of each A shifted by (3, 0) and a varying
+    # number of B copies, the reference four copies of each. Both candidates cover ten sites.
+    @testset "occupancy ties are decided with a tolerance (Codex 4323bf9)" begin
+        A = [(0.600 + 0.110i, 0.600 + 0.023i^2) for i in 0:9]
+        B = [(4.400 + 0.105i, 4.400 + 0.011i^2) for i in 0:9]
+        ref = reduce(vcat, [fill(p, 4) for p in vcat(A, B)])
+        nb = [3, 3, 3, 4, 4, 3, 2, 4, 4, 2]
+        tgt = vcat(reduce(vcat, [fill((p[1] + 3.0, p[2]), 5 + i) for (i, p) in enumerate(A)]),
+                   reduce(vcat, [fill(p, nb[i]) for (i, p) in enumerate(B)]))
+        smld = sim_ds_points([ref, tgt])
+        shifts = Vector{Float64}[]
+        rng = Random.MersenneTwister(77)
+        for k in 1:6
+            sm = k == 1 ? smld : begin
+                em = deepcopy(smld.emitters)
+                i2 = findall(e -> e.dataset == 2, em)
+                em[i2] = em[i2][Random.randperm(rng, length(i2))]
+                BasicSMLD(em, smld.camera, 300, 2, Dict{String,Any}())
+            end
+            (_, info) = DC.driftcorrect(sm; quality = :fft, degree = 0)
+            push!(shifts, info.model.inter[2].dm .- info.model.inter[1].dm)
+        end
+        @test all(sh -> maximum(abs.(sh .- [3.0, 0.0])) < 0.005, shifts)
+    end
+
+    # The grid count is exact: same n_i as a KD-tree range count.
+    @testset "density counts match a KD-tree range count" begin
+        for nd in (2, 3)
+            Random.seed!(21)
+            (s_c, _) = simulate(StaticSMLMConfig(2.0, 0.13, 50, 1, 300, 50.0, nd, [0.0, 1.0]);
+                pattern  = nd == 2 ? Nmer2D(n = 4, d = 0.05) : Nmer3D(n = 4, d = 0.05),
+                molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+                camera   = IdealCamera(1:64, 1:64, 0.1))
+            mat = permutedims(hcat([e.x for e in s_c.emitters], [e.y for e in s_c.emitters],
+                                   (nd == 3 ? [[e.z for e in s_c.emitters]] : [])...))
+            ref = DC.inrangecount(DC.KDTree(mat), mat, DC._OCC_SEP)
+            @test DC._count_within(s_c, DC._OCC_SEP) == ref
+        end
+    end
+
     # Codex review of 912f617: a center that matches neither candidate must not merge two
     # inlier groups 36 nm apart when it comes first in the emitter order.
     @testset "occupancy: unmatched centers do not merge groups (Codex 912f617)" begin
