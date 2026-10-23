@@ -306,7 +306,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     # Every CC shift below is overlap-guarded (`_accept_if_better_overlap!`): the
     # unnormalized histogram CC argmax can be captured by a hot spot present in some
     # datasets only and land microns away, so a CC shift replaces the incumbent only
-    # where it puts more of the dataset near the reference (see `_cc_primary_inter!`).
+    # where it puts more sites of the dataset near the reference (see `_cc_primary_inter!`).
 
     # Pass 1: Align each dataset to dataset 1 (rough alignment)
     # findshift(A, B) returns the shift of B relative to A
@@ -486,7 +486,7 @@ end
 const _ENTROPY_REL_TOL = 1.0e-4
 
 # Neighbor radius (μm) for the CC-primary overlap arbiter: per dataset, whichever of
-# {entropy-refined, CC, incumbent} places the largest fraction of the dataset's
+# {entropy-refined, CC, incumbent} has the largest occupancy among the dataset's
 # localizations within this distance of a consensus localization is kept. This makes
 # each inter step never lower a dataset's consensus overlap even though the
 # merged-cloud entropy is only ~1/N sensitive to one dataset's offset and so cannot
@@ -862,6 +862,38 @@ function _overlap_inliers(sd::SMLD, inter::Vector{Float64}, tree, radius::Float6
     return flags
 end
 
+"Separation (μm) within which two localizations count as one site in `_occupancy`."
+const _OCC_SEP = 0.030
+
+"""
+Occupancy of a dataset's inlier localizations: how many are kept when each inlier is
+dropped if an already-kept inlier (index order) lies within `_OCC_SEP`, so a site
+localized many times counts about once. Overlap decisions compare this, not the inlier
+count, so a shift that lays frequently localized sites on the consensus cannot outscore
+the true shift. Positions are in the dataset's own frame; 3D uses z.
+"""
+function _occupancy(sd::SMLD, flags::BitVector)
+    r = _OCC_SEP; r2 = r * r
+    grid = Dict{NTuple{3,Int},Vector{NTuple{3,Float64}}}()
+    n = 0
+    for (i, e) in enumerate(sd.emitters)
+        flags[i] || continue
+        p = (Float64(e.x), Float64(e.y), hasproperty(e, :z) ? Float64(e.z) : 0.0)
+        k = (floor(Int, p[1] / r), floor(Int, p[2] / r), floor(Int, p[3] / r))
+        taken = false
+        for dx in -1:1, dy in -1:1, dz in -1:1
+            v = get(grid, (k[1] + dx, k[2] + dy, k[3] + dz), nothing)
+            v === nothing && continue
+            taken = any(q -> (q[1] - p[1])^2 + (q[2] - p[2])^2 + (q[3] - p[3])^2 < r2, v)
+            taken && break
+        end
+        taken && continue
+        push!(get!(grid, k, NTuple{3,Float64}[]), p)
+        n += 1
+    end
+    return n
+end
+
 "Significance of a lead in overlap: McNemar's z (`_overlap_leads`)."
 const _OVERLAP_Z = 3.0
 
@@ -879,23 +911,17 @@ end
 
 """
 Overlap arbiter over {refined, CC, incumbent} (`cc` and `in_cc` may be `nothing`): the
-candidate with the largest inlier count wins, ties keeping refined, then CC, then the
-incumbent. If the winner is not the refined shift, lies within `_CC_VERIFY_RADIUS` of it
-(a hard threshold) and does not lead it by McNemar (`_overlap_leads`), the refined shift
-is kept: between nearby shifts a few localizations are noise, and the refine is the more
-precise estimate. Between distant shifts (different basins) the larger count decides.
+candidate with the largest `score` of its inlier flags wins (`_cc_primary_inter!` passes
+`_occupancy`), ties keeping refined, then CC, then the incumbent.
 """
-function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVector)
+function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVector; score = count)
     win, in_win = refined, in_ref
-    if cc !== nothing && count(in_cc) > count(in_win)
+    if cc !== nothing && score(in_cc) > score(in_win)
         win, in_win = cc, in_cc
     end
-    if count(in_inc) > count(in_win)
+    if score(in_inc) > score(in_win)
         win, in_win = inc, in_inc
     end
-    win === refined && return refined
-    sqrt(sum(abs2, win .- refined)) < _CC_VERIFY_RADIUS && !_overlap_leads(in_win, in_ref) &&
-        return refined
     return win
 end
 
@@ -913,8 +939,8 @@ end
 
 """
 Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` unless the
-incumbent `inter` puts a strictly larger fraction of `sd`'s localizations within
-`_CC_VERIFY_RADIUS` of a reference localization (`tree`). Ties go to the CC: with the
+incumbent `inter` has a strictly larger occupancy (`_occupancy` of the localizations within
+`_CC_VERIFY_RADIUS` of a reference localization in `tree`). Ties go to the CC: with the
 CC computed on capped histograms, a tie (typically both zero, when a correct but
 bin-quantized CC lands just past the radius on sparse precise data) carries no
 evidence for the incumbent. Returns whether `cand` was accepted.
@@ -923,7 +949,7 @@ function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree
     c = Float64.(cand[1:n_dims])
     in_cand = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
     in_inc  = _overlap_inliers(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
-    count(in_inc) > count(in_cand) && return false   # reject only on evidence: ties go to the CC
+    _occupancy(sd, in_inc) > _occupancy(sd, in_cand) && return false   # reject only on evidence: ties go to the CC
     inter .= c
     return true
 end
@@ -993,10 +1019,8 @@ dataset's offset), and entropy is the *refinement* (locally precise). For each
 dataset: cross-correlate against the corrected consensus of the others, seed from
 the CC shift unless the incumbent shift overlaps strictly better,
 entropy-refine from that seed (`findinter!`), then arbitrate {refined, CC, incumbent}
-(`_arbitrate`): the largest inlier count wins, except that a winner within
-`_CC_VERIFY_RADIUS` of the refined shift must lead it significantly (McNemar's z on the
-localizations inlier under one shift only exceeds `_OVERLAP_Z`) or the refined shift is
-kept, so a few localizations decide nothing on sparse data. The overlap arbiter is
+(`_arbitrate`): the largest occupancy (`_occupancy`: inliers, a site localized many times
+counted once) wins, ties keeping the refined shift. The overlap arbiter is
 required because the merged-cloud entropy is only ~1/N sensitive to one dataset, so
 neither a wrong CC peak nor a refine that drifted to a wrong local minimum shows up
 in the entropy value. A raw-count histogram CC can be captured by a hot spot (a
@@ -1067,7 +1091,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
 
             # entropy-refine from the CC seed unless the incumbent overlaps strictly better (no L2 reg:
             # the seed is the anchor)
-            seed = (cc_v === nothing || count(in_inc) > count(in_cc)) ? inc : cc_v
+            seed = (cc_v === nothing || _occupancy(sd, in_inc) > _occupancy(sd, in_cc)) ? inc : cc_v
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
                        precomputed_corrected = snap, regularization_lambda = 0.0,
@@ -1076,7 +1100,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             in_ref = _overlap_inliers(sd, refined, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # overlap arbiter over {refined, CC, incumbent}
-            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc)
+            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc; score = f -> _occupancy(sd, f))
             model.inter[d].dm .= best
         end
     end
