@@ -364,6 +364,92 @@ function filter_by_dataset(smld::SMLD, datasets::Vector{Int})
 end
 
 """
+Entropy cost `findinter!` minimizes, as a closure over shift `θ`: dataset `dataset_n`
+(intra-corrected only, shifted by `θ` through `inter`) merged with the already corrected
+`smld_corrected` datasets `ref_datasets`, with localization sigmas and `maxn` neighbors.
+Returns `(cost, state, N_n)`, or `nothing` when either side is empty. `cost(θ)` writes `θ`
+into `inter`; neighbors are rebuilt per `state` (`state.needs_initial_build = true` forces
+a rebuild at the next `θ`).
+"""
+function _inter_entropy_cost(dm::AbstractIntraInter,
+    smld_uncorrected::SMLD,
+    smld_corrected::SMLD,
+    dataset_n::Int,
+    ref_datasets::Vector{Int},
+    maxn::Int,
+    inter::InterShift)
+
+    n_dims = nDims(smld_uncorrected)
+
+    # Get UNCORRECTED coords for dataset_n
+    idx_n = [e.dataset == dataset_n for e in smld_uncorrected.emitters]
+    emitters_n = smld_uncorrected.emitters[idx_n]
+
+    # Apply ONLY intra-drift correction (not inter) to dataset_n
+    # This way the optimizer finds the TOTAL inter-shift needed.
+    x_n = Float64[correctdrift(e.x, e.frame, dm.intra[dataset_n].dm[1]) for e in emitters_n]
+    y_n = Float64[correctdrift(e.y, e.frame, dm.intra[dataset_n].dm[2]) for e in emitters_n]
+    σ_x_n = Float64[e.σ_x for e in emitters_n]
+    σ_y_n = Float64[e.σ_y for e in emitters_n]
+    if n_dims == 3
+        z_n = Float64[correctdrift(e.z, e.frame, dm.intra[dataset_n].dm[3]) for e in emitters_n]
+        σ_z_n = Float64[e.σ_z for e in emitters_n]
+    end
+
+    # Extract CORRECTED coords from reference datasets
+    idx_ref = [e.dataset in ref_datasets for e in smld_corrected.emitters]
+    emitters_ref = smld_corrected.emitters[idx_ref]
+
+    # Guard against empty dataset_n or empty reference set (e.g., filtered-out
+    # dataset, or a ref_datasets list with no surviving emitters). Without this
+    # guard the KDTree build would throw on 0 points.
+    if length(emitters_n) == 0 || length(emitters_ref) == 0
+        return nothing
+    end
+
+    x_ref = Float64[e.x for e in emitters_ref]
+    y_ref = Float64[e.y for e in emitters_ref]
+    σ_x_ref = Float64[e.σ_x for e in emitters_ref]
+    σ_y_ref = Float64[e.σ_y for e in emitters_ref]
+    if n_dims == 3
+        z_ref = Float64[e.z for e in emitters_ref]
+        σ_z_ref = Float64[e.σ_z for e in emitters_ref]
+    end
+
+    # Pre-allocate work arrays
+    N_n = length(x_n)
+    N_ref = length(x_ref)
+    x_work = similar(x_n)
+    y_work = similar(y_n)
+
+    # Adaptive neighbor state - only rebuild KDTree when shift changes significantly
+    k = min(maxn, N_n + N_ref - 1)
+    rebuild_threshold = 0.1  # μm (100nm) - same as intra-dataset
+
+    # Build cost function
+    if n_dims == 2
+        # Pre-allocate combined data matrix for KDTree (avoids allocation per iteration)
+        data_combined = Matrix{Float64}(undef, 2, N_n + N_ref)
+        state = InterNeighborState(N_n, k, rebuild_threshold)
+        entropy_cost = θ -> costfun_entropy_inter_2D_merged(θ,
+            x_n, y_n, σ_x_n, σ_y_n,
+            x_ref, y_ref, σ_x_ref, σ_y_ref,
+            maxn, inter;
+            x_work=x_work, y_work=y_work, data_combined=data_combined, state=state)
+    else # 3D
+        z_work = similar(z_n)
+        data_combined = Matrix{Float64}(undef, 3, N_n + N_ref)
+        state = InterNeighborState3D(N_n, k, rebuild_threshold)
+        entropy_cost = θ -> costfun_entropy_inter_3D_merged(θ,
+            x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
+            x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
+            maxn, inter;
+            x_work=x_work, y_work=y_work, z_work=z_work, data_combined=data_combined, state=state)
+    end
+    return (entropy_cost, state, N_n)
+end
+
+"""
     findinter!(dm, smld_uncorrected, dataset_n, ref_datasets, maxn; kwargs...)
 
 Find and correct inter-dataset drift using entropy minimization.
@@ -400,46 +486,14 @@ function findinter!(dm::AbstractIntraInter,
     cc_init::Bool = true)
 
     n_dims = nDims(smld_uncorrected)
-
-    # Get UNCORRECTED coords for dataset_n
-    idx_n = [e.dataset == dataset_n for e in smld_uncorrected.emitters]
-    emitters_n = smld_uncorrected.emitters[idx_n]
-
-    # Apply ONLY intra-drift correction (not inter) to dataset_n
-    # This way the optimizer finds the TOTAL inter-shift needed.
-    x_n = Float64[correctdrift(e.x, e.frame, dm.intra[dataset_n].dm[1]) for e in emitters_n]
-    y_n = Float64[correctdrift(e.y, e.frame, dm.intra[dataset_n].dm[2]) for e in emitters_n]
-    σ_x_n = Float64[e.σ_x for e in emitters_n]
-    σ_y_n = Float64[e.σ_y for e in emitters_n]
-    if n_dims == 3
-        z_n = Float64[correctdrift(e.z, e.frame, dm.intra[dataset_n].dm[3]) for e in emitters_n]
-        σ_z_n = Float64[e.σ_z for e in emitters_n]
-    end
+    inter = dm.inter[dataset_n]
 
     # Correct reference datasets fully (intra + inter) for comparison
     smld_corrected = precomputed_corrected !== nothing ? precomputed_corrected : correctdrift(smld_uncorrected, dm)
 
-    # Extract CORRECTED coords from reference datasets
-    idx_ref = [e.dataset in ref_datasets for e in smld_corrected.emitters]
-    emitters_ref = smld_corrected.emitters[idx_ref]
-
-    # Guard against empty dataset_n or empty reference set (e.g., filtered-out
-    # dataset, or a ref_datasets list with no surviving emitters). Without this
-    # guard the KDTree build would throw on 0 points.
-    if length(emitters_n) == 0 || length(emitters_ref) == 0
-        return 0.0
-    end
-
-    x_ref = Float64[e.x for e in emitters_ref]
-    y_ref = Float64[e.y for e in emitters_ref]
-    σ_x_ref = Float64[e.σ_x for e in emitters_ref]
-    σ_y_ref = Float64[e.σ_y for e in emitters_ref]
-    if n_dims == 3
-        z_ref = Float64[e.z for e in emitters_ref]
-        σ_z_ref = Float64[e.σ_z for e in emitters_ref]
-    end
-
-    inter = dm.inter[dataset_n]
+    setup = _inter_entropy_cost(dm, smld_uncorrected, smld_corrected, dataset_n, ref_datasets, maxn, inter)
+    setup === nothing && return 0.0
+    (entropy_cost, state, _) = setup
 
     # Initial guess: use current inter value if non-zero (or if the caller chose it,
     # cc_init=false), otherwise try CC. This allows the second pass to refine from the
@@ -477,37 +531,6 @@ function findinter!(dm::AbstractIntraInter,
         catch
             # Keep zero initialization
         end
-    end
-
-    # Pre-allocate work arrays
-    N_n = length(x_n)
-    N_ref = length(x_ref)
-    x_work = similar(x_n)
-    y_work = similar(y_n)
-
-    # Adaptive neighbor state - only rebuild KDTree when shift changes significantly
-    k = min(maxn, N_n + N_ref - 1)
-    rebuild_threshold = 0.1  # μm (100nm) - same as intra-dataset
-
-    # Build cost function with optional regularization
-    if n_dims == 2
-        # Pre-allocate combined data matrix for KDTree (avoids allocation per iteration)
-        data_combined = Matrix{Float64}(undef, 2, N_n + N_ref)
-        state = InterNeighborState(N_n, k, rebuild_threshold)
-        entropy_cost = θ -> costfun_entropy_inter_2D_merged(θ,
-            x_n, y_n, σ_x_n, σ_y_n,
-            x_ref, y_ref, σ_x_ref, σ_y_ref,
-            maxn, inter;
-            x_work=x_work, y_work=y_work, data_combined=data_combined, state=state)
-    else # 3D
-        z_work = similar(z_n)
-        data_combined = Matrix{Float64}(undef, 3, N_n + N_ref)
-        state = InterNeighborState3D(N_n, k, rebuild_threshold)
-        entropy_cost = θ -> costfun_entropy_inter_3D_merged(θ,
-            x_n, y_n, z_n, σ_x_n, σ_y_n, σ_z_n,
-            x_ref, y_ref, z_ref, σ_x_ref, σ_y_ref, σ_z_ref,
-            maxn, inter;
-            x_work=x_work, y_work=y_work, z_work=z_work, data_combined=data_combined, state=state)
     end
 
     # Add regularization if specified: cost = entropy + λ*||θ - target||²

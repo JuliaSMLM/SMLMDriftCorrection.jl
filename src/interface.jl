@@ -911,10 +911,15 @@ end
 
 """
 Overlap arbiter over {refined, CC, incumbent} (`cc` and `in_cc` may be `nothing`): the
-candidate with the largest `score` of its inlier flags wins (`_cc_primary_inter!` passes
-`_occupancy`), ties keeping refined, then CC, then the incumbent.
+candidate with the largest `score` of its inlier flags wins the basin (`_cc_primary_inter!`
+passes `_occupancy`), ties keeping refined, then CC, then the incumbent. Where `cost` is
+given and two or more candidates lie within `_CC_VERIFY_RADIUS` of that winner (the winner
+included), the one with the lowest `cost(shift)` among them is kept, ties in the order
+refined, CC, incumbent: a lead of a few localizations between candidates this close is
+noise, and the entropy cost the refine minimizes positions the shift within the basin.
 """
-function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVector; score = count)
+function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVector;
+                    score = count, cost = nothing)
     win, in_win = refined, in_ref
     if cc !== nothing && score(in_cc) > score(in_win)
         win, in_win = cc, in_cc
@@ -922,7 +927,34 @@ function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVecto
     if score(in_inc) > score(in_win)
         win, in_win = inc, in_inc
     end
-    return win
+    cost === nothing && return win
+    near = [c for c in (refined, cc, inc) if c !== nothing && norm(c .- win) < _CC_VERIFY_RADIUS]
+    length(near) < 2 && return win
+    best, best_cost = near[1], cost(near[1])
+    for c in near[2:end]
+        v = cost(c)
+        v < best_cost && ((best, best_cost) = (c, v))
+    end
+    return best
+end
+
+"""
+Lazy inter entropy cost for dataset `d` against the corrected consensus `snap` of
+`others`, the objective `findinter!` minimizes (`_inter_entropy_cost`), as a function of
+a shift with neighbors built at that shift. Nothing is built unless it is called.
+"""
+function _arbiter_cost(model::LegendrePolynomial, smld::SMLD, snap::SMLD, d::Int,
+                       others::Vector{Int}, maxn::Int)
+    setup = Ref{Any}(nothing)
+    return function (θ)
+        if setup[] === nothing
+            scratch = InterShift(nDims(smld), zeros(nDims(smld)))
+            setup[] = _inter_entropy_cost(model, smld, snap, d, others, maxn, scratch)
+        end
+        (cost, state, _) = setup[]
+        state.needs_initial_build = true
+        return cost(Float64.(θ))
+    end
 end
 
 """
@@ -1003,7 +1035,8 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
                   "$(round(100 * mean(in_c), digits=1))% of its localizations within " *
                   "$(round(1000 * _CC_VERIFY_RADIUS, digits=0)) nm of the other datasets, against " *
                   "$(round(100 * mean(in_kept), digits=1))% at the kept shift; the dataset was " *
-                  "left at the kept shift (possible stage move; check the data)")
+                  "left at the kept shift (likely a collection failure: the stage moved between " *
+                  "acquisitions; check the data)")
             break
         end
     end
@@ -1020,7 +1053,8 @@ dataset: cross-correlate against the corrected consensus of the others, seed fro
 the CC shift unless the incumbent shift overlaps strictly better,
 entropy-refine from that seed (`findinter!`), then arbitrate {refined, CC, incumbent}
 (`_arbitrate`): the largest occupancy (`_occupancy`: inliers, a site localized many times
-counted once) wins, ties keeping the refined shift. The overlap arbiter is
+counted once) picks the basin, ties keeping the refined shift, and among the candidates within
+`_CC_VERIFY_RADIUS` of that winner the lowest entropy cost (the refine's objective) is kept. The overlap arbiter is
 required because the merged-cloud entropy is only ~1/N sensitive to one dataset, so
 neither a wrong CC peak nor a refine that drifted to a wrong local minimum shows up
 in the entropy value. A raw-count histogram CC can be captured by a hot spot (a
@@ -1099,8 +1133,9 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             refined = copy(model.inter[d].dm)
             in_ref = _overlap_inliers(sd, refined, tree, _CC_VERIFY_RADIUS, n_dims)
 
-            # overlap arbiter over {refined, CC, incumbent}
-            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc; score = f -> _occupancy(sd, f))
+            # overlap arbiter over {refined, CC, incumbent}; near ties go to the lowest entropy cost
+            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc; score = f -> _occupancy(sd, f),
+                              cost = _arbiter_cost(model, smld, snap, d, others, maxn))
             model.inter[d].dm .= best
         end
     end
