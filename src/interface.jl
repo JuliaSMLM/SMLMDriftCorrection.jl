@@ -866,64 +866,39 @@ end
 const _OCC_SEP = 0.030
 
 """
-Assign every localization of `sd` to a site, once and independently of any candidate shift
-(positions are shift invariant): in index order a localization joins the nearest existing
-site center within `_OCC_SEP` (ties: lowest site id), else it founds a new site at its own
-position. Returns the site id per localization; 3D uses z.
+Inverse local density weights of the localizations of `sd`: `w_i = 1 / n_i`, with `n_i` the
+number of its localizations within `_OCC_SEP` of localization `i` (itself included; 3D uses
+z). Independent of any candidate shift (positions are shift invariant) and of the emitter
+order. A compact site (all its localizations within `_OCC_SEP` of each other, sites farther
+apart than that) sums to 1 however often it was localized.
 """
-function _site_ids(sd::SMLD)
-    r = _OCC_SEP; r2 = r * r
+function _occupancy_weights(sd::SMLD)
     n = length(sd.emitters)
-    ids = Vector{Int}(undef, n)
-    grid = Dict{NTuple{3,Int},Vector{Int}}()
-    centers = NTuple{3,Float64}[]
-    for (i, e) in enumerate(sd.emitters)
-        p = (Float64(e.x), Float64(e.y), hasproperty(e, :z) ? Float64(e.z) : 0.0)
-        k = (floor(Int, p[1] / r), floor(Int, p[2] / r), floor(Int, p[3] / r))
-        best, best_d2 = 0, r2
-        for dx in -1:1, dy in -1:1, dz in -1:1
-            v = get(grid, (k[1] + dx, k[2] + dy, k[3] + dz), nothing)
-            v === nothing && continue
-            for id in v
-                q = centers[id]
-                d2 = (q[1] - p[1])^2 + (q[2] - p[2])^2 + (q[3] - p[3])^2
-                if d2 < best_d2 || (d2 == best_d2 && best != 0 && id < best)
-                    best, best_d2 = id, d2
-                end
-            end
-        end
-        if best == 0
-            push!(centers, p)
-            best = length(centers)
-            push!(get!(grid, k, Int[]), best)
-        end
-        ids[i] = best
-    end
-    return ids
+    n == 0 && return Float64[]
+    n_dims = hasproperty(first(sd.emitters), :z) ? 3 : 2
+    mat = permutedims(hcat(Float64[e.x for e in sd.emitters], Float64[e.y for e in sd.emitters],
+                           (n_dims == 3 ? [Float64[e.z for e in sd.emitters]] : [])...))
+    cnt = inrangecount(KDTree(mat; leafsize = 10), mat, _OCC_SEP)
+    return 1.0 ./ cnt
 end
 
 """
-Site-presence flags: which of the sites in `sites` (`_site_ids`) hold at least one
-localization flagged in `flags`.
+Occupancy of a dataset's inlier localizations: the sum of their inverse local density weights
+`w` (`_occupancy_weights`), the number of effective sites. Monotone in the flags, identical
+(up to summation rounding) under any permutation of the emitters, and equal to the number of
+covered sites when sites are compact and separated, so a site localized many times counts
+once. Overlap decisions compare this, not the inlier count, so a shift that lays frequently
+localized sites on the consensus cannot outscore the true shift. The `SMLD` method builds
+the weights itself.
 """
-function _site_presence(sites::Vector{Int}, flags::BitVector)
-    present = falses(maximum(sites; init = 0))
-    for i in eachindex(sites)
-        flags[i] && (present[sites[i]] = true)
+function _occupancy(w::Vector{Float64}, flags::BitVector)
+    t = 0.0
+    @inbounds for i in eachindex(w)
+        flags[i] && (t += w[i])
     end
-    return present
+    return t
 end
-
-"""
-Occupancy of a dataset's inlier localizations: the number of distinct sites (`_site_ids`,
-sites `_OCC_SEP` wide) holding a flagged localization, so a site localized many times counts
-once. Site membership is fixed by the dataset, not by the flags, so the score is monotone:
-more flagged localizations never lower it. Overlap decisions compare this, not the inlier
-count, so a shift that lays frequently localized sites on the consensus cannot outscore the
-true shift. The `SMLD` method builds the site ids itself.
-"""
-_occupancy(sites::Vector{Int}, flags::BitVector) = count(_site_presence(sites, flags))
-_occupancy(sd::SMLD, flags::BitVector) = _occupancy(_site_ids(sd), flags)
+_occupancy(sd::SMLD, flags::BitVector) = _occupancy(_occupancy_weights(sd), flags)
 
 "Significance of a lead in overlap: McNemar's z (`_overlap_leads`)."
 const _OVERLAP_Z = 3.0
@@ -931,12 +906,14 @@ const _OVERLAP_Z = 3.0
 """
 Whether inlier flags `a` lead `b` significantly: with `nb` localizations inlier only
 under `a` and `nc` only under `b`, McNemar's z on the discordant localizations,
-`(nb - nc) / sqrt(nb + nc)`, exceeds `z` (default `_OVERLAP_Z`). Localizations inlier under both or
+`(nb - nc) / sqrt(nb + nc)`, exceeds `z` (default `_OVERLAP_Z`). With weights `w` (`_occupancy_weights`) the discordant
+localizations are summed by weight, McNemar on effective sites. Localizations inlier under both or
 neither carry no evidence, so a few-localization lead on sparse data does not count.
 """
-function _overlap_leads(a::BitVector, b::BitVector; z::Float64 = _OVERLAP_Z)
-    nb = count(a .& .!b)
-    nc = count(b .& .!a)
+function _overlap_leads(a::BitVector, b::BitVector; z::Float64 = _OVERLAP_Z,
+                        w::Union{Nothing,Vector{Float64}} = nothing)
+    nb = w === nothing ? count(a .& .!b) : sum(w[a .& .!b]; init = 0.0)
+    nc = w === nothing ? count(b .& .!a) : sum(w[b .& .!a]; init = 0.0)
     return nb + nc > 0 && (nb - nc) > z * sqrt(nb + nc)
 end
 
@@ -951,8 +928,8 @@ Overlap arbiter over {refined, CC, incumbent} (`cc` and `in_cc` may be `nothing`
 candidate with the largest `score` of its inlier flags wins the basin (`_cc_primary_inter!`
 passes `_occupancy`), ties keeping refined, then CC, then the incumbent; `score` is called
 once per flag vector. Where `cost` is given, the candidates within `_CC_VERIFY_RADIUS` of
-that winner W, except those W leads at the site level (`_overlap_leads` on the site-presence
-sets of `sites`, default one site per localization, with `z = _TIE_Z`), form a near tie with
+that winner W, except those W leads at the site level (`_overlap_leads` with weights `w`,
+default one per localization, and `z = _TIE_Z`), form a near tie with
 W; if it holds two or more distinct shifts, the one with the lowest `cost(shift)` is kept,
 evaluated once per distinct shift. Costs within `_COST_RTOL` of the lowest count as equal and
 equal costs keep the order incumbent, refined, CC: a flat cost has resolved nothing, so the
@@ -961,7 +938,7 @@ localizations between candidates this close is noise, and the entropy cost the r
 minimizes positions the shift within the basin; a significant site-level lead is not noise.
 """
 function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVector;
-                    score = count, cost = nothing, sites = nothing)
+                    score = count, cost = nothing, w = nothing)
     sc_ref = score(in_ref)
     sc_cc = cc === nothing ? 0 : score(in_cc)
     sc_inc = score(in_inc)
@@ -973,13 +950,11 @@ function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVecto
         win, in_win, sc_win = inc, in_inc, sc_inc
     end
     cost === nothing && return win
-    site_ids = sites === nothing ? collect(1:length(in_win)) : sites
-    pres_win = _site_presence(site_ids, in_win)
     tied = Vector{Float64}[]                       # order: incumbent, refined, CC
     for (c, f) in ((inc, in_inc), (refined, in_ref), (cc, in_cc))
         c === nothing && continue
         (c === win || (norm(c .- win) < _CC_VERIFY_RADIUS &&
-                       !_overlap_leads(pres_win, _site_presence(site_ids, f); z = _TIE_Z))) || continue
+                       !_overlap_leads(in_win, f; z = _TIE_Z, w = w))) || continue
         push!(tied, c)
     end
     distinct = unique(tied)
@@ -1035,8 +1010,8 @@ function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree
     c = Float64.(cand[1:n_dims])
     in_cand = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
     in_inc  = _overlap_inliers(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
-    sites = _site_ids(sd)
-    _occupancy(sites, in_inc) > _occupancy(sites, in_cand) && return false   # reject only on evidence: ties go to the CC
+    w = _occupancy_weights(sd)
+    _occupancy(w, in_inc) > _occupancy(w, in_cand) && return false   # reject only on evidence: ties go to the CC
     inter .= c
     return true
 end
@@ -1108,7 +1083,7 @@ dataset: cross-correlate against the corrected consensus of the others, seed fro
 the CC shift unless the incumbent shift overlaps strictly better,
 entropy-refine from that seed (`findinter!`), then arbitrate {refined, CC, incumbent}
 (`_arbitrate`): the largest occupancy (`_occupancy`: inliers, a site localized many times
-counted once, by fixed site membership) picks the basin, ties keeping the refined shift, and among
+counted once, by inverse local density weights) picks the basin, ties keeping the refined shift, and among
 the candidates within `_CC_VERIFY_RADIUS` of that winner that it does not lead significantly at the
 site level, the lowest entropy cost (the refine's objective) is kept; equal costs keep the incumbent. The overlap arbiter is
 required because the merged-cloud entropy is only ~1/N sensitive to one dataset, so
@@ -1181,9 +1156,9 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
 
             # entropy-refine from the CC seed unless the incumbent overlaps strictly better (no L2 reg:
             # the seed is the anchor)
-            sites = _site_ids(sd)
-            occ_inc = _occupancy(sites, in_inc)
-            occ_cc = cc_v === nothing ? 0 : _occupancy(sites, in_cc)
+            wts = _occupancy_weights(sd)
+            occ_inc = _occupancy(wts, in_inc)
+            occ_cc = cc_v === nothing ? 0.0 : _occupancy(wts, in_cc)
             seed = (cc_v === nothing || occ_inc > occ_cc) ? inc : cc_v
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
@@ -1193,8 +1168,8 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             in_ref = _overlap_inliers(sd, refined, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # overlap arbiter over {refined, CC, incumbent}; near ties go to the lowest entropy cost
-            score = f -> f === in_inc ? occ_inc : (f === in_cc ? occ_cc : _occupancy(sites, f))
-            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc; score = score, sites = sites,
+            score = f -> f === in_inc ? occ_inc : (f === in_cc ? occ_cc : _occupancy(wts, f))
+            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc; score = score, w = wts,
                               cost = _arbiter_cost(model, smld, snap, d, others, maxn))
             model.inter[d].dm .= best
         end
