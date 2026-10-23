@@ -875,12 +875,89 @@ apart than that) sums to 1 however often it was localized.
 function _occupancy_weights(sd::SMLD)
     n = length(sd.emitters)
     n == 0 && return Float64[]
-    n_dims = hasproperty(first(sd.emitters), :z) ? 3 : 2
-    mat = permutedims(hcat(Float64[e.x for e in sd.emitters], Float64[e.y for e in sd.emitters],
-                           (n_dims == 3 ? [Float64[e.z for e in sd.emitters]] : [])...))
-    cnt = inrangecount(KDTree(mat; leafsize = 10), mat, _OCC_SEP)
-    return 1.0 ./ cnt
+    return 1.0 ./ _count_within(sd, _OCC_SEP)
 end
+
+"""
+Exact count, per localization of `sd`, of localizations (itself included) within `r`, from a
+k-d tree with a bounding box and population per node: a node whose box lies entirely within
+`r` of the query point adds its whole population and one whose box lies entirely beyond `r`
+is skipped, so only boundary leaves are checked point by point. A compact aggregate then
+costs per tree node, not per pair of localizations (`NearestNeighbors.inrangecount` visits
+every contained point). 3D uses z.
+"""
+function _count_within(sd::SMLD, r::Float64)
+    n = length(sd.emitters)
+    is3 = hasproperty(first(sd.emitters), :z)
+    P = [Float64[e.x for e in sd.emitters], Float64[e.y for e in sd.emitters],
+         is3 ? Float64[e.z for e in sd.emitters] : zeros(n)]
+    perm = collect(1:n)
+    leafsize = 32
+    nmax = 4 * cld(n, leafsize) + 4
+    lo = zeros(Int, nmax); hi = zeros(Int, nmax); left = zeros(Int, nmax); right = zeros(Int, nmax)
+    bmin = zeros(3, nmax); bmax = zeros(3, nmax)
+    nn = Ref(0)
+    function build(l, h)
+        id = (nn[] += 1)
+        lo[id] = l; hi[id] = h
+        for d in 1:3
+            v = view(P[d], view(perm, l:h))
+            bmin[d, id] = minimum(v); bmax[d, id] = maximum(v)
+        end
+        if h - l + 1 > leafsize
+            d = argmax(bmax[:, id] .- bmin[:, id])
+            idx = view(perm, l:h)
+            sort!(idx; by = i -> P[d][i])
+            m = (l + h) ÷ 2
+            left[id] = build(l, m)
+            right[id] = build(m + 1, h)
+        end
+        return id
+    end
+    build(1, n)
+    X = P[1][perm]; Y = P[2][perm]; Z = P[3][perm]
+    r2 = r * r
+    cnt = zeros(Int, n)
+    stack = Int[]
+    for q in 1:n
+        qx, qy, qz = P[1][q], P[2][q], P[3][q]
+        c = 0
+        push!(stack, 1)
+        while !isempty(stack)
+            id = pop!(stack)
+            dmin = 0.0; dmax = 0.0
+            for (d, v) in ((1, qx), (2, qy), (3, qz))
+                a = bmin[d, id] - v; b = v - bmax[d, id]
+                g = max(a, b, 0.0)
+                dmin += g * g
+                f = max(abs(bmin[d, id] - v), abs(bmax[d, id] - v))
+                dmax += f * f
+            end
+            dmin > r2 && continue
+            if dmax <= r2
+                c += hi[id] - lo[id] + 1
+            elseif left[id] == 0
+                for j in lo[id]:hi[id]
+                    (X[j] - qx)^2 + (Y[j] - qy)^2 + (Z[j] - qz)^2 <= r2 && (c += 1)
+                end
+            else
+                push!(stack, left[id], right[id])
+            end
+        end
+        cnt[q] = c
+    end
+    return cnt
+end
+
+"Relative tolerance within which occupancy sums count as equal (`_occ_gt`)."
+const _OCC_RTOL = 1e-9
+
+"""
+Whether occupancy `a` exceeds `b` by more than rounding: the sums of inverse density weights
+are equal in exact arithmetic for equal site sets but differ in the last bits by summation
+order, so every occupancy comparison goes through this.
+"""
+_occ_gt(a, b) = a > b + _OCC_RTOL * max(abs(a), abs(b), 1)
 
 """
 Occupancy of a dataset's inlier localizations: the sum of their inverse local density weights
@@ -914,7 +991,7 @@ function _overlap_leads(a::BitVector, b::BitVector; z::Float64 = _OVERLAP_Z,
                         w::Union{Nothing,Vector{Float64}} = nothing)
     nb = w === nothing ? count(a .& .!b) : sum(w[a .& .!b]; init = 0.0)
     nc = w === nothing ? count(b .& .!a) : sum(w[b .& .!a]; init = 0.0)
-    return nb + nc > 0 && (nb - nc) > z * sqrt(nb + nc)
+    return nb + nc > 0 && (nb - nc) > z * sqrt(nb + nc) + _OCC_RTOL * max(nb, nc, 1)
 end
 
 "Significance (`_overlap_leads` z) of the winner's site-level lead above which entropy cannot override it."
@@ -943,10 +1020,10 @@ function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVecto
     sc_cc = cc === nothing ? 0 : score(in_cc)
     sc_inc = score(in_inc)
     win, in_win, sc_win = refined, in_ref, sc_ref
-    if cc !== nothing && sc_cc > sc_win
+    if cc !== nothing && _occ_gt(sc_cc, sc_win)
         win, in_win, sc_win = cc, in_cc, sc_cc
     end
-    if sc_inc > sc_win
+    if _occ_gt(sc_inc, sc_win)
         win, in_win, sc_win = inc, in_inc, sc_inc
     end
     cost === nothing && return win
@@ -1011,7 +1088,7 @@ function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree
     in_cand = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
     in_inc  = _overlap_inliers(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
     w = _occupancy_weights(sd)
-    _occupancy(w, in_inc) > _occupancy(w, in_cand) && return false   # reject only on evidence: ties go to the CC
+    _occ_gt(_occupancy(w, in_inc), _occupancy(w, in_cand)) && return false   # reject only on evidence: ties go to the CC
     inter .= c
     return true
 end
@@ -1159,7 +1236,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             wts = _occupancy_weights(sd)
             occ_inc = _occupancy(wts, in_inc)
             occ_cc = cc_v === nothing ? 0.0 : _occupancy(wts, in_cc)
-            seed = (cc_v === nothing || occ_inc > occ_cc) ? inc : cc_v
+            seed = (cc_v === nothing || _occ_gt(occ_inc, occ_cc)) ? inc : cc_v
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
                        precomputed_corrected = snap, regularization_lambda = 0.0,
