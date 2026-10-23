@@ -232,19 +232,19 @@ const DC = SMLMDriftCorrection
         pts = [(i + 0.001 * j, 2.0 + 0.001 * j) for i in 1:4 for j in 0:9]
         sd = sim_points(2, pts)
         all_in = trues(length(pts))
-        @test DC._occupancy(sd, all_in) == 4
+        @test DC._occupancy(sd, all_in) ≈ 4
         # two localizations 40 nm apart are two sites
         sd = sim_points(2, [(1.0, 1.0), (1.040, 1.0)])
-        @test DC._occupancy(sd, trues(2)) == 2
+        @test DC._occupancy(sd, trues(2)) ≈ 2
         # only flagged localizations count
         sd = sim_points(2, [(1.0, 1.0), (2.0, 1.0), (3.0, 1.0), (3.001, 1.0)])
-        @test DC._occupancy(sd, BitVector([1, 0, 1, 1])) == 2
-        @test DC._occupancy(sd, falses(4)) == 0
+        @test DC._occupancy(sd, BitVector([1, 0, 1, 1])) ≈ 2
+        @test DC._occupancy(sd, falses(4)) ≈ 0
         # 3D uses z: same (x, y), 40 nm apart in z are two sites, 3 nm apart one
         sd = sim_points(3, [(1.0, 1.0, 0.0), (1.0, 1.0, 0.040)])
-        @test DC._occupancy(sd, trues(2)) == 2
+        @test DC._occupancy(sd, trues(2)) ≈ 2
         sd = sim_points(3, [(1.0, 1.0, 0.0), (1.0, 1.0, 0.003)])
-        @test DC._occupancy(sd, trues(2)) == 1
+        @test DC._occupancy(sd, trues(2)) ≈ 1
     end
 
     # -----------------------------------------------------------------------
@@ -315,35 +315,39 @@ const DC = SMLMDriftCorrection
     end
 
     # -----------------------------------------------------------------------
-    # Occupancy counts fixed sites, so it is monotone in the flags and independent of
+    # Occupancy sums inverse local density weights, so it is monotone in the flags and independent of
     # the emitter order.
     # -----------------------------------------------------------------------
-    @testset "occupancy is monotone and order independent" begin
+    @testset "occupancy is monotone, order independent, and counts compact sites" begin
         Random.seed!(11)
         (s_m, _) = simulate(StaticSMLMConfig(3.0, 0.13, 50, 1, 300, 50.0, 2, [0.0, 1.0]);
             pattern  = Nmer2D(n = 3, d = 0.03),
             molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
             camera   = IdealCamera(1:64, 1:64, 0.1))
         n = length(s_m.emitters)
-        sites = DC._site_ids(s_m)
+        w = DC._occupancy_weights(s_m)
         rng = Random.MersenneTwister(3)
         for _ in 1:50
             sub = rand(rng, n) .< 0.3
             sup = sub .| (rand(rng, n) .< 0.3)
-            @test DC._occupancy(sites, BitVector(sub)) <= DC._occupancy(sites, BitVector(sup))
+            @test DC._occupancy(w, BitVector(sub)) <= DC._occupancy(w, BitVector(sup)) + 1e-12
         end
-        perm = Random.randperm(rng, n)
-        s_p = BasicSMLD(s_m.emitters[perm], s_m.camera, 300, 1, Dict{String,Any}())
-        f = rand(rng, n) .< 0.5
-        @test DC._occupancy(DC._site_ids(s_p), BitVector(f[perm])) <= count(f)
-        @test DC._occupancy(sites, BitVector(trues(n))) == length(unique(sites))
+        for _ in 1:10
+            perm = Random.randperm(rng, n)
+            s_p = BasicSMLD(s_m.emitters[perm], s_m.camera, 300, 1, Dict{String,Any}())
+            f = BitVector(rand(rng, n) .< 0.5)
+            @test isapprox(DC._occupancy(DC._occupancy_weights(s_p), f[perm]), DC._occupancy(w, f); rtol = 1e-12)
+        end
+        # compact sites (k copies within a few nm, sites > 60 nm apart): occupancy = covered sites
+        pts = [(1.0 + 0.1 * i + 0.002 * c, 1.0 + 0.001 * c) for i in 0:9 for c in 0:(i % 4 + 1)]
+        sd = sim_points(2, pts)
+        site_of = [i for i in 0:9 for c in 0:(i % 4 + 1)]
+        for covered in (0:9, [1, 4, 7])
+            f = BitVector([i in covered for i in site_of])
+            @test DC._occupancy(sd, f) ≈ length(covered)
+        end
     end
 
-    # -----------------------------------------------------------------------
-    # Codex review of b2795da. Target triples straddle a site boundary; a wrong CC (3 um)
-    # covers four target localizations on false reference sites, zero covers all seven.
-    # Greedy per-candidate thinning scored zero 3 against 4 and `:fft` applied 3 um.
-    # -----------------------------------------------------------------------
     sim_ds_points(pts_by_ds) = begin
         Random.seed!(5)
         (s_o, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [-1.0, 1.0]);
@@ -357,6 +361,32 @@ const DC = SMLMDriftCorrection
         end
         BasicSMLD(identity.(em), s_o.camera, 300, length(pts_by_ds), Dict{String,Any}())
     end
+    # Codex review of 912f617: a center that matches neither candidate must not merge two
+    # inlier groups 36 nm apart when it comes first in the emitter order.
+    @testset "occupancy: unmatched centers do not merge groups (Codex 912f617)" begin
+        for centers_first in (true, false)
+            tgt = Tuple{Float64,Float64}[]
+            for (cx, cy) in ((4.010, 1.0), (4.030, 2.0))
+                grp = vcat([(cx - 0.018, cy) for _ in 1:10], [(cx + 0.018, cy) for _ in 1:10])
+                centers_first ? append!(tgt, [(cx, cy)], grp) : append!(tgt, grp, [(cx, cy)])
+            end
+            for p in ((5.0, 4.0), (5.2, 5.0), (5.7, 4.3)); append!(tgt, fill(p, 4)); end
+            ref = Tuple{Float64,Float64}[]
+            for cy in (1.0, 2.0), sgn in (-1, 1); append!(ref, fill(((cy == 1.0 ? 4.010 : 4.030) + sgn * 0.040, cy), 4)); end
+            for p in ((5.0, 4.0), (5.2, 5.0), (5.7, 4.3)); append!(ref, fill((p[1] - 3.0, p[2]), 4)); end
+            smld = sim_ds_points([ref, tgt])
+            for q in (:fft, :singlepass)
+                (_, info) = DC.driftcorrect(smld; quality = q, degree = 0)
+                @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
+            end
+        end
+    end
+
+    # -----------------------------------------------------------------------
+    # Codex review of b2795da. Target triples straddle a site boundary; a wrong CC (3 um)
+    # covers four target localizations on false reference sites, zero covers all seven.
+    # Greedy per-candidate thinning scored zero 3 against 4 and `:fft` applied 3 um.
+    # -----------------------------------------------------------------------
     @testset "occupancy: a superset of inliers never loses (Codex P1)" begin
         tgt = Tuple{Float64,Float64}[]
         for δ in (0.0, -0.018, 0.018)
