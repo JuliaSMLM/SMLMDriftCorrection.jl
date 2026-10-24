@@ -188,7 +188,7 @@ The algorithm uses **entropy minimization** (Cnossen et al., 2021) with **Legend
 
 1. **Intra-dataset**: For each dataset, fit a Legendre polynomial (degree 2 by default) to model drift over time. Uses KL divergence-based entropy as cost function with adaptive KDTree neighbor rebuilding. Threaded across datasets.
 
-2. **Inter-dataset**: Align datasets using constant shifts via a cross-correlation seed plus entropy refinement. Registered mode aligns each dataset against the corrected consensus of the others (keeping whichever of {CC seed, refined} better matches by overlap, since the global entropy is nearly blind to a single dataset's offset); continuous mode aligns consecutive-chunk boundaries by cross-correlation, with endpoint-chaining as a per-boundary fallback.
+2. **Inter-dataset**: Align datasets using constant shifts via a cross-correlation seed plus entropy refinement. Registered mode aligns each dataset against the corrected consensus of the others (choosing the shift by overlap: occupancy (localizations near the consensus, a site localized many times counted about once) picks the basin among {refined, CC, current}; candidates within 30 nm of the winner that it does not lead significantly are settled by the merged-cloud entropy, and equal costs keep the current shift; the global entropy alone is nearly blind to a single dataset's offset); continuous mode aligns consecutive-chunk boundaries by cross-correlation, with endpoint-chaining as a per-boundary fallback.
 
 3. **Iterative** (`:iterative` quality only): Repeat intra↔inter until inter-shift changes converge below tolerance.
 

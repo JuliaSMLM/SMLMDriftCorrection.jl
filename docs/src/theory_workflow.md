@@ -142,7 +142,7 @@ The default tier. Performs one pass of entropy-based intra-dataset correction fo
    - Minimize entropy upper bound using Nelder-Mead optimization (10,000 iteration limit)
    - Adaptive KDTree rebuilding avoids unnecessary recomputation
 2. **Inter-dataset alignment** -- mode-specific:
-   - **Registered**: CC-primary, as described under Dataset Modes. For each dataset (threaded over a snapshot of the corrected coordinates), cross-correlate against the corrected consensus of the others (seed), refine that seed via BFGS on the merged-cloud entropy, and keep whichever of {seed, refined} has higher consensus overlap. The reference is included and the result is re-anchored.
+   - **Registered**: CC-primary, as described under Dataset Modes. For each dataset (threaded over a snapshot of the corrected coordinates), cross-correlate against the corrected consensus of the others (seed), refine that seed via BFGS on the merged-cloud entropy, and let the overlap arbiter choose among {refined, CC, current}: occupancy picks the basin, candidates within 30 nm of the winner that it does not lead significantly are settled by the entropy cost, and equal costs keep the current shift. The reference is included and the result is re-anchored.
    - **Continuous**: CC-seeded per boundary. The boundary cross-correlations walk the chunks **sequentially** (each placement builds on the previous chunk's), falling back to endpoint-chaining only where CC cannot lock on; the entropy refine that follows (with boundary-gap regularization) is threaded against chunk 1, then sequential against earlier chunks.
 3. Apply corrections to produce the final SMLD
 
