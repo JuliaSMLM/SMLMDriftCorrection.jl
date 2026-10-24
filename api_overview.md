@@ -27,7 +27,7 @@ Configuration for drift correction. All parameters have sensible defaults.
 - `dataset_mode::Symbol = :registered`: Multi-dataset handling (`:registered` or `:continuous`)
 - `chunk_frames::Int = 0`: Split datasets into chunks of N frames (continuous mode)
 - `n_chunks::Int = 0`: Alternative: number of chunks per dataset
-- `maxn::Int = 200`: Maximum neighbors for entropy calculation
+- `maxn::Int = 100`: Maximum neighbors for entropy calculation
 - `max_iterations::Int = 10`: Maximum iterations for `:iterative` mode
 - `convergence_tol::Float64 = 0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start::Union{Nothing, AbstractIntraInter} = nothing`: Previous `info.model` for warm starting

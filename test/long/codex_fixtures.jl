@@ -1,0 +1,102 @@
+# Codex review fixtures (4323bf9 rounding, 912f617 order, b2795da P1 and P2): hand-placed localization arrangements through driftcorrect.
+using Test, SMLMDriftCorrection, SMLMSim, Random
+
+const DC = SMLMDriftCorrection
+
+sim_ds_points(pts_by_ds) = begin
+    Random.seed!(5)
+    (s_o, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [-1.0, 1.0]);
+        pattern  = Nmer2D(n = 1, d = 0.0),
+        molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
+        camera   = IdealCamera(1:64, 1:64, 0.1))
+    em = []
+    for (d, pts) in enumerate(pts_by_ds), p in pts
+        e = deepcopy(s_o.emitters[1]); e.x = p[1]; e.y = p[2]; e.dataset = d
+        push!(em, e)
+    end
+    BasicSMLD(identity.(em), s_o.camera, 300, length(pts_by_ds), Dict{String,Any}())
+end
+# Codex review of 4323bf9: occupancy sums that are equal in exact arithmetic differ in the
+# last bits (10.0 vs 9.999999999999982) and must not decide the guard. Ten A and ten B
+# compact motifs; the target holds 6:15 copies of each A shifted by (3, 0) and a varying
+# number of B copies, the reference four copies of each. Both candidates cover ten sites.
+@testset "occupancy ties are decided with a tolerance (Codex 4323bf9)" begin
+    A = [(0.600 + 0.110i, 0.600 + 0.023i^2) for i in 0:9]
+    B = [(4.400 + 0.105i, 4.400 + 0.011i^2) for i in 0:9]
+    ref = reduce(vcat, [fill(p, 4) for p in vcat(A, B)])
+    nb = [3, 3, 3, 4, 4, 3, 2, 4, 4, 2]
+    tgt = vcat(reduce(vcat, [fill((p[1] + 3.0, p[2]), 5 + i) for (i, p) in enumerate(A)]),
+               reduce(vcat, [fill(p, nb[i]) for (i, p) in enumerate(B)]))
+    smld = sim_ds_points([ref, tgt])
+    shifts = Vector{Float64}[]
+    rng = Random.MersenneTwister(77)
+    for k in 1:6
+        sm = k == 1 ? smld : begin
+            em = deepcopy(smld.emitters)
+            i2 = findall(e -> e.dataset == 2, em)
+            em[i2] = em[i2][Random.randperm(rng, length(i2))]
+            BasicSMLD(em, smld.camera, 300, 2, Dict{String,Any}())
+        end
+        (_, info) = DC.driftcorrect(sm; quality = :fft, degree = 0)
+        push!(shifts, info.model.inter[2].dm .- info.model.inter[1].dm)
+    end
+    @test all(sh -> maximum(abs.(sh .- [3.0, 0.0])) < 0.005, shifts)
+end
+
+# Codex review of 912f617: a center that matches neither candidate must not merge two
+# inlier groups 36 nm apart when it comes first in the emitter order.
+@testset "occupancy: unmatched centers do not merge groups (Codex 912f617)" begin
+    for centers_first in (true, false)
+        tgt = Tuple{Float64,Float64}[]
+        for (cx, cy) in ((4.010, 1.0), (4.030, 2.0))
+            grp = vcat([(cx - 0.018, cy) for _ in 1:10], [(cx + 0.018, cy) for _ in 1:10])
+            centers_first ? append!(tgt, [(cx, cy)], grp) : append!(tgt, grp, [(cx, cy)])
+        end
+        for p in ((5.0, 4.0), (5.2, 5.0), (5.7, 4.3)); append!(tgt, fill(p, 4)); end
+        ref = Tuple{Float64,Float64}[]
+        for cy in (1.0, 2.0), sgn in (-1, 1); append!(ref, fill(((cy == 1.0 ? 4.010 : 4.030) + sgn * 0.040, cy), 4)); end
+        for p in ((5.0, 4.0), (5.2, 5.0), (5.7, 4.3)); append!(ref, fill((p[1] - 3.0, p[2]), 4)); end
+        smld = sim_ds_points([ref, tgt])
+        for q in (:fft, :singlepass)
+            (_, info) = DC.driftcorrect(smld; quality = q, degree = 0)
+            @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
+        end
+    end
+end
+
+# -----------------------------------------------------------------------
+# Codex review of b2795da. Target triples straddle a site boundary; a wrong CC (3 um)
+# covers four target localizations on false reference sites, zero covers all seven.
+# Greedy per-candidate thinning scored zero 3 against 4 and `:fft` applied 3 um.
+# -----------------------------------------------------------------------
+@testset "occupancy: a superset of inliers never loses (Codex P1)" begin
+    tgt = Tuple{Float64,Float64}[]
+    for δ in (0.0, -0.018, 0.018)
+        push!(tgt, (4.010 + δ, 1.0)); push!(tgt, (4.030 + δ, 2.0))
+    end
+    push!(tgt, (5.0, 3.0))
+    ref = [(4.010, 1.0), (4.030, 2.0), (5.0, 3.0)]
+    for sgn in (-1, 1), _ in 1:4
+        push!(ref, (1.010 + sgn * 0.034, 1.0)); push!(ref, (1.030 + sgn * 0.034, 2.0))
+    end
+    for order in (identity, reverse)
+        smld = sim_ds_points([ref, order(tgt)])
+        (_, info) = DC.driftcorrect(smld; quality = :fft, degree = 0)
+        @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
+    end
+end
+
+# Codex P2: the zero incumbent covers 49 sites, a refine ~16 nm away 40, and the real
+# entropy cost prefers the biased reference; the 40-site shift must not win.
+@testset "entropy cannot buy back lost coverage (Codex P2)" begin
+    g = [(1.0 + 0.2 * i, 1.0 + 0.2 * j) for i in 0:6 for j in 0:6]
+    ref = Tuple{Float64,Float64}[]
+    for p in g[1:40]
+        push!(ref, p)
+        for _ in 1:10; push!(ref, (p[1] - 0.020, p[2])); end
+    end
+    for p in g[41:49]; push!(ref, (p[1] + 0.020, p[2])); end
+    smld = sim_ds_points([ref, g])
+    (_, info) = DC.driftcorrect(smld; quality = :singlepass, degree = 0)
+    @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
+end

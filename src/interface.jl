@@ -19,7 +19,7 @@ entropy-based cost function and adaptive KDTree neighbor building.
     - `:continuous`: one long acquisition split into files
 - `chunk_frames=0`: For continuous mode, split each dataset into chunks of this many frames
 - `n_chunks=0`: Alternative to chunk_frames - specify number of chunks per dataset
-- `maxn=200`: Maximum number of neighbors for entropy calculation
+- `maxn=100`: Maximum number of neighbors for entropy calculation
 - `max_iterations=10`: Maximum iterations for `:iterative` mode
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start=nothing`: Previous model for warm starting optimization
@@ -220,7 +220,7 @@ Continue drift correction from a previous result using the model from info.
 - `dataset_mode=:registered`: Dataset mode (`:registered` or `:continuous`)
 - `max_iterations=10`: Additional iterations to run
 - `convergence_tol=0.001`: Convergence tolerance (μm)
-- `maxn=200`: Maximum neighbors for entropy calculation
+- `maxn=100`: Maximum neighbors for entropy calculation
 - `verbose=0`: Verbosity level
 """
 function driftcorrect(smld::SMLD, info::DriftInfo;

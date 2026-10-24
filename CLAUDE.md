@@ -14,9 +14,14 @@ julia --project -e 'using Pkg; Pkg.test()'                    # Core group (what
 GROUP=Long julia --project -e 'using Pkg; Pkg.test()'         # Long group (test/long/)
 GROUP=Everything julia --project -e 'using Pkg; Pkg.test()'   # Core + Long (the recorded run)
 
+# Record the Everything run for the lab/tests status (from the package root, clean pushed checkout)
+julia /home/kalidke/julia_shared_dev/kalidke/admiral/conventions/templates/package/record_tests.jl
+
 # Build documentation
 julia --project=docs docs/make.jl
 ```
+
+Core is the bare function tests (test/*.jl, about 40 s); GitHub CI runs it. Long (test/long/) runs the pipeline end to end on simulated data (cross-basin seeds, Codex fixtures, sweeps, hot spots, continuous mode, the extended suite) and runs locally.
 
 ### Project Environments
 - Root `Project.toml`: Main package
@@ -107,6 +112,12 @@ The reference (DS1) is included so a misaligned reference is fixable, then the r
 **Hot spots capture a raw-count CC (fixed in 0.2.9).** `findshift` takes the argmax of an *unnormalized* histogram cross-correlation over the whole field (registered callers then drop a candidate with any component over 5 μm; the `:fft` tier has no such cut). A bright aggregate localized thousands of times in one 50 nm bin, present in some datasets only (it bleaches), dominates a raw-count CC: the peak lands wherever the other dataset's densest cluster overlays the hot spot, microns from the true shift. In 0.2.7–0.2.8 the cold start accepted any such peak under 5 μm and the arbiter only compared the CC seed with its own refine, so 8 of 102 genmab cohort cells (registered, `:iterative`, `shift_scale=0.05`) came back with datasets 1.5–6 μm off (reported as `converged` in 2 iterations, entropy unchanged to 4e-6); milder captures left single datasets tens of nm off on cells that looked fine (HeLa WT Cell_01 DS2 ~60 nm, HeLa E345R Cell_02 DS1-4). The `:fft` tier had the same exposure (the 2026-09 project-sr-spt report of datasets thrown 2-15 μm). 0.2.9 fixes the cause by capping the CC histograms (`_CC_MAXCOUNT = 4`), with the incumbent kept as an arbiter candidate as a backstop. Chosen over four rounds of richer arbiter designs (sub-bin grid search, count-then-distance ranking) because each round's review found a new failure and the cap measured best: a 40-scenario randomized SMLMSim sweep with known truth had 0 failures (worst 21.5 nm registered, 38.5 nm `:fft`; base 0.2.8 15/40, worst 5.6 μm), all 8 cells back at 0.97–1.08× April, and the best independent per-dataset co-localization on 18 real cells (`dev/output/decision-0.2.9-options.md`, local). Regression tests: CI "Hot spot in early datasets: CC-primary inter + :fft (registered)", "CC-primary inter: incumbent just past the radius vs captured CC" (includes raw vs capped `findshift`), "Overlap guard accepts a quantized CC (sub-bin shift, sparse)", "Overlap guard: zero-overlap tie goes to the CC", "findshift 3D: thin z stack"; extended "Registered driftcorrect: hot spot in early datasets" (< 30 nm) and "Unshared hot spot in the scored dataset".
 
 **Why CC-primary — entropy blindness.** The merged-cloud entropy is a *global* cost: one dataset being offset is only ~1/N of the cloud, so a ~50 nm error in a single dataset moves the entropy by <1 part in 10⁶. Entropy-*only* inter alignment therefore has almost no gradient to align an individual dataset and can leave one badly misaligned (this produced the visible single-dataset ghost in some cohort cells); for the same reason the old `:iterative` loop could wander the inter parameters without lowering the cost (see Quality Tiers). Making CC the primary objective supplies the global signal entropy lacks, while the overlap arbiter keeps the entropy refine from regressing it. Validated on real cohort cells (reference-outlier DS1 58→3 nm, multi-outlier max 72→7 nm) and by an *independent* cross-dataset NN co-localization metric that improved on every dataset of the original bug cell. Note: on diffuse/low-contrast cells CC is imprecise (no structure to lock onto), but the overlap arbiter caps the damage by never accepting a shift that lowers consensus overlap. **Continuous mode uses a different mechanism** — consecutive-chunk cross-correlation seeding (see Dataset Modes / Continuous Mode Internals), not the merged-cloud consensus (whose cloud is smeared across chunks by the drift itself). Validated on real cohort data (DNA-PAINT 593→10 nm, ruler 23→5 nm).
+
+### Known limits (0.2.10)
+
+- Dilution: unmatched localizations within 30 nm of matched ones lower the correct shift's occupancy, and on a hand-placed arrangement `:fft` can then accept a wrong basin.
+- A reference dataset made mostly of structure the other dataset lacks can prefer a wrong basin in registered mode (0.2.9 too).
+- On the extended iterative fixture the sub-pixel CC fit costs about 8.7 nm mean RMSD over 16 seeds against 0.2.9 (t 1.8, not significant); the 42 real runs, all iterative, show no loss.
 
 ### Quality Tiers
 
@@ -206,7 +217,7 @@ smld_roi = filter_emitters(smld, mask)
 
 - `quality=:singlepass`: Quality tier (`:fft`, `:singlepass`, `:iterative`)
 - `degree=2`: Polynomial degree for intra-dataset drift
-- `maxn=200`: Maximum neighbors for entropy calculation
+- `maxn=100`: Maximum neighbors for entropy calculation
 - `dataset_mode=:registered`: How to handle multi-dataset alignment
 - `chunk_frames` / `n_chunks`: Chunking for continuous mode
 - `max_iterations=10`: Maximum iterations for `:iterative` mode

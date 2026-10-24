@@ -7,7 +7,7 @@
 #
 #     GROUP=Long julia --project -e 'using Pkg; Pkg.test()'
 #
-# The Core group (test/core.jl) is what a plain `Pkg.test()` and CI run.
+# The Core group (test/*.jl) is what a plain `Pkg.test()` and CI run.
 
 using SMLMDriftCorrection
 DC = SMLMDriftCorrection
