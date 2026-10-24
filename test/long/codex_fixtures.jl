@@ -89,3 +89,20 @@ end
     (_, info) = DC.driftcorrect(smld; quality = :singlepass, degree = 0)
     @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
 end
+
+# Codex review of b1dbd6a: with weights restricted to the disagreeing localizations the sums
+# shrank and a relative tolerance shrank with them, so a 1e-8 difference decided. Each
+# candidate has one exclusive inlier, in a compact group of 10,000 (incumbent) or 10,001 (CC)
+# localizations: weights 1e-4 and 0.99990001e-4 on top of 100 sites covered under both shifts
+# (the reference holds A and A + 3 um, the target A + 3 um). The tie goes to the CC.
+@testset "occupancy tolerance is absolute (Codex b1dbd6a)" begin
+    A = [(0.600 + 0.110i, 0.600 + 0.023i^2) for i in 0:99]
+    qb = (14.0, 3.0)    # incumbent-only group: one localization at qb, the rest 20 nm away
+    qa = (3.0 + 15.0, 5.0)    # CC-only group (at +3 um in x, as A)
+    grp(q, n) = vcat([q], fill((q[1] + 0.020, q[2]), n - 1))
+    ref = vcat(A, [(p[1] + 3.0, p[2]) for p in A], [(qb[1] - 0.0295, qb[2]), (qa[1] - 3.0 - 0.0295, qa[2])])
+    tgt = vcat([(p[1] + 3.0, p[2]) for p in A], grp(qb, 10_000), grp(qa, 10_001))
+    smld = points_smld([ref, tgt])
+    (_, info) = DC.driftcorrect(smld; quality = :fft, degree = 0)
+    @test abs((info.model.inter[2].dm .- info.model.inter[1].dm)[1] - 3.0) < 0.01
+end
