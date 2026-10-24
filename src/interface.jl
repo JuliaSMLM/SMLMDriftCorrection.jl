@@ -1087,6 +1087,11 @@ function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree
     c = Float64.(cand[1:n_dims])
     in_cand = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
     in_inc  = _overlap_inliers(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
+    # identical flags score identically whatever the weights: a tie, which goes to the CC
+    if in_cand == in_inc
+        inter .= c
+        return true
+    end
     w = _occupancy_weights(sd)
     _occ_gt(_occupancy(w, in_inc), _occupancy(w, in_cand)) && return false   # reject only on evidence: ties go to the CC
     inter .= c
@@ -1233,9 +1238,13 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
 
             # entropy-refine from the CC seed unless the incumbent overlaps strictly better (no L2 reg:
             # the seed is the anchor)
-            wts = _occupancy_weights(sd)
-            occ_inc = _occupancy(wts, in_inc)
-            occ_cc = cc_v === nothing ? 0.0 : _occupancy(wts, in_cc)
+            wts_ref = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+            # weights only when two candidates' flags differ: identical flags tie whatever the
+            # weights, and the tie gate then sees no discordant localizations
+            getw() = (wts_ref[] === nothing && (wts_ref[] = _occupancy_weights(sd)); wts_ref[])
+            same_cc = cc_v === nothing || in_cc == in_inc
+            occ_inc = same_cc ? 0.0 : _occupancy(getw(), in_inc)
+            occ_cc = same_cc ? 0.0 : _occupancy(getw(), in_cc)
             seed = (cc_v === nothing || _occ_gt(occ_inc, occ_cc)) ? inc : cc_v
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
@@ -1245,8 +1254,10 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             in_ref = _overlap_inliers(sd, refined, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # overlap arbiter over {refined, CC, incumbent}; near ties go to the lowest entropy cost
-            score = f -> f === in_inc ? occ_inc : (f === in_cc ? occ_cc : _occupancy(wts, f))
-            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc; score = score, w = wts,
+            all_same = same_cc && in_ref == in_inc
+            score = all_same ? (f -> 0.0) : (f -> _occupancy(getw(), f))
+            best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc; score = score,
+                              w = all_same ? nothing : getw(),
                               cost = _arbiter_cost(model, smld, snap, d, others, maxn))
             model.inter[d].dm .= best
         end
