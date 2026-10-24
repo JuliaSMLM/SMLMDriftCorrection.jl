@@ -30,52 +30,87 @@ range counts (`_count_within`). A node whose box lies entirely within `r` of a q
 adds its whole population and one whose box lies entirely beyond `r` is skipped, so only
 boundary leaves are checked point by point. A compact aggregate then costs per tree node,
 not per pair of localizations (`NearestNeighbors.inrangecount` visits every contained
-point). Node `id` holds the points `perm[lo[id]:hi[id]]`; `left[id] == 0` marks a leaf.
+point). Coordinates are plain `N`-row matrices (`pts` as given, `spts` in tree order) and the
+node boxes flat vectors with `N` entries per node, so the query loop does scalar arithmetic
+only. Node `id` holds the points `perm[lo[id]:hi[id]]`; `left[id] == 0` marks a leaf.
 """
 struct _PopKDTree{N}
-    pts::Vector{NTuple{N,Float64}}      # in the order given
-    perm::Vector{Int}                   # tree order -> index into `pts`
+    pts::Matrix{Float64}
+    spts::Matrix{Float64}
+    perm::Vector{Int}                   # tree order -> column of `pts`
     lo::Vector{Int}
     hi::Vector{Int}
     left::Vector{Int}
     right::Vector{Int}
-    bmin::Vector{NTuple{N,Float64}}
-    bmax::Vector{NTuple{N,Float64}}
+    bmin::Vector{Float64}               # node `id`, dimension `d` at `(id - 1) * N + d`
+    bmax::Vector{Float64}
 end
 
 "Most points in a `_PopKDTree` leaf."
 const _KDTREE_LEAFSIZE = 32
 
-_point(e, ::Val{2}) = (Float64(e.x), Float64(e.y))
-_point(e, ::Val{3}) = (Float64(e.x), Float64(e.y), Float64(e.z))
-
-function _PopKDTree(pts::Vector{NTuple{N,Float64}}) where {N}
-    n = length(pts)
-    tree = _PopKDTree{N}(pts, collect(1:n), Int[], Int[], Int[], Int[],
-                         NTuple{N,Float64}[], NTuple{N,Float64}[])
+function _PopKDTree(pts::Matrix{Float64})
+    N, n = size(pts)
+    tree = _PopKDTree{N}(pts, pts, collect(1:n), Int[], Int[], Int[], Int[], Float64[], Float64[])
     n > 0 && _build!(tree, 1, n)
-    return tree
+    return _PopKDTree{N}(pts, pts[:, tree.perm], tree.perm, tree.lo, tree.hi, tree.left,
+                         tree.right, tree.bmin, tree.bmax)
 end
-_PopKDTree(sd::SMLD) = _PopKDTree(NTuple{nDims(sd),Float64}[_point(e, Val(nDims(sd))) for e in sd.emitters])
+function _PopKDTree(sd::SMLD)
+    N = nDims(sd)
+    pts = Matrix{Float64}(undef, N, length(sd.emitters))
+    for (i, e) in enumerate(sd.emitters)
+        pts[1, i] = e.x; pts[2, i] = e.y
+        N == 3 && (pts[3, i] = e.z)
+    end
+    return _PopKDTree(pts)
+end
+
+# Median select (Wirth): reorder `perm[l:h]` so that every point before position `k` has
+# coordinate `d` <= that of the one at `k`, and every point after it >= (O(n), not a sort;
+# `partialsort!` does not partition, which leaves overlapping boxes and a slow query).
+function _select!(perm::Vector{Int}, pts::Matrix{Float64}, d::Int, l::Int, h::Int, k::Int)
+    @inbounds while l < h
+        pivot = pts[d, perm[(l + h) >> 1]]
+        i, j = l, h
+        while i <= j
+            while pts[d, perm[i]] < pivot; i += 1; end
+            while pts[d, perm[j]] > pivot; j -= 1; end
+            if i <= j
+                perm[i], perm[j] = perm[j], perm[i]
+                i += 1; j -= 1
+            end
+        end
+        if k <= j
+            h = j
+        elseif k >= i
+            l = i
+        else
+            break
+        end
+    end
+    return perm
+end
 
 # Build the node over tree positions `l:h` and return its id; children split at the median of
-# the widest dimension (`partialsort!`; the bounds come from the points, so a split that is
-# not a clean partition costs speed, never correctness).
+# the widest dimension.
 function _build!(tree::_PopKDTree{N}, l::Int, h::Int) where {N}
     pts, perm = tree.pts, tree.perm
-    bmin = bmax = pts[perm[l]]
-    for k in (l + 1):h
-        p = pts[perm[k]]
-        bmin = map(min, bmin, p)
-        bmax = map(max, bmax, p)
-    end
+    id = length(tree.lo) + 1
     push!(tree.lo, l); push!(tree.hi, h); push!(tree.left, 0); push!(tree.right, 0)
-    push!(tree.bmin, bmin); push!(tree.bmax, bmax)
-    id = length(tree.lo)
+    widest, d = -1.0, 1
+    for k in 1:N
+        lo = hi = pts[k, perm[l]]
+        for j in (l + 1):h
+            v = pts[k, perm[j]]
+            lo = min(lo, v); hi = max(hi, v)
+        end
+        push!(tree.bmin, lo); push!(tree.bmax, hi)
+        hi - lo > widest && ((widest, d) = (hi - lo, k))
+    end
     if h - l + 1 > _KDTREE_LEAFSIZE
-        d = argmax(bmax .- bmin)
         m = (l + h) ÷ 2
-        partialsort!(view(perm, l:h), m - l + 1; by = i -> pts[i][d])
+        _select!(perm, pts, d, l, h, m)
         tree.left[id] = _build!(tree, l, m)
         tree.right[id] = _build!(tree, m + 1, h)
     end
@@ -84,26 +119,26 @@ end
 
 """
 Exact count of the points of `tree` (the query point itself included) within `r` of each
-point `tree.pts[q]`, `q` in `queries`.
+point `tree.pts[:, q]`, `q` in `queries`.
 """
 function _count_within(tree::_PopKDTree{N}, r::Float64, queries::AbstractVector{Int}) where {N}
-    isempty(tree.pts) && return zeros(Int, length(queries))
     r2 = r * r
-    spts = tree.pts[tree.perm]
+    pts, spts, bmin, bmax = tree.pts, tree.spts, tree.bmin, tree.bmax
     cnt = zeros(Int, length(queries))
+    isempty(pts) && return cnt
     stack = Int[]
-    for (iq, q) in enumerate(queries)
-        qp = tree.pts[q]
+    @inbounds for (iq, q) in enumerate(queries)
         c = 0
         push!(stack, 1)
         while !isempty(stack)
             id = pop!(stack)
             dmin = 0.0; dmax = 0.0
             for d in 1:N
-                a = tree.bmin[id][d] - qp[d]; b = qp[d] - tree.bmax[id][d]
+                v = pts[d, q]
+                a = bmin[(id - 1) * N + d] - v; b = v - bmax[(id - 1) * N + d]
                 g = max(a, b, 0.0)
                 dmin += g * g
-                f = max(abs(tree.bmin[id][d] - qp[d]), abs(tree.bmax[id][d] - qp[d]))
+                f = max(abs(a), abs(b))   # the farther box face
                 dmax += f * f
             end
             dmin > r2 && continue
@@ -113,7 +148,7 @@ function _count_within(tree::_PopKDTree{N}, r::Float64, queries::AbstractVector{
                 for j in tree.lo[id]:tree.hi[id]
                     s = 0.0
                     for d in 1:N
-                        s += (spts[j][d] - qp[d])^2
+                        s += (spts[d, j] - pts[d, q])^2
                     end
                     s <= r2 && (c += 1)
                 end
