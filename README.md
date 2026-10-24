@@ -44,7 +44,7 @@ For complete SMLM workflows (detection + fitting + frame-connection + drift corr
 | `dataset_mode` | `:registered` | Multi-dataset handling (`:registered` or `:continuous`) |
 | `chunk_frames` | `0` | Split datasets into chunks of N frames (continuous mode) |
 | `n_chunks` | `0` | Alternative: number of chunks per dataset |
-| `maxn` | `200` | Maximum neighbors for entropy calculation |
+| `maxn` | `100` | Maximum neighbors for entropy calculation |
 | `max_iterations` | `10` | Maximum iterations for `:iterative` mode |
 | `convergence_tol` | `0.001` | Convergence tolerance (μm) for `:iterative` mode |
 | `warm_start` | `nothing` | Previous `info.model` for warm starting |

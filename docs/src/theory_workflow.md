@@ -56,7 +56,7 @@ D_{\text{KL}}(i, j) = \frac{1}{2}\sum_{k=1}^{K} \left[\log\frac{\sigma_{j,k}^2}{
 
 The drift parameters enter through the corrected positions ``\mu_{i,k}``. When drift is correctly removed, localizations from the same emitter cluster tightly, the KL divergences shrink, and the entropy decreases.
 
-For computational efficiency, the pairwise sum is truncated to the **k nearest neighbors** of each localization (default ``k = 200``), computed via KDTree. The KDTree is rebuilt adaptively -- only when the drift estimate changes by more than 100 nm -- avoiding ``O(N \log N)`` rebuilds on every optimizer iteration.
+For computational efficiency, the pairwise sum is truncated to the **k nearest neighbors** of each localization (default ``k = 100``), computed via KDTree. The KDTree is rebuilt adaptively -- only when the drift estimate changes by more than 100 nm -- avoiding ``O(N \log N)`` rebuilds on every optimizer iteration.
 
 ### Update 2: Legendre Polynomial Basis
 
