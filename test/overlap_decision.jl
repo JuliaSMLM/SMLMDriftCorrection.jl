@@ -2,6 +2,7 @@
 using Test, SMLMDriftCorrection, SMLMSim, Random
 
 const DC = SMLMDriftCorrection
+include("points_smld.jl")
 
 # -----------------------------------------------------------------------
 # Overlap decisions need a significant lead: McNemar's z on the discordant
@@ -21,38 +22,23 @@ end
 # Occupancy: inlier localizations kept when each is dropped if an already-kept
 # inlier lies within _OCC_SEP, so a site localized many times counts once.
 # -----------------------------------------------------------------------
-# SMLMSim emitters repositioned at the given (x, y[, z]) points
-sim_points(nd, pts) = begin
-    Random.seed!(5)
-    (s_o, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, nd, [-1.0, 1.0]);
-        pattern  = nd == 2 ? Nmer2D(n = 1, d = 0.0) : Nmer3D(n = 1, d = 0.0),
-        molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
-        camera   = IdealCamera(1:64, 1:64, 0.1))
-    em = [deepcopy(s_o.emitters[1]) for _ in pts]
-    for (e, p) in zip(em, pts)
-        e.x = p[1]; e.y = p[2]
-        nd == 3 && (e.z = p[3])
-    end
-    BasicSMLD(em, s_o.camera, 300, 1, Dict{String,Any}())
-end
-
 @testset "occupancy" begin
     # 4 sites 1 um apart, each localized 10 times within 3 nm: occupancy 4, count 40
     pts = [(i + 0.001 * j, 2.0 + 0.001 * j) for i in 1:4 for j in 0:9]
-    sd = sim_points(2, pts)
+    sd = points_smld([pts])
     all_in = trues(length(pts))
     @test DC._occupancy(sd, all_in) ≈ 4
     # two localizations 40 nm apart are two sites
-    sd = sim_points(2, [(1.0, 1.0), (1.040, 1.0)])
+    sd = points_smld([[(1.0, 1.0), (1.040, 1.0)]])
     @test DC._occupancy(sd, trues(2)) ≈ 2
     # only flagged localizations count
-    sd = sim_points(2, [(1.0, 1.0), (2.0, 1.0), (3.0, 1.0), (3.001, 1.0)])
+    sd = points_smld([[(1.0, 1.0), (2.0, 1.0), (3.0, 1.0), (3.001, 1.0)]])
     @test DC._occupancy(sd, BitVector([1, 0, 1, 1])) ≈ 2
     @test DC._occupancy(sd, falses(4)) ≈ 0
     # 3D uses z: same (x, y), 40 nm apart in z are two sites, 3 nm apart one
-    sd = sim_points(3, [(1.0, 1.0, 0.0), (1.0, 1.0, 0.040)])
+    sd = points_smld([[(1.0, 1.0, 0.0), (1.0, 1.0, 0.040)]])
     @test DC._occupancy(sd, trues(2)) ≈ 2
-    sd = sim_points(3, [(1.0, 1.0, 0.0), (1.0, 1.0, 0.003)])
+    sd = points_smld([[(1.0, 1.0, 0.0), (1.0, 1.0, 0.003)]])
     @test DC._occupancy(sd, trues(2)) ≈ 1
 end
 
@@ -64,7 +50,7 @@ end
     # 10 sites of one localization each (indices 1:10), 6 more sites (11:16), and
     # one site localized 30 times (17:46)
     pts = vcat([(Float64(i), 1.0) for i in 1:16], [(20.0 + 0.001 * j, 1.0) for j in 1:30])
-    sd = sim_points(2, pts)
+    sd = points_smld([pts])
     flag(idx) = (f = falses(length(pts)); f[idx] .= true; f)
     occ(f) = DC._occupancy(sd, f)
     ref, cc, inc = [0.0, 0.0], [0.020, 0.0], [0.040, 0.0]
@@ -148,7 +134,7 @@ end
     end
     # compact sites (k copies within a few nm, sites > 60 nm apart): occupancy = covered sites
     pts = [(1.0 + 0.1 * i + 0.002 * c, 1.0 + 0.001 * c) for i in 0:9 for c in 0:(i % 4 + 1)]
-    sd = sim_points(2, pts)
+    sd = points_smld([pts])
     site_of = [i for i in 0:9 for c in 0:(i % 4 + 1)]
     for covered in (0:9, [1, 4, 7])
         f = BitVector([i in covered for i in site_of])

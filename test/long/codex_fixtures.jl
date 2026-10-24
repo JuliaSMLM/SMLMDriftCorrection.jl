@@ -3,19 +3,8 @@ using Test, SMLMDriftCorrection, SMLMSim, Random
 
 const DC = SMLMDriftCorrection
 
-sim_ds_points(pts_by_ds) = begin
-    Random.seed!(5)
-    (s_o, _) = simulate(StaticSMLMConfig(1.0, 0.13, 50, 1, 300, 50.0, 2, [-1.0, 1.0]);
-        pattern  = Nmer2D(n = 1, d = 0.0),
-        molecule = GenericFluor(; photons = 5000.0, k_on = 0.5, k_off = 50.0),
-        camera   = IdealCamera(1:64, 1:64, 0.1))
-    em = []
-    for (d, pts) in enumerate(pts_by_ds), p in pts
-        e = deepcopy(s_o.emitters[1]); e.x = p[1]; e.y = p[2]; e.dataset = d
-        push!(em, e)
-    end
-    BasicSMLD(identity.(em), s_o.camera, 300, length(pts_by_ds), Dict{String,Any}())
-end
+include(joinpath(@__DIR__, "..", "points_smld.jl"))
+
 # Codex review of 4323bf9: occupancy sums that are equal in exact arithmetic differ in the
 # last bits (10.0 vs 9.999999999999982) and must not decide the guard. Ten A and ten B
 # compact motifs; the target holds 6:15 copies of each A shifted by (3, 0) and a varying
@@ -27,7 +16,7 @@ end
     nb = [3, 3, 3, 4, 4, 3, 2, 4, 4, 2]
     tgt = vcat(reduce(vcat, [fill((p[1] + 3.0, p[2]), 5 + i) for (i, p) in enumerate(A)]),
                reduce(vcat, [fill(p, nb[i]) for (i, p) in enumerate(B)]))
-    smld = sim_ds_points([ref, tgt])
+    smld = points_smld([ref, tgt])
     shifts = Vector{Float64}[]
     rng = Random.MersenneTwister(77)
     for k in 1:6
@@ -56,7 +45,7 @@ end
         ref = Tuple{Float64,Float64}[]
         for cy in (1.0, 2.0), sgn in (-1, 1); append!(ref, fill(((cy == 1.0 ? 4.010 : 4.030) + sgn * 0.040, cy), 4)); end
         for p in ((5.0, 4.0), (5.2, 5.0), (5.7, 4.3)); append!(ref, fill((p[1] - 3.0, p[2]), 4)); end
-        smld = sim_ds_points([ref, tgt])
+        smld = points_smld([ref, tgt])
         for q in (:fft, :singlepass)
             (_, info) = DC.driftcorrect(smld; quality = q, degree = 0)
             @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
@@ -80,7 +69,7 @@ end
         push!(ref, (1.010 + sgn * 0.034, 1.0)); push!(ref, (1.030 + sgn * 0.034, 2.0))
     end
     for order in (identity, reverse)
-        smld = sim_ds_points([ref, order(tgt)])
+        smld = points_smld([ref, order(tgt)])
         (_, info) = DC.driftcorrect(smld; quality = :fft, degree = 0)
         @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
     end
@@ -96,7 +85,7 @@ end
         for _ in 1:10; push!(ref, (p[1] - 0.020, p[2])); end
     end
     for p in g[41:49]; push!(ref, (p[1] + 0.020, p[2])); end
-    smld = sim_ds_points([ref, g])
+    smld = points_smld([ref, g])
     (_, info) = DC.driftcorrect(smld; quality = :singlepass, degree = 0)
     @test maximum(abs.(info.model.inter[2].dm .- info.model.inter[1].dm)) < 0.005
 end
