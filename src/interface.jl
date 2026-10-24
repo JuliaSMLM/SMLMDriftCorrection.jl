@@ -1031,7 +1031,7 @@ minimizes positions the shift within the basin; a significant site-level lead is
 function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVector;
                     score = count, cost = nothing, w = nothing)
     sc_ref = score(in_ref)
-    sc_cc = cc === nothing ? 0 : score(in_cc)
+    sc_cc = cc === nothing ? 0.0 : score(in_cc)
     sc_inc = score(in_inc)
     win, in_win, sc_win = refined, in_ref, sc_ref
     if cc !== nothing && _occ_gt(sc_cc, sc_win)
@@ -1050,12 +1050,9 @@ function _arbitrate(refined, in_ref::BitVector, cc, in_cc, inc, in_inc::BitVecto
     end
     distinct = unique(tied)
     length(distinct) < 2 && return win
-    costs = Dict(c => cost(c) for c in distinct)
-    lowest = minimum(values(costs))
-    for c in tied
-        costs[c] <= lowest + _COST_RTOL * abs(lowest) && return c
-    end
-    return win
+    costs = map(cost, distinct)
+    lowest = minimum(costs)
+    return distinct[findfirst(c -> c <= lowest + _COST_RTOL * abs(lowest), costs)]
 end
 
 """
