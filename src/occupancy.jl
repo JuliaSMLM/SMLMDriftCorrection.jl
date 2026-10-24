@@ -148,15 +148,18 @@ end
 "Localizations that some but not all of the inlier `flags` include: where the candidates disagree."
 _disagreeing(flags::BitVector...) = reduce(.|, flags) .& .!reduce(.&, flags)
 
-"Relative tolerance within which occupancy sums count as equal (`_occ_gt`)."
-const _OCC_RTOL = 1e-9
+"Absolute tolerance, in effective sites, within which occupancy sums count as equal (`_occ_gt`)."
+const _OCC_ATOL = 1e-6
 
 """
 Whether occupancy `a` exceeds `b` by more than rounding: the sums of inverse density weights
 are equal in exact arithmetic for equal site sets but differ in the last bits by summation
-order, so every occupancy comparison goes through this.
+order, so every occupancy comparison goes through this. The tolerance is absolute, in effective
+sites: the sums cover only the localizations where the candidates disagree (`_disagreeing`),
+so their size says nothing about the rounding, which stays near 1e-11; a difference under a
+millionth of a site is a tie.
 """
-_occ_gt(a, b) = a > b + _OCC_RTOL * max(abs(a), abs(b), 1)
+_occ_gt(a, b) = a > b + _OCC_ATOL
 
 """
 Occupancy of a dataset's inlier localizations: the sum of their inverse local density weights
@@ -190,7 +193,7 @@ function _overlap_leads(a::BitVector, b::BitVector; z::Float64 = _OVERLAP_Z,
                         w::Union{Nothing,Vector{Float64}} = nothing)
     nb = w === nothing ? count(a .& .!b) : sum(w[a .& .!b]; init = 0.0)
     nc = w === nothing ? count(b .& .!a) : sum(w[b .& .!a]; init = 0.0)
-    return nb + nc > 0 && (nb - nc) > z * sqrt(nb + nc) + _OCC_RTOL * max(nb, nc, 1)
+    return nb + nc > 0 && (nb - nc) > z * sqrt(nb + nc) + _OCC_ATOL
 end
 
 "Significance (`_overlap_leads` z) of the winner's site-level lead above which entropy cannot override it."
