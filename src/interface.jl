@@ -825,6 +825,20 @@ function apply_inter_only(smld::SMLD, model::LegendrePolynomial)
 end
 
 """
+`findshift(ref, sd; kw...)`, or `nothing` when it fails (a degenerate histogram ROI): the
+callers treat a failed CC as no candidate. An `InterruptException` is not swallowed.
+"""
+function _try_findshift(ref, sd; kw...)
+    try
+        return findshift(ref, sd; kw...)
+    catch e
+        e isa InterruptException && rethrow()
+        @debug "findshift failed" exception = (e, catch_backtrace())
+        return nothing
+    end
+end
+
+"""
 Fraction of a dataset's localizations (after applying `inter`) that fall within
 `radius` (μm) of a consensus localization in `tree`. Used by the CC-primary
 overlap arbiter as a model-free alignment-quality score.
@@ -1136,7 +1150,7 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
         kept = copy(model.inter[d].dm)
         in_kept = _overlap_inliers(sd, kept, tree, _CC_VERIFY_RADIUS, n_dims)
         cands = [dropped[d]]
-        fresh = try findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT) catch; nothing end
+        fresh = _try_findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
         fresh !== nothing && maximum(abs.(fresh)) > 5.0 && push!(cands, Float64.(fresh[1:n_dims]))
         for c in cands
             in_c = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
@@ -1207,7 +1221,8 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             Threads.@threads for d in 2:n_datasets
                 sd = _intra_only_corrected(smld, model, d)
                 isempty(sd.emitters) && continue
-                cc = try findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT) catch; continue end
+                cc = _try_findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+                cc === nothing && continue
                 if maximum(abs.(cc)) >= 5.0
                     dropped[d] = Float64.(cc[1:n_dims])
                     continue
@@ -1231,7 +1246,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             in_inc = _overlap_inliers(sd, inc, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # CC candidate; a failed or absurd CC is simply not a candidate.
-            cc = try findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT) catch; nothing end
+            cc = _try_findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
             cc_v = (cc === nothing || maximum(abs.(cc)) > 5.0) ? nothing : Float64.(cc[1:n_dims])
             cc !== nothing && cc_v === nothing && (dropped[d] = Float64.(cc[1:n_dims]))
             in_cc = cc_v === nothing ? nothing : _overlap_inliers(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
@@ -1356,7 +1371,7 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         # CC-measured candidate: rigid shift of cur onto the corrected ref = full inter[n].
         # Fine histogram (20 nm) — coarse bins lose the overlap contest to the smooth
         # endpoint prediction at clean boundaries even though CC is globally better.
-        cc = try findshift(ref, cur; histbinsize=0.02) catch; nothing end
+        cc = _try_findshift(ref, cur; histbinsize=0.02)
         if cc !== nothing && maximum(abs.(cc)) < 5.0
             inter_cc = Float64[Float64(cc[k]) for k in 1:n_dims]
             ov_cc = _overlap_score(cur, inter_cc, tree, _CC_VERIFY_RADIUS, n_dims)
