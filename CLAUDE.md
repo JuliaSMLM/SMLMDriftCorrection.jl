@@ -119,7 +119,6 @@ With three or more datasets, the reference (DS1) is included so a misaligned ref
 
 - Dilution: unmatched localizations within 30 nm of matched ones lower the correct shift's occupancy, and on a hand-placed arrangement `:fft` can then accept a wrong basin.
 - A reference dataset made mostly of structure the other dataset lacks can prefer a wrong basin in registered mode (0.2.9 too).
-- On the extended iterative fixture the sub-pixel CC fit costs about 8.7 nm mean RMSD over 16 seeds against 0.2.9 (t 1.8, not significant); the 42 real runs, all iterative, show no loss.
 
 ### Quality Tiers
 
