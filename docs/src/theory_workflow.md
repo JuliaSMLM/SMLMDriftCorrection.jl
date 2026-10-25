@@ -173,7 +173,6 @@ The iteration resolves the coupling between intra and inter corrections: the opt
 
 - Dilution: unmatched localizations within 30 nm of matched ones lower the correct shift's occupancy, and on a hand-placed arrangement `:fft` can then accept a wrong basin.
 - A reference dataset made mostly of structure the other dataset lacks can prefer a wrong basin in registered mode.
-- On the extended iterative fixture the sub-pixel CC fit costs about 8.7 nm mean RMSD over 16 seeds against 0.2.9 (not significant); real iterative runs show no loss.
 
 ## References
 
