@@ -14,13 +14,13 @@ entropy-based cost function and adaptive KDTree neighbor building.
 # Keyword Arguments
 - `quality=:singlepass`: Quality tier (`:fft`, `:singlepass`, `:iterative`)
 - `degree=2`: Polynomial degree for intra-dataset drift model
-- `dataset_mode=:registered`: Semantic label for multi-dataset handling:
-    - `:registered`: datasets are independent acquisitions
-    - `:continuous`: one long acquisition split into files
+- `dataset_mode=:registered`: selects the inter-dataset algorithm (`quality=:fft` ignores it):
+    - `:registered`: datasets are independent acquisitions (CC-primary inter alignment)
+    - `:continuous`: one acquisition split into files or chunks (consecutive-chunk CC)
 - `chunk_frames=0`: For continuous mode, split each dataset into chunks of this many frames
 - `n_chunks=0`: Alternative to chunk_frames - specify number of chunks per dataset
 - `maxn=100`: Maximum number of neighbors for entropy calculation
-- `max_iterations=10`: Maximum iterations for `:iterative` mode
+- `max_iterations=10`: Iterations per attempt for `:iterative` mode; a run that has not converged is retried from its current model up to 3 times
 - `convergence_tol=0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start=nothing`: Previous model for warm starting optimization
 - `verbose=0`: Verbosity level (0=quiet, 1=info, 2=debug)
@@ -34,8 +34,8 @@ entropy-based cost function and adaptive KDTree neighbor building.
 
 # Quality Tiers
 - `:fft`: Fast cross-correlation only (~10x faster, less accurate)
-- `:singlepass`: Current algorithm - parallel intra, then sequential inter (default)
-- `:iterative`: Full convergence - iterates intra↔inter until shift changes < tol
+- `:singlepass`: One pass of intra then inter correction (default). Intra is threaded per dataset; registered inter is threaded per dataset (continuous CC seeding is sequential, its refine threaded then sequential)
+- `:iterative`: Iterates intra↔inter until both inter and intra parameter changes fall below `convergence_tol`, or the entropy cost plateaus (relative improvement < 1e-4, both dataset modes)
 
 # Returns
 Tuple `(corrected_smld, info)` where `info::DriftInfo` contains:
@@ -44,8 +44,9 @@ Tuple `(corrected_smld, info)` where `info::DriftInfo` contains:
 - `backend`: Computation backend (`:cpu`)
 - `iterations`: Number of iterations completed
 - `converged`: Whether convergence was achieved
-- `entropy`: Final entropy value
-- `history`: Entropy per iteration (for diagnostics)
+- `entropy`: Final entropy value; scales with the number of localizations. Divide by `length(smld.emitters)` for a size-independent number
+- `history`: Entropy after the singlepass start and after each iteration (`:iterative` only; empty for `:fft` and `:singlepass`)
+- `residual_correlation`: Position-frame correlation diagnostic on corrected data; see [`position_frame_correlation`](@ref)
 
 # Example
 ```julia
@@ -217,8 +218,9 @@ end
 """
     driftcorrect(smld, info::DriftInfo; kwargs...) -> (corrected_smld, info)
 
-Continue drift correction from a previous result using the model from info.
-The dataset mode and chunking settings default to those of the original run.
+Continue drift correction from a previous result using the model from `info`.
+Pass the original, uncorrected `smld`. Continuation reuses the original run's
+`dataset_mode` and chunking, including for chunked continuous results.
 Corrections preserve the input's dataset and frame numbering.
 
 # Keyword Arguments
