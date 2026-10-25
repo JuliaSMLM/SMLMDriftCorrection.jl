@@ -4,12 +4,18 @@ AI-parseable API reference for SMLMDriftCorrection.jl. All distance units are in
 
 ## Exports Summary
 
-- **Types:** 7 (`DriftConfig`, `DriftInfo`, `AlignConfig`, `AlignInfo`, `AbstractAlignTransform`, `ShiftTransform`, `AffineTransform2D`)
-- **Functions:** 4 (`driftcorrect`, `align_smld`, `filter_emitters`, `drift_trajectory`)
+- **Types:** 8 (`DriftConfig`, `DriftInfo`, `AlignConfig`, `AlignInfo`, `AbstractAlignTransform`, `ShiftTransform`, `AffineTransform2D`, `AffineTransform3D`)
+- **Functions:** 5 (`driftcorrect`, `align_smld`, `filter_emitters`, `drift_trajectory`, `position_frame_correlation`)
 
 ## Key Concepts
 
-Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). In registered mode the inter step is **CC-primary**: per dataset a globally-robust cross-correlation seed is entropy-refined, and the CC is computed on bin-count-capped histograms (`findshift(...; maxcount)`, so a bright aggregate localized thousands of times in one bin cannot capture the peak), and an overlap arbiter keeps whichever of {refined, CC, incumbent} best matches the consensus as a backstop — needed because the global merged-cloud entropy is only ~1/N sensitive to a single dataset's offset (one dataset's misalignment barely moves the global cost). The `:iterative` tier converges on a parameter-movement test (`convergence_tol`, over both inter and intra), with an additional entropy-cost-plateau early exit in registered mode. Continuous mode instead seeds each inter-chunk shift by cross-correlating consecutive chunks (measuring the boundary rather than extrapolating polynomial endpoints, which keeps a single bad boundary from propagating down the chain); endpoint-chaining remains a per-boundary fallback. The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
+Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
+
+`dataset_mode` selects the inter-dataset algorithm. Registered mode is **CC-primary**: a cross-correlation seed on bin-count-capped histograms is entropy-refined, and an overlap arbiter picks among {refined, CC, incumbent}. With two datasets only the second is aligned, against the first. With three or more, every dataset including the reference is aligned against the others; moves within 30 nm of the incumbent are damped by (N-1)/N (N = number of datasets) to remove the overcount from updating all datasets at once. Larger moves into another basin are applied in full. Continuous mode instead seeds each inter-chunk shift by cross-correlating consecutive chunks; endpoint-chaining remains a per-boundary fallback. `quality=:fft` ignores `dataset_mode` and runs registered-style CC passes.
+
+No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions). Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning.
+
+The `:iterative` tier converges when both inter and intra parameter changes fall below `convergence_tol`, or when the entropy cost plateaus (relative improvement < 1e-4, both modes). Continuation (`driftcorrect(smld, info)`) reuses the original run's `dataset_mode` and chunking. See [Theory and Workflow](docs/src/theory_workflow.md) for the alignment rules.
 
 ## Types
 
@@ -27,8 +33,8 @@ Configuration for drift correction. All parameters have sensible defaults.
 - `dataset_mode::Symbol = :registered`: Multi-dataset handling (`:registered` or `:continuous`)
 - `chunk_frames::Int = 0`: Split datasets into chunks of N frames (continuous mode)
 - `n_chunks::Int = 0`: Alternative: number of chunks per dataset
-- `maxn::Int = 200`: Maximum neighbors for entropy calculation
-- `max_iterations::Int = 10`: Maximum iterations for `:iterative` mode
+- `maxn::Int = 100`: Maximum neighbors for entropy calculation
+- `max_iterations::Int = 10`: Iterations per attempt for `:iterative` mode; a run that has not converged is retried from its current model up to 3 times
 - `convergence_tol::Float64 = 0.001`: Convergence tolerance (μm) for `:iterative` mode
 - `warm_start::Union{Nothing, AbstractIntraInter} = nothing`: Previous `info.model` for warm starting
 - `verbose::Int = 0`: Verbosity (0=quiet, 1=info, 2=debug)
@@ -57,8 +63,8 @@ Output metadata from drift correction. Returned as second element of tuple.
 - `backend::Symbol`: Computation backend (`:cpu`)
 - `iterations::Int`: Iterations completed (0 for `:fft`, 1 for `:singlepass`)
 - `converged::Bool`: Whether convergence was achieved
-- `entropy::Float64`: Final entropy value
-- `history::Vector{Float64}`: Entropy per iteration (for diagnostics)
+- `entropy::Float64`: Final entropy value (a sum over localizations; divide by `length(smld.emitters)` for a size-independent number)
+- `history::Vector{Float64}`: Entropy after the singlepass start and after each iteration (`:iterative` only; empty for `:fft` and `:singlepass`)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subset (`nothing` if `auto_roi=false`)
 - `residual_correlation::NamedTuple`: Position-frame correlation diagnostic (intra_summary, intra_per_dataset, inter)
 
@@ -72,7 +78,7 @@ Configuration for alignment of independent SMLDs via `align_smld`.
 
 **Fields:**
 - `method::Symbol = :entropy`: Alignment method (`:entropy` or `:fft`)
-- `transform::Symbol = :shift`: Transform model (`:shift` translation only, `:affine` full 2D affine)
+- `transform::Symbol = :shift`: Transform model (`:shift` translation only, `:affine` 2D affine; 2D only, ignores `method`)
 - `maxn::Int = 100`: Maximum neighbors for entropy calculation
 - `histbinsize::Float64 = 0.05`: Histogram bin size (μm) for cross-correlation
 - `verbose::Int = 0`: Verbosity (0=quiet, 1=info)
@@ -94,21 +100,23 @@ Output metadata from `align_smld`.
 
 **Fields:**
 - `shifts::Vector{Vector{Float64}}`: Translation component for each SMLD (shifts[1] = zeros)
-- `transforms::Vector{<:AbstractAlignTransform}`: Full transform per SMLD (`ShiftTransform` or `AffineTransform2D`)
+- `transforms::Vector{<:AbstractAlignTransform}`: Shift transforms, or best-fit `AffineTransform2D` similarity approximations of the general affine corrections
 - `elapsed_s::Float64`: Wall time in seconds
 - `method::Symbol`: Method used (`:entropy` or `:fft`)
 - `transform::Symbol`: Transform model used (`:shift` or `:affine`)
 - `backend::Symbol`: Computation backend (`:cpu`)
+- `diagnostic::Union{Nothing, NamedTuple}`: `nothing` for `:shift`; for `:affine` a NamedTuple with `affine_coeffs` (exact per-dataset `(a, b, c, d, e, f)`) and `global_shifts`
 
 ### AbstractAlignTransform Hierarchy
 
 ```julia
 AbstractAlignTransform
 ├── ShiftTransform          # Pure translation: shift::Vector{Float64}
-└── AffineTransform2D       # θ::Float64, scale::Float64, tx::Float64, ty::Float64
+├── AffineTransform2D       # θ::Float64, scale::Float64, tx::Float64, ty::Float64
+└── AffineTransform3D       # exported; not produced by `align_smld` (`:affine` is 2D only)
 ```
 
-`AffineTransform2D` stores the geometric mean scale and rotation from the 6-parameter affine fit. For the full anisotropic parameters, use the `find_affine_shift_field` internal function directly.
+`AffineTransform2D` stores the geometric mean scale and rotation from the 6-parameter affine fit. The exact correction is available in `info.diagnostic.affine_coeffs` and `info.diagnostic.global_shifts`. `AffineTransform3D` stores Euler angles `θx`, `θy`, `θz`, a uniform `scale`, and translations `tx`, `ty`, `tz`.
 
 ## Functions
 
@@ -125,7 +133,7 @@ Main interface for drift correction. The config struct form is preferred.
 **Arguments:**
 - `smld`: SMLD structure with localization coordinates (2D or 3D)
 - `config`: `DriftConfig` with all algorithm parameters
-- `info`: Previous `DriftInfo` for continuation (third dispatch)
+- `info`: Previous `DriftInfo` for continuation (third dispatch); reuses the original run's `dataset_mode` and chunking
 
 **Example:**
 ```julia
@@ -144,7 +152,7 @@ Align a vector of independent SMLD structures to a common reference (smlds[1]).
 
 **Transform modes:**
 - `transform=:shift` (default): Translation only. Methods: `:entropy` (CC + entropy refinement) or `:fft` (CC only).
-- `transform=:affine`: Full 2D affine (anisotropic scale + rotation + shear + translation). Uses shift-field method: 5×5 grid of local CC shifts + quality-weighted least-squares affine fit. 2-pass for refinement. ~3nm median residual, ~13s on 1M locs.
+- `transform=:affine`: Full 2D affine (anisotropic scale + rotation + shear + translation). Uses a 5×5 grid of local CC shifts and a quality-weighted least-squares affine fit, with two passes for refinement. See the `align_smld` docstring for requirements.
 
 **Arguments:**
 - `smlds`: Vector of 2+ SMLD structures (same dimensionality, non-empty)
@@ -194,9 +202,18 @@ Extract drift trajectory from fitted model for plotting.
 
 **Example:**
 ```julia
+(smld_corrected, info) = driftcorrect(smld)
 traj = drift_trajectory(info.model)
 traj = drift_trajectory(info.model; cumulative=true)  # for continuous mode
 ```
+
+### position_frame_correlation
+
+```julia
+position_frame_correlation(smld::SMLD; K::Int=20, mode::Symbol=:intra) -> NamedTuple
+```
+
+Residual-drift diagnostic: correlates local position residuals (position minus the mean of the `K` nearest spatial neighbors) with frame number (`mode=:intra`, per dataset, with a `summary`) or dataset index (`mode=:inter`, across datasets). `driftcorrect` stores the result on the corrected data in `info.residual_correlation`.
 
 ## Non-Exported Public API
 
@@ -228,8 +245,8 @@ findshift(smld1::SMLD, smld2::SMLD; histbinsize=1.0, maxcount=nothing) -> Vector
 ```
 Find shift between two SMLDs via cross-correlation of histogram images. Returns `[dx, dy]` or `[dx, dy, dz]`.
 `maxcount` (a positive integer) clips each histogram bin to at most that many localizations before correlating,
-so a bright aggregate cannot outweigh the structure; `nothing` correlates raw counts. Registered CC-primary and
-`:fft` alignment use `maxcount=4`.
+so a bright aggregate cannot outweigh the structure; `nothing` correlates raw counts. `driftcorrect`'s registered CC-primary and
+`:fft` alignment use `maxcount=4`; `align_smld` correlates raw counts.
 
 ### find_affine_shift_field
 ```julia
@@ -295,7 +312,7 @@ InterShift (per-dataset constant shift)
 AbstractAlignTransform (exported)
 ├── ShiftTransform (exported)
 ├── AffineTransform2D (exported)
-└── AffineTransform3D
+└── AffineTransform3D (exported)
 
 AbstractSMLMConfig
 ├── DriftConfig (exported)
@@ -442,8 +459,8 @@ Split SMLD into chunks for finer-grained drift correction in continuous mode.
 ## Threading
 
 - **Intra-dataset correction** is parallelized with `Threads.@threads` (each dataset independent).
-- **First inter-dataset pass** (all datasets vs DS1) is threaded using a precomputed snapshot of corrected coordinates.
-- **Refinement pass** (each dataset vs all earlier datasets) is sequential to preserve ordering dependencies.
+- **Registered inter-dataset alignment** is also threaded (each dataset's CC seed + entropy refine runs against a precomputed snapshot of corrected coordinates).
+- **Continuous CC seeding** walks the chunks sequentially (each placement builds on the previous chunk's); its entropy refine is threaded against chunk 1, then sequential against earlier chunks.
 - Launch Julia with `julia -t N` or set `JULIA_NUM_THREADS=N` to use N threads.
 
 ## Common Workflows
@@ -481,8 +498,10 @@ config2 = DriftConfig(warm_start=info1.model)
 ### Continue Iterating
 ```julia
 (smld1, info1) = driftcorrect(smld, DriftConfig(quality=:singlepass))
-(smld2, info2) = driftcorrect(smld1, info1; max_iterations=5)
+(smld2, info2) = driftcorrect(smld, info1; max_iterations=5)
 ```
+
+Pass the original, uncorrected `smld`. Continuation reuses the original run's `dataset_mode` and chunking, including for chunked continuous results.
 
 ### Align Independent SMLDs (Shift Only)
 ```julia

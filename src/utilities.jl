@@ -218,11 +218,11 @@ NamedTuple with fields ready for plotting:
 
 # Example
 ```julia
-result = driftcorrect(smld; dataset_mode=:registered)
-traj = drift_trajectory(result.model)  # Each dataset relative to ds1
+(smld_corrected, info) = driftcorrect(smld; dataset_mode=:registered)
+traj = drift_trajectory(info.model)  # Each dataset relative to ds1
 
 # Cumulative view - chains datasets end-to-end
-traj_cumul = drift_trajectory(result.model; cumulative=true)
+traj_cumul = drift_trajectory(info.model; cumulative=true)
 plot(traj_cumul.frames, traj_cumul.x, label="X drift (cumulative)")
 ```
 """

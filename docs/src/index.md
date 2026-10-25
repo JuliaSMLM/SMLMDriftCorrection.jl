@@ -12,7 +12,7 @@ SMLMDriftCorrection.jl implements entropy-based drift correction using Legendre 
 
 - **Intra-dataset drift correction**: Drift within each dataset (movie segment) modeled as a polynomial over time
 - **Inter-dataset drift correction**: Constant shifts between datasets to align them
-- **SMLD alignment** (`align_smld`): Rigid-shift alignment of independent SMLD structures (e.g., multi-color channels)
+- **SMLD alignment** (`align_smld`): Shift alignment in 2D or 3D, or affine alignment in 2D, of independent SMLD structures (e.g., multi-color channels)
 
 All distance units are in **micrometers (μm)**.
 
@@ -77,7 +77,7 @@ nothing  # hide
 
 ![Drifted](drifted.png)
 
-**Corrected** — hexamer structure recovered (RMSD ~1 nm):
+**Corrected** — hexamer structure recovered (RMSD below 1 nm):
 
 ```@example quickstart
 (img_corrected, _) = render(smld_corrected, strategy=HistogramRender(), color_by=:frame, colormap=:turbo, zoom=10)
@@ -129,7 +129,8 @@ smld = load_smite_2d(smd)
 ```julia
 x = [e.x for e in smld.emitters]
 y = [e.y for e in smld.emitters]
-mask = (x .> 64.0) .& (x .< 128.0) .& (y .> 64.0) .& (y .< 128.0)
+# thresholds are in μm (here a 6.4-12.8 μm square)
+mask = (x .> 6.4) .& (x .< 12.8) .& (y .> 6.4) .& (y .< 12.8)
 smld_roi = filter_emitters(smld, mask)
 
 (smld_corrected, info) = driftcorrect(smld_roi, DriftConfig())
@@ -160,27 +161,39 @@ using SMLMDriftCorrection
 info.shifts  # [zeros(2), [dx, dy]]
 ```
 
+Use `transform=:affine` for a 2D affine correction. `info.transforms` then holds similarity approximations; `info.diagnostic` holds the exact affine coefficients and global shifts. See [`align_smld`](@ref) for requirements.
+
+### Residual Drift Diagnostics
+
+`driftcorrect` returns position-frame correlation diagnostics in `info.residual_correlation`, with per-dataset summaries and an inter-dataset check. Use [`position_frame_correlation`](@ref) to compute these diagnostics directly on any SMLD:
+
+```julia
+diag = position_frame_correlation(smld_corrected; K=20, mode=:intra)
+diag.summary.mean_abs_corr_x
+```
+
 ### Warm Start / Continuation
 
 ```julia
 # Warm start from previous model
 config1 = DriftConfig(degree=2)
-(smld1, info1) = driftcorrect(smld1, config1)
+(smld1, info1) = driftcorrect(smld, config1)
 
 config2 = DriftConfig(warm_start=info1.model)
 (smld2, info2) = driftcorrect(smld2, config2)
 
 # Continue iterating from previous result
-(smld3, info3) = driftcorrect(smld1, info1; max_iterations=5)
+(smld3, info3) = driftcorrect(smld, info1; max_iterations=5)
 ```
+
+Pass the original, uncorrected `smld` with its `info1`. Continuation reuses the original run's `dataset_mode` and chunking, so it also works on chunked continuous results.
 
 ## Dataset Modes
 
-Both modes use the same entropy-based alignment algorithm. The difference is semantic:
+The modes use different inter-dataset algorithms; see Dataset Modes in [Theory and Workflow](@ref "Theory and Workflow"). `quality=:fft` ignores `dataset_mode`.
 
-- **`:registered`** (default): Datasets are independent acquisitions. Use default trajectory plotting.
-
-- **`:continuous`**: One long acquisition split into multiple files. Use `drift_trajectory(info.model; cumulative=true)` for plotting accumulated drift.
+- **`:registered`** (default): datasets are independent acquisitions (CC-primary inter alignment).
+- **`:continuous`**: one long acquisition split into files or chunks (consecutive-chunk CC). Use `drift_trajectory(info.model; cumulative=true)` for plotting accumulated drift.
 
 ## Algorithm
 
@@ -188,14 +201,16 @@ The algorithm uses **entropy minimization** (Cnossen et al., 2021) with **Legend
 
 1. **Intra-dataset**: For each dataset, fit a Legendre polynomial (degree 2 by default) to model drift over time. Uses KL divergence-based entropy as cost function with adaptive KDTree neighbor rebuilding. Threaded across datasets.
 
-2. **Inter-dataset**: Align datasets using constant shifts via a cross-correlation seed plus entropy refinement. Registered mode aligns each dataset against the corrected consensus of the others (keeping whichever of {CC seed, refined} better matches by overlap, since the global entropy is nearly blind to a single dataset's offset); continuous mode aligns consecutive-chunk boundaries by cross-correlation, with endpoint-chaining as a per-boundary fallback.
+2. **Inter-dataset**: Align datasets using constant shifts. Registered mode uses a cross-correlation seed, entropy refinement, and an overlap arbiter. With two datasets only the second is aligned, against the first. With three or more, every dataset including the reference is aligned against the others; a move within 30 nm of the current shift is damped by (N-1)/N (N = number of datasets) to remove the overcount from updating all datasets at once. Larger moves into another basin are applied in full. Continuous mode aligns consecutive-chunk boundaries by cross-correlation, with endpoint-chaining as a per-boundary fallback.
 
-3. **Iterative** (`:iterative` quality only): Repeat intra↔inter until inter-shift changes converge below tolerance.
+3. **Iterative** (`:iterative` quality only): Repeat intra↔inter until the inter and intra parameter changes fall below `convergence_tol` or the entropy cost plateaus (relative improvement < 1e-4, both modes).
+
+No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions). Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning. See [Theory and Workflow](@ref "Theory and Workflow") for the alignment rules.
 
 The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
 
 !!! tip "Threading"
-    Intra-dataset correction and the first inter-dataset pass are parallelized with `Threads.@threads`. Start Julia with multiple threads (e.g., `julia -t auto`) for best performance on multi-dataset data.
+    Intra-dataset correction is parallelized with `Threads.@threads` (each dataset is independent). Registered inter-dataset alignment is also threaded (each dataset's CC seed and entropy refine run against a snapshot of corrected coordinates); continuous CC seeding walks the chunks sequentially and its refine is threaded, then sequential. Start Julia with multiple threads (e.g., `julia -t auto`) for best performance on multi-dataset data.
 
 ## References
 
