@@ -42,13 +42,13 @@ p(\mathbf{r}) = \frac{1}{N} \sum_{i=1}^{N} \mathcal{N}(\mathbf{r};\, \boldsymbol
 
 where ``\boldsymbol{\mu}_i`` is the measured position, ``\boldsymbol{\Sigma}_i`` is the diagonal covariance from localization uncertainty, and ``\mathbf{d}(t_i)`` is the drift at frame ``t_i``.
 
-Since the entropy of a Gaussian mixture has no closed form, we minimize a **variational upper bound**:
+Since the entropy of a Gaussian mixture has no closed form, we optimize a **variational upper bound**. The implementation reports the objective with a summed component-entropy term and an averaged neighbor term:
 
 ```math
-H_{\text{ub}}(\mathbf{D}) = \frac{1}{N}\sum_i H_i - \frac{1}{N}\sum_i \log\!\Bigl(\frac{1}{N}\sum_{j \neq i} e^{-D_{\text{KL}}(p_i \| p_j)}\Bigr)
+H_{\text{ub}}(\mathbf{D}) = \sum_i H_i - \frac{1}{N}\sum_i \log\!\Bigl(\frac{1}{N}\sum_{j \neq i} e^{-D_{\text{KL}}(p_i \| p_j)}\Bigr)
 ```
 
-The first term ``H_i`` is the entropy of each individual Gaussian component (determined only by localization uncertainties, constant during optimization). The second term depends on pairwise KL divergences between Gaussian localizations:
+The summed first term makes `info.entropy` scale with the number of localizations; divide by `length(smld.emitters)` (``N``) for a size-independent diagnostic. Each ``H_i`` depends only on localization uncertainties and is constant during optimization. The second term depends on pairwise KL divergences between Gaussian localizations:
 
 ```math
 D_{\text{KL}}(i, j) = \frac{1}{2}\sum_{k=1}^{K} \left[\log\frac{\sigma_{j,k}^2}{\sigma_{i,k}^2} + \frac{\sigma_{i,k}^2}{\sigma_{j,k}^2} + \frac{(\mu_{i,k} - \mu_{j,k})^2}{\sigma_{j,k}^2} - 1\right]
@@ -72,7 +72,7 @@ As in Wester et al., the constant term (``P_0``) is excluded from the intra-data
 
 ## Dataset Modes
 
-The package supports three acquisition scenarios through the `dataset_mode` parameter and chunking options:
+The package supports three acquisition scenarios through the `dataset_mode` parameter and chunking options. `dataset_mode` selects the inter-dataset algorithm: registered mode uses CC-primary alignment against the consensus, while continuous mode uses consecutive-chunk CC. `quality=:fft` ignores `dataset_mode` and uses registered-style CC passes. Continuation, `driftcorrect(smld, info)`, reuses the original run's `dataset_mode` and chunking.
 
 ### Continuous (Single Polynomial)
 
@@ -107,14 +107,20 @@ config = DriftConfig(dataset_mode=:registered)
 
 Between acquisition segments, the microscope acquires a brightfield z-stack, computes 3D cross-correlation against a reference, and iteratively moves the stage to realign the sample. This bounds the inter-dataset drift to the registration precision (typically 5-10 nm lateral). However, residual registration errors and intra-segment drift still require computational correction.
 
-In registered mode, datasets are spatially overlapping images of the same field of view. The inter-dataset alignment is **CC-primary**: for each dataset, a cross-correlation against the corrected consensus of all *other* datasets, computed on histograms whose bins are capped at a few localizations (so one bright aggregate cannot outweigh the structure), gives a globally robust shift estimate (the **seed**), which is then **refined** by minimizing the merged-cloud entropy of that dataset combined with the consensus (this incorporates the localization uncertainties ``\sigma`` for sub-bin precision). The seed is the cross-correlation shift unless the current shift overlaps strictly better, and an **overlap arbiter** keeps whichever of {refined, cross-correlation, current} has the largest *occupancy* among the dataset's localizations near a consensus localization (inlier localizations, with a site localized many times counted about once, so repeated localizations of a few sites cannot outscore the true shift) to pick the basin; ties keep the refined shift. Among the candidates within 30 nm of that winner that it does not lead significantly in occupied sites, the one with the lowest merged-cloud entropy (the refine's own objective) is kept, since a lead of a few localizations between candidates that close is noise; equal costs keep the current shift. A cross-correlation shift over 5 ``\mu``m is never applied; it is reported in a warning as a likely collection failure (the stage moved between acquisitions). Cross-correlation has to lead because the global merged-cloud entropy is only ~``1/N`` sensitive to a single dataset's offset -- entropy alone has almost no gradient to align an individual dataset and can leave one badly misaligned. The CC seed supplies the global signal entropy lacks; the arbiter guarantees no step significantly lowers a dataset's overlap with the consensus as scored. The bin cap matters because a raw-count histogram cross-correlation can be wrong by microns: a bright aggregate localized thousands of times in one bin, present in only some datasets, captures the correlation peak; the current shift stays a candidate as a backstop. The reference dataset is included (so a misaligned reference is fixable) and the result is re-anchored so the global frame is fixed.
+In registered mode, datasets are spatially overlapping images of the same field of view. The inter-dataset alignment is **CC-primary**. For each dataset being aligned, a cross-correlation against the corrected consensus of all *other* datasets gives a shift estimate (the **seed**). Histogram bins are capped at 4 localizations per 50 nm bin so a bright aggregate localized thousands of times in one bin cannot capture the correlation peak. The seed is the cross-correlation shift unless the current shift overlaps strictly better. It is then **refined** by minimizing the merged-cloud entropy of that dataset combined with the consensus, incorporating localization uncertainties ``\sigma`` for sub-bin precision.
+
+An **overlap arbiter** chooses among {refined, cross-correlation, current}. The largest *occupancy* picks the basin: localizations within 30 nm of a consensus localization count as inliers, weighted by inverse local density so a compact site localized many times counts about once. Occupancy ties prefer refined, then cross-correlation, then current. Among candidates within 30 nm of that winner that it does not lead significantly in occupied sites, the lowest merged-cloud entropy cost wins. Equal costs prefer current, then refined, then cross-correlation **among those eligible candidates**. Cross-correlation supplies the global signal because merged-cloud entropy alone is only about ``1/N`` sensitive to a single dataset's offset (here ``N`` is the number of datasets). The arbiter provides a backstop against a captured CC peak or a refinement into a wrong basin; the near-tie rule can accept a small occupancy decrease.
+
+With **two datasets**, only the second is aligned, against the first; the first is held fixed. With **three or more**, every dataset including the reference is aligned against the others. In the small-offset regime, each dataset's refine measures its offset from the mean of the others, which move in the same pass, so a simultaneous update overcounts the relative correction by ``N/(N-1)``. A move within 30 nm of the incumbent is therefore damped by ``(N-1)/N`` to remove that overcount; larger moves into another basin are applied in full. The result is then re-anchored to keep the reference shift at zero, preserving the global frame. This damping applies to the registered CC-primary passes; the cold start, `:fft`, and continuous mode use their own update rules.
+
+No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm; each reports it in a warning as a likely collection failure (the stage moved between acquisitions). The dataset stays at its kept shift.
 
 ## Quality Tiers
 
 The package provides three quality tiers that trade speed for accuracy. All three share the same drift model (Legendre polynomials + inter-shifts); they differ in how the model parameters are estimated.
 
 !!! tip "Multi-threading"
-    Intra-dataset correction is parallelized with `Threads.@threads` (each dataset is independent). Registered inter-dataset alignment is also threaded (each dataset's CC seed + entropy refine runs against a precomputed snapshot of corrected coordinates). Start Julia with multiple threads for best performance:
+    Intra-dataset correction is parallelized with `Threads.@threads` (each dataset is independent). Registered inter-dataset alignment is also threaded (each dataset's CC seed and entropy refine run against a precomputed snapshot of corrected coordinates). Continuous CC seeding walks the chunks sequentially; its entropy refine is threaded against chunk 1, then sequential against earlier chunks. Start Julia with multiple threads for best performance:
     ```
     julia -t auto        # use all available cores
     julia -t 8           # use 8 threads
@@ -128,7 +134,9 @@ The fastest tier. Uses **cross-correlation** of histogram images to estimate int
 1. Build 2D (or 3D) histogram images from each dataset's localizations
 2. **Pass 1**: Compute cross-correlation of each dataset against dataset 1 via FFT; extract shift from the correlation peak with sub-pixel Gaussian refinement
 3. **Pass 2**: Refine each dataset's shift against a merged histogram of all other (shifted) datasets
-4. **Pass 3**: Detect outlier shifts (>5 MAD from median) and re-align them using a Gaussian-damped cross-correlation prior
+4. **Pass 3**: Detect outlier shifts (more than `median + 5*max(MAD, 100 nm)`, with at least 4 datasets) and re-align them against dataset 1 using a Gaussian-damped cross-correlation prior
+
+Every CC shift, in all three passes, is computed on bin-count-capped histograms. Subject to the 5 μm component limit, it replaces the current shift unless the current shift has strictly higher occupancy near the reference (ties go to the CC). A CC with a component over 5 μm is not applied and is reported in a warning as a likely collection failure (the stage moved between acquisitions). `:fft` ignores `dataset_mode`: `:fft` with `:continuous` runs the same registered-style passes against dataset 1 and the merged others.
 
 Best for: quick previews, very large datasets, or as initialization for entropy-based methods.
 
@@ -142,7 +150,7 @@ The default tier. Performs one pass of entropy-based intra-dataset correction fo
    - Minimize entropy upper bound using Nelder-Mead optimization (10,000 iteration limit)
    - Adaptive KDTree rebuilding avoids unnecessary recomputation
 2. **Inter-dataset alignment** -- mode-specific:
-   - **Registered**: CC-primary, as described under Dataset Modes. For each dataset (threaded over a snapshot of the corrected coordinates), cross-correlate against the corrected consensus of the others (seed), refine that seed via BFGS on the merged-cloud entropy, and let the overlap arbiter choose among {refined, CC, current}: occupancy picks the basin, candidates within 30 nm of the winner that it does not lead significantly are settled by the entropy cost, and equal costs keep the current shift. The reference is included and the result is re-anchored.
+   - **Registered**: CC-primary, as described under Dataset Modes: a CC cold start against dataset 1 followed by two passes of CC seeding, BFGS entropy refinement, and overlap arbitration against the corrected consensus. With two datasets only the second is aligned; with three or more, all datasets including the reference are aligned, with small moves damped as described above.
    - **Continuous**: CC-seeded per boundary. The boundary cross-correlations walk the chunks **sequentially** (each placement builds on the previous chunk's), falling back to endpoint-chaining only where CC cannot lock on; the entropy refine that follows (with boundary-gap regularization) is threaded against chunk 1, then sequential against earlier chunks.
 3. Apply corrections to produce the final SMLD
 
@@ -152,13 +160,20 @@ The most accurate tier. Iterates between intra and inter correction until conver
 
 **Procedure:**
 1. Run the full singlepass procedure as initialization (this establishes the CC-seeded inter shifts -- continuous benefits from the CC seed here too)
-2. **Iterate until convergence** (default: max 10 iterations, tolerance 1 nm):
+2. **Iterate until convergence** (default: 10 iterations per attempt, tolerance 1 nm):
    a. Re-run intra-dataset correction with inter-shifts applied (shifted coordinates), threaded across datasets
    b. Re-run inter-dataset alignment over a corrected snapshot -- registered: one CC-primary pass; continuous: refine the inter shifts in place (the boundary cross-correlation is *not* re-chained every iteration, which would otherwise overwrite the refined shifts and stall convergence)
-   c. Check convergence: the maximum change across **both** inter-shift and intra-drift components (the latter sampled at frame start/mid/end) falls below `convergence_tol`. In **registered** mode an additional early exit fires when the merged-cloud entropy cost plateaus (relative improvement below a tolerance) -- the entropy is nearly flat with respect to the inter shifts there, so a movement-only test could otherwise run to the iteration cap at ~0% gain. Continuous mode uses only the movement criterion.
-3. Track entropy history for diagnostics (`info.history`)
+   c. Check convergence: the maximum change across **both** inter-shift and intra-drift components (the latter sampled at frame start/mid/end) falls below `convergence_tol`. In **both** modes an additional early exit fires when the merged-cloud entropy cost plateaus (relative improvement below 1e-4) -- the entropy is nearly flat with respect to the inter shifts there, so a movement-only test could otherwise run to the iteration cap at ~0% gain.
+   d. Each attempt runs at most `max_iterations` iterations; a run that has not converged is retried from its current model up to 3 times, so `info.iterations` can exceed `max_iterations`.
+3. Track entropy history for diagnostics (`info.history`: the entropy after the singlepass start and after each iteration; empty for `:fft` and `:singlepass`)
 
 The iteration resolves the coupling between intra and inter corrections: the optimal polynomial depends on the inter-shifts, and vice versa. For data with significant inter-dataset drift, iterative mode can improve accuracy substantially over singlepass.
+
+## Known limits
+
+- Dilution: unmatched localizations within 30 nm of matched ones lower the correct shift's occupancy, and on a hand-placed arrangement `:fft` can then accept a wrong basin.
+- A reference dataset made mostly of structure the other dataset lacks can prefer a wrong basin in registered mode.
+- On the extended iterative fixture the sub-pixel CC fit costs about 8.7 nm mean RMSD over 16 seeds against 0.2.9 (not significant); real iterative runs show no loss.
 
 ## References
 
@@ -167,4 +182,3 @@ The iteration resolves the coupling between intra and inter corrections: the opt
 - Wester MJ, Schodt DJ, Mazloom-Farsibaf H, Fazel M, Pallikkuth S, Lidke KA. "Robust, fiducial-free drift correction for super-resolution imaging." *Scientific Reports* 11:23672, 2021. [DOI: 10.1038/s41598-021-02850-7](https://doi.org/10.1038/s41598-021-02850-7)
 
 - Schodt DJ, Farzam F, Liu S, Lidke KA. "Automated multi-target super-resolution microscopy with trust regions." *Biomedical Optics Express* 14(1):429-440, 2023. [DOI: 10.1364/BOE.477501](https://doi.org/10.1364/BOE.477501)
-

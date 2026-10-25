@@ -20,6 +20,10 @@ See [Configuration](@ref) for full documentation of [`DriftConfig`](@ref) and [`
 
 ```@docs
 align_smld
+AbstractAlignTransform
+ShiftTransform
+AffineTransform2D
+AffineTransform3D
 ```
 
 See [Configuration](@ref) for full documentation of [`AlignConfig`](@ref) and [`AlignInfo`](@ref).
@@ -29,6 +33,7 @@ See [Configuration](@ref) for full documentation of [`AlignConfig`](@ref) and [`
 ```@docs
 filter_emitters
 drift_trajectory
+position_frame_correlation
 ```
 
 ## Drift Models
