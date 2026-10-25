@@ -60,10 +60,22 @@ end
 
 @testset "DriftInfo construction" begin
     model = DC.LegendrePolynomial(smld_small; degree = 1)
-    info = DC.DriftInfo(model, 0.0, :cpu, 1, true, 0.0, Float64[], nothing, NamedTuple())
-    @test info.dataset_mode == :registered
-    @test info.chunk_frames == 0
-    @test info.n_chunks == 0
+    args = (model, 1.5, :cpu, 2, false, 3.0, [4.0], [1], (corr_x = 0.1,))
+    for constructor in (DC.DriftInfo, DC.DriftInfo{typeof(model)})
+        info = constructor(args...)
+        @test (info.model, info.elapsed_s, info.backend, info.iterations, info.converged,
+               info.entropy, info.history, info.roi_indices, info.residual_correlation) == args
+        @test info.dataset_mode == :registered
+        @test info.chunk_frames == 0
+        @test info.n_chunks == 0
+
+        info = constructor(args..., :continuous, 50, 3)
+        @test (info.model, info.elapsed_s, info.backend, info.iterations, info.converged,
+               info.entropy, info.history, info.roi_indices, info.residual_correlation) == args
+        @test info.dataset_mode == :continuous
+        @test info.chunk_frames == 50
+        @test info.n_chunks == 3
+    end
 
     info = DC.DriftInfo(; model, elapsed_s = 0.0, backend = :cpu, iterations = 1,
         converged = true, entropy = 0.0, history = Float64[], roi_indices = nothing,

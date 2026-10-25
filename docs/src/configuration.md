@@ -33,7 +33,7 @@ The `dataset_mode` parameter selects the inter-dataset algorithm. In `:iterative
 - **`:registered`** (default) -- Datasets are independent acquisitions of the same field of view (e.g., SeqSRM). With two datasets only the second is aligned, against the first. With three or more, every dataset including the reference is aligned against the others; moves within 30 nm of the current shift are damped by (N-1)/N (N = number of datasets) to remove the overcount from updating all datasets at once. Larger moves into another basin are applied in full.
 - **`:continuous`** -- One long acquisition split into multiple files or chunks. Each inter-chunk shift is measured by cross-correlating consecutive chunks (with endpoint-chaining kept only as a per-boundary fallback), then entropy-refined with continuity regularization.
 
-No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm; each reports it in a warning as a likely collection failure (the stage moved between acquisitions). See [Theory and Workflow](@ref "Theory and Workflow") for the alignment rules.
+No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions). Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning. See [Theory and Workflow](@ref "Theory and Workflow") for the alignment rules.
 
 ### Chunking (Continuous Mode)
 

@@ -332,8 +332,9 @@ aggregate cannot capture the peak, and each CC shift (and the pass-3 outlier re-
 replaces the incumbent unless the incumbent overlaps the reference strictly better
 (`_accept_if_better_overlap!`; ties go to the CC). As in registered mode, a CC with a
 component over 5 μm (`_CC_MAX_SHIFT`) is not applied; where it overlaps clearly better than
-the shift the dataset ends with, one warning per dataset per call names it
-(`_warn_dropped_cc!`). `dataset_mode` is not read by this tier.
+the shift the dataset ends with, one warning per dataset per call names it as a likely
+collection failure (the stage moved between acquisitions; `_warn_dropped_cc!`).
+`dataset_mode` is not read by this tier, so the same warning rule applies with `:continuous`.
 """
 function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                             dataset_mode::Symbol, verbose::Int)
@@ -555,8 +556,9 @@ const _CC_VERIFY_RADIUS = 0.030
 # aggregate localized thousands of times in one bin cannot capture the peak.
 const _CC_MAXCOUNT = 4
 
-# A CC shift with a component over this (μm) is a collection failure (a stage that moved
-# between acquisitions), not drift: no tier applies it (`_warn_dropped_cc!` reports it).
+# No tier applies a CC shift with a component over this (μm). Registered tiers and :fft
+# warn only if a dropped CC overlaps clearly better than the kept shift (a likely
+# collection failure); continuous mode uses endpoint chaining at that boundary without warning.
 const _CC_MAX_SHIFT = 5.0
 _cc_too_far(cc) = maximum(abs.(cc)) > _CC_MAX_SHIFT
 
@@ -965,9 +967,12 @@ function _intra_only_corrected(smld::SMLD, model::LegendrePolynomial, d::Int)
 end
 
 """
-Warn, once per dataset (`warned`), where a CC shift dropped for exceeding 5 μm
+Warn, once per dataset per call (`warned`), where a CC shift dropped for a component over 5 μm
 (`dropped[d]`, else `nothing`) would have overlapped clearly better (`_overlap_leads`) than
-the shift the dataset ends with: a stage that moved between acquisitions. The dropped CC
+the shift the dataset ends with: a likely collection failure (the stage moved between
+acquisitions). Used by registered `:singlepass` and `:iterative`, and by `:fft` regardless
+of `dataset_mode`; continuous `:singlepass` and `:iterative` instead drop such a boundary
+CC and fall back to endpoint chaining at that boundary without a warning. The dropped CC
 was measured against an earlier consensus (DS1 for the cold start), so a fresh CC against
 the final consensus is scored as well. The applied shift is not changed.
 """
@@ -1042,9 +1047,11 @@ occupancy and an aggregate weighs like ordinary structure; the incumbent stays a
 candidate as a backstop, so each step never lowers the dataset's consensus overlap
 as scored. The refine starts from the chosen seed even when it is zero
 (`findinter!(...; cc_init=false)`). A CC with a
-component over 5 μm (`_CC_MAX_SHIFT`; `:fft` has the same rule) is not a candidate; if such a CC leads the shift a dataset ends with (`_overlap_leads`), one `@warn` names it
-(a stage that moved between acquisitions), once per dataset per `warned` (the iterative
-tier passes one vector across its iterations). The applied shift is not changed.
+component over 5 μm (`_CC_MAX_SHIFT`; `:fft` has the same rule) is not a candidate; if such
+a dropped CC overlaps clearly better than the shift a dataset ends with (`_overlap_leads`),
+one `@warn` names it as a likely collection failure (the stage moved between acquisitions),
+once per dataset per call (`warned`; the iterative tier passes one vector across its
+initialization, iterations, and retries). The warning does not change the applied shift.
 The reference (DS1) is included so a misaligned reference is fixable (with two
 datasets only DS2 is aligned, to DS1); the result is
 re-anchored to inter[1]=0 (an image-invariant global shift). Where the arbiter's step for
@@ -1170,6 +1177,9 @@ candidates are formed: the CC-measured shift, and the endpoint-chained shift
 `inter[n-1] + endpoint(n-1) - startpoint(n)`. Whichever puts chunk n in better
 consensus overlap (`_overlap_score` within `_CC_VERIFY_RADIUS`) with the corrected
 chunk n-1 is kept.
+
+As in every tier, a CC with a component over 5 μm is dropped. Continuous mode then falls
+back to endpoint chaining at that boundary without a warning.
 
 This is strictly ≥ either method alone: it uses CC where it locks on (the common
 case) and falls back to endpoint-chaining at a sparse/featureless boundary where
