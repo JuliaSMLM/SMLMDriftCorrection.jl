@@ -945,6 +945,18 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
 end
 
 """
+Damping factor `(N-1)/N` for a registered pass over `N >= 3` datasets, 1 for `N = 2`.
+
+In a Jacobi pass every dataset (DS1 included) is aligned against one snapshot of the
+others while all of them move. A dataset's refine measures its offset from the mean of
+the others, which move too, so applying the full measured step overcounts the relative
+correction by `N/(N-1)`; scaling a small step by `(N-1)/N` removes that overcount (exact
+in the small-offset regime). With two datasets only DS2 moves (see `_cc_primary_inter!`),
+so nothing is overcounted.
+"""
+_jacobi_damping(n_datasets::Int) = n_datasets > 2 ? (n_datasets - 1) / n_datasets : 1.0
+
+"""
 CC-primary inter-dataset alignment (registered mode).
 
 Cross-correlation is the *primary* per-dataset objective (globally robust — it finds
@@ -971,8 +983,11 @@ as scored. The refine starts from the chosen seed even when it is zero
 component over 5 μm is not a candidate; if such a CC leads the shift a dataset ends with (`_overlap_leads`), one `@warn` names it
 (a stage that moved between acquisitions), once per dataset per `warned` (the iterative
 tier passes one vector across its iterations). The applied shift is not changed.
-The reference (DS1) is included so a misaligned reference is fixable; the result is
-re-anchored to inter[1]=0 (an image-invariant global shift). `init=true` first does
+The reference (DS1) is included so a misaligned reference is fixable (with two
+datasets only DS2 is aligned, to DS1); the result is
+re-anchored to inter[1]=0 (an image-invariant global shift). Where the arbiter's step for
+a dataset moves it less than `_CC_VERIFY_RADIUS`, the step is damped by `_jacobi_damping`;
+a larger move (another basin) is applied in full. `init=true` first does
 a rough cross-correlation init vs DS1 (cold start), accepted unless the incumbent
 (zero for registered data) overlaps DS1 strictly better. Jacobi: each pass uses one
 corrected snapshot. Subsumes the old post-hoc CC-rescue.
@@ -1007,9 +1022,12 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
         end
     end
 
+    # With two datasets only their relative shift is defined: DS1 stays and DS2 aligns to it.
+    aligned = n_datasets == 2 ? (2:2) : (1:n_datasets)
+    damp = _jacobi_damping(n_datasets)
     for pass in 1:n_passes
         snap = correctdrift(smld, model)             # Jacobi snapshot (read-only across threads)
-        Threads.@threads for d in 1:n_datasets
+        Threads.@threads for d in aligned
             others = [x for x in 1:n_datasets if x != d]
             ref = filter_by_dataset(snap, others)
             isempty(ref.emitters) && continue
@@ -1046,7 +1064,8 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc;
                               score = f -> _occupancy(w, f), w = w,
                               cost = _arbiter_cost(model, smld, snap, d, others, maxn))
-            model.inter[d].dm .= best
+            step = best .- inc
+            model.inter[d].dm .= sqrt(sum(abs2, step)) < _CC_VERIFY_RADIUS ? inc .+ damp .* step : best
         end
     end
 
