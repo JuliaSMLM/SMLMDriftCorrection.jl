@@ -22,16 +22,18 @@ DriftConfig
 
 The `quality` parameter selects the algorithm complexity:
 
-- **`:fft`** -- Fast cross-correlation of histogram images. No intra-dataset correction. Best for quick previews or very large datasets.
+- **`:fft`** -- Fast cross-correlation of histogram images. No intra-dataset correction. Best for quick previews or very large datasets. It ignores `dataset_mode`.
 - **`:singlepass`** (default) -- One pass of entropy-based intra-dataset correction followed by cross-correlation-seeded, entropy-refined inter-dataset alignment. Good balance of speed and accuracy.
-- **`:iterative`** -- Iterates intra and inter correction until convergence. Most accurate; resolves the coupling between intra and inter drift estimates.
+- **`:iterative`** -- Iterates intra and inter correction until both parameter changes fall below `convergence_tol` or the entropy cost plateaus (relative improvement < 1e-4, both dataset modes). `max_iterations` is the number of iterations per attempt; a run that has not converged is retried from its current model up to 3 times.
 
 ### Dataset Modes
 
-The `dataset_mode` parameter controls how multiple datasets are related:
+The `dataset_mode` parameter selects the inter-dataset algorithm. In `:iterative`, continuous mode also adds boundary priors to the intra fit. `quality=:fft` ignores `dataset_mode` and uses the registered-style CC passes:
 
-- **`:registered`** (default) -- Datasets are independent acquisitions of the same field of view (e.g., SeqSRM). Inter-dataset alignment finds the best constant shift for each dataset against the others.
+- **`:registered`** (default) -- Datasets are independent acquisitions of the same field of view (e.g., SeqSRM). With two datasets only the second is aligned, against the first. With three or more, every dataset including the reference is aligned against the others; moves within 30 nm of the current shift are damped by (N-1)/N (N = number of datasets) to remove the overcount from updating all datasets at once. Larger moves into another basin are applied in full.
 - **`:continuous`** -- One long acquisition split into multiple files or chunks. Each inter-chunk shift is measured by cross-correlating consecutive chunks (with endpoint-chaining kept only as a per-boundary fallback), then entropy-refined with continuity regularization.
+
+No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions). Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning. See [Theory and Workflow](@ref "Theory and Workflow") for the alignment rules.
 
 ### Chunking (Continuous Mode)
 
@@ -85,10 +87,11 @@ DriftInfo
 
 # Diagnostics
 info.converged     # true if convergence criterion met
-info.entropy       # final entropy value
+info.entropy       # final entropy value (sum over localizations; divide by length(smld.emitters) for a size-independent number)
 info.elapsed_s     # wall time in seconds
 info.iterations    # iterations completed (0 for :fft, 1 for :singlepass)
-info.history       # entropy per iteration (for plotting convergence)
+info.residual_correlation  # position-frame correlation diagnostic (intra_summary, intra_per_dataset, inter)
+info.history       # entropy after the singlepass start and each iteration (:iterative only; empty otherwise)
 info.roi_indices   # indices used for ROI subset (nothing if auto_roi=false)
 ```
 
@@ -114,6 +117,8 @@ Pass `DriftInfo` directly to continue iterating from a previous result:
 # Continue with more iterations
 (smld2, info2) = driftcorrect(smld, info1; max_iterations=5)
 ```
+
+Pass the original, uncorrected `smld` with its `info1`. Continuation reuses the original run's `dataset_mode` and chunking, so it also works on chunked continuous results.
 
 ## SMLD Alignment
 
@@ -146,4 +151,4 @@ config = AlignConfig(method=:entropy, maxn=100)
 (aligned, info) = align_smld(smlds, config)
 ```
 
-The entropy method regularizes toward the cross-correlation initial guess to prevent optimizer divergence. Works on both 2D and 3D data, threaded across datasets.
+The entropy method regularizes toward the cross-correlation initial guess to prevent optimizer divergence. Shift alignment works on both 2D and 3D data, threaded across datasets. Use `transform=:affine` for a 2D affine correction; see [`align_smld`](@ref) for requirements. `info.transforms` then holds similarity approximations, while `info.diagnostic` holds the exact affine coefficients and global shifts.

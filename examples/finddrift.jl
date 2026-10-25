@@ -54,8 +54,7 @@ smld_drift = DC.applydrift(smld_noisy, drift_true)
 
 ## Correct Drift using entropy minimization
 println("\nRunning drift correction...")
-result = driftcorrect(smld_drift; degree=0, maxn=100, verbose=1)
-smld_corrected = result.smld
+(smld_corrected, info) = driftcorrect(smld_drift; degree=0, maxn=100, verbose=1)
 
 # Helper function to calculate RMSD
 function calc_rmsd(smld_orig, smld_corr)
@@ -76,9 +75,9 @@ println("\nOverall RMSD: $(round(rmsd, digits=1)) nm")
 println("\nInter-dataset offset recovery:")
 println("  Dataset   True (nm)              Recovered (nm)         Error (nm)")
 println("  " * "-"^70)
-for ii in 1:result.model.ndatasets
+for ii in 1:info.model.ndatasets
     true_offset = drift_true.inter[ii].dm * 1000
-    recov_offset = result.model.inter[ii].dm * 1000
+    recov_offset = info.model.inter[ii].dm * 1000
     error = recov_offset .- true_offset
     error_mag = sqrt(sum(error.^2))
     println("  $ii        $(lpad.(round.(true_offset, digits=1), 7))    $(lpad.(round.(recov_offset, digits=1), 7))    $(round(error_mag, digits=1))")

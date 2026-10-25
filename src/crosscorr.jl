@@ -9,7 +9,9 @@ Refine peak location using 2D Gaussian fit via quadratic surface fitting.
 Fits a 2D quadratic to log(intensity) around the peak, which is equivalent
 to fitting a 2D Gaussian. Returns subpixel (row, col) coordinates.
 
-Falls back to integer peak if fit fails or window is too small.
+Falls back to integer peak if fit fails or window is too small. Assumes the
+window holds one smooth peak (a Gaussian-rendered CC); for a histogram CC use
+`subpixel_3pt_2d`.
 """
 function gaussian_subpixel_2d(cc::AbstractMatrix, peak_idx::CartesianIndex; halfwidth::Int=3)
     pi, pj = peak_idx[1], peak_idx[2]
@@ -95,6 +97,51 @@ function gaussian_subpixel_2d(cc::AbstractMatrix, peak_idx::CartesianIndex; half
     end
 
     return float(pi) + x_offset, float(pj) + y_offset
+end
+
+"Neighbor value, relative to the peak, at or below which `peak_offset_3pt` treats it as zero."
+const _PEAK_ROUNDOFF_RTOL = 1e-6
+
+"""
+    peak_offset_3pt(fm, f0, fp)
+
+Sub-bin offset of a peak from its integer maximum `f0`, given the neighbors at -1 (`fm`)
+and +1 (`fp`): the vertex of the Gaussian through the three samples. Lies in [-1/2, 1/2],
+so the estimate stays in the maximum's bin, where a noiseless unimodal peak has its
+maximum. A neighbor <= `_PEAK_ROUNDOFF_RTOL` * `f0` (zero up to FFT roundoff) means a peak
+narrower than one bin (the bin-sampled triangle), for which the 3-point centroid is exact.
+"""
+function peak_offset_3pt(fm::Real, f0::Real, fp::Real)
+    f0 > 0 || return 0.0
+    # FFT roundoff leaves a mathematically zero neighbor at ~1e-16 of the peak
+    fm = fm <= _PEAK_ROUNDOFF_RTOL * f0 ? zero(fm) : fm
+    fp = fp <= _PEAK_ROUNDOFF_RTOL * f0 ? zero(fp) : fp
+    if fm > 0 && fp > 0
+        lm, l0, lp = log(fm), log(f0), log(fp)
+        den = lm - 2 * l0 + lp
+        den < 0 || return 0.0
+        return clamp((lm - lp) / (2 * den), -0.5, 0.5)
+    end
+    s = fm + f0 + fp
+    s > 0 || return 0.0
+    return clamp((fp - fm) / s, -0.5, 0.5)
+end
+
+"""
+    subpixel_3pt_2d(cc, peak_idx)
+
+Refine the integer peak of a 2D histogram cross-correlation to sub-bin (row, col)
+coordinates with a 3-point Gaussian fit along each axis (`peak_offset_3pt`); an axis at
+the array edge keeps its integer coordinate. Only the peak and its neighbors are used:
+the peak is about two bins wide, and farther out the CC holds pair counts from unrelated
+structure, which pull a wider window fit by up to its half-width.
+"""
+function subpixel_3pt_2d(cc::AbstractMatrix, peak_idx::CartesianIndex)
+    pi, pj = peak_idx[1], peak_idx[2]
+    nr, nc = size(cc)
+    di = 1 < pi < nr ? peak_offset_3pt(cc[pi - 1, pj], cc[pi, pj], cc[pi + 1, pj]) : 0.0
+    dj = 1 < pj < nc ? peak_offset_3pt(cc[pi, pj - 1], cc[pi, pj], cc[pi, pj + 1]) : 0.0
+    return float(pi) + di, float(pj) + dj
 end
 
 """
@@ -456,11 +503,11 @@ function findshift(smld1::T, smld2::T;
     peak_idx = argmax(cc)
 
     # Refine peak location with subpixel Gaussian fitting
-    # This fits a 2D Gaussian (via quadratic in log-space) to improve accuracy
+    # (3-point Gaussian per axis in 2D, centre of mass in 3D)
     # FourierTools.ccorr(A, B) peaks at -δ when B is shifted by +δ relative to A.
     # So to get the true shift of B relative to A, we compute: center - peak
     if n_dims == 2
-        peak_i, peak_j = gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
+        peak_i, peak_j = subpixel_3pt_2d(cc, peak_idx)
         shift = float([mid1 - peak_i, mid2 - peak_j])
     elseif n_dims == 3
         peak_i, peak_j, peak_k = gaussian_subpixel_3d(cc, peak_idx; halfwidth=2)
@@ -569,7 +616,7 @@ function findshift_damped(smld1::T, smld2::T;
     # FourierTools.ccorr peaks at -δ when B is shifted by +δ, so shift = center - peak
     peak_idx = argmax(cc)
     if n_dims == 2
-        peak_i, peak_j = gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
+        peak_i, peak_j = subpixel_3pt_2d(cc, peak_idx)
         shift = float([mid1 - peak_i, mid2 - peak_j])
     else
         mid3 = size(cc, 3) ÷ 2 + 1
