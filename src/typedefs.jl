@@ -6,6 +6,12 @@ abstract type AbstractIntraDrift end
 
 abstract type AbstractIntraInter <: AbstractDriftModel end
 
+"""
+    AbstractAlignTransform
+
+Abstract supertype for alignment transforms: [`ShiftTransform`](@ref),
+[`AffineTransform2D`](@ref), and [`AffineTransform3D`](@ref).
+"""
 abstract type AbstractAlignTransform end
 
 """
@@ -73,11 +79,11 @@ arguments; all fields have sensible defaults.
 |:------|:--------|:------------|
 | `quality` | `:singlepass` | Quality tier: `:fft`, `:singlepass`, or `:iterative` |
 | `degree` | `2` | Legendre polynomial degree for intra-dataset drift |
-| `dataset_mode` | `:registered` | Multi-dataset handling: `:registered` or `:continuous` |
+| `dataset_mode` | `:registered` | Inter-dataset algorithm: `:registered` (CC-primary) or `:continuous` (consecutive-chunk CC); ignored by `quality=:fft` |
 | `chunk_frames` | `0` | Split datasets into chunks of N frames (0 = no chunking) |
 | `n_chunks` | `0` | Alternative: number of chunks per dataset (0 = use chunk_frames) |
 | `maxn` | `100` | Maximum neighbors for entropy calculation |
-| `max_iterations` | `10` | Maximum iterations for `:iterative` mode |
+| `max_iterations` | `10` | Iterations per attempt for `:iterative` mode (a run that has not converged is retried from its current model up to 3 times) |
 | `convergence_tol` | `0.001` | Convergence tolerance in μm for `:iterative` mode |
 | `warm_start` | `nothing` | Previous `info.model` for warm starting optimization |
 | `verbose` | `0` | Verbosity level: 0=quiet, 1=info, 2=debug |
@@ -131,8 +137,8 @@ Supports warm start via `info.model`.
 - `backend::Symbol`: Computation backend (`:cpu`)
 - `iterations::Int`: Number of iterations completed (0 for :fft, 1 for :singlepass, N for :iterative)
 - `converged::Bool`: Whether convergence criterion was met (always true for :fft/:singlepass)
-- `entropy::Float64`: Final entropy value after correction
-- `history::Vector{Float64}`: Entropy per iteration (empty for :fft)
+- `entropy::Float64`: Final entropy value after correction. A sum over localizations, so it scales with their number; divide by `length(smld.emitters)` for a size-independent number
+- `history::Vector{Float64}`: Entropy after the singlepass start and after each iteration (`:iterative` only; empty for `:fft` and `:singlepass`)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subsampling (nothing if not used)
 - `dataset_mode::Symbol`: Dataset mode used for fitting (default `:registered`)
 - `chunk_frames::Int`: Frames per chunk requested for continuous mode (default `0`)
@@ -149,7 +155,7 @@ Supports warm start via `info.model`.
 info.converged    # check convergence
 info.entropy      # final value
 info.elapsed_s    # timing
-plot(info.history)  # diagnostics
+info.history      # entropy after the singlepass start and each iteration (:iterative only; empty otherwise)
 info.roi_indices  # ROI used for estimation (nothing if auto_roi=false)
 info.residual_correlation.intra_summary.mean_abs_corr_y  # overall residual
 info.residual_correlation.intra_per_dataset[5].corr_y    # dataset 5 residual

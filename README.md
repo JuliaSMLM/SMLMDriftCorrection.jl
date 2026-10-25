@@ -45,7 +45,7 @@ For complete SMLM workflows (detection + fitting + frame-connection + drift corr
 | `chunk_frames` | `0` | Split datasets into chunks of N frames (continuous mode) |
 | `n_chunks` | `0` | Alternative: number of chunks per dataset |
 | `maxn` | `100` | Maximum neighbors for entropy calculation |
-| `max_iterations` | `10` | Maximum iterations for `:iterative` mode |
+| `max_iterations` | `10` | Iterations per attempt for `:iterative` mode; a run that has not converged is retried from its current model up to 3 times |
 | `convergence_tol` | `0.001` | Convergence tolerance (μm) for `:iterative` mode |
 | `warm_start` | `nothing` | Previous `info.model` for warm starting |
 | `auto_roi` | `false` | Use dense ROI subset for faster estimation |
@@ -62,7 +62,7 @@ config = DriftConfig(quality=:iterative, degree=3, verbose=1)
 
 **Quality tier guidance:** `:singlepass` works well for most data. Use `:fft` for fast previews (~10x faster, less accurate). Use `:iterative` when maximum accuracy is needed (iterates intra↔inter until convergence).
 
-**Dataset mode guidance:** Use `:registered` (default) when datasets are independent acquisitions of the same FOV. Use `:continuous` when data is one long acquisition split across files, with `chunk_frames=4000` for long acquisitions.
+**Dataset mode guidance:** Use `:registered` (default) when datasets are independent acquisitions of the same FOV. Use `:continuous` when data is one long acquisition split across files, with `chunk_frames=4000` for long acquisitions. The two modes run different inter-dataset algorithms; `quality=:fft` ignores `dataset_mode`.
 
 ## Output Format
 
@@ -76,21 +76,24 @@ config = DriftConfig(quality=:iterative, degree=3, verbose=1)
 | `info.backend` | Computation backend (`:cpu`) |
 | `info.iterations` | Iterations completed (0 for `:fft`, 1 for `:singlepass`) |
 | `info.converged` | Whether convergence was achieved |
-| `info.entropy` | Final entropy value |
-| `info.history` | Entropy per iteration (for diagnostics) |
+| `info.entropy` | Final entropy value; scales with the number of localizations. Divide by `length(smld.emitters)` for a size-independent number |
+| `info.history` | Entropy after the singlepass start and after each iteration (`:iterative` only; empty for `:fft` and `:singlepass`) |
+| `info.residual_correlation` | Position-frame correlation diagnostic on the corrected data (`intra_summary`, `intra_per_dataset`, `inter`); see `position_frame_correlation` below |
 | `info.roi_indices` | Indices used for ROI subset (`nothing` if `auto_roi=false`) |
 
 ## Algorithm Pipeline
 
 1. **Intra-dataset**: For each dataset, fit Legendre polynomial drift over time via entropy minimization with adaptive KDTree neighbor rebuilding (threaded across datasets)
-2. **Inter-dataset**: Align datasets using constant shifts via a cross-correlation seed plus entropy refinement. Registered mode aligns each dataset against the corrected consensus of the others, choosing the shift by overlap: occupancy (localizations near the consensus, a site localized many times counted about once) picks the basin among {refined, CC, current}; candidates within 30 nm of the winner that it does not lead significantly are settled by the merged-cloud entropy, and equal costs keep the current shift; continuous mode aligns consecutive-chunk boundaries by cross-correlation, with endpoint-chaining as a per-boundary fallback
-3. **Iterative** (`:iterative` only): Repeat intra↔inter until the inter+intra parameter changes fall below `convergence_tol` (registered mode adds an entropy-cost-plateau early exit)
+2. **Inter-dataset**: Align datasets using constant shifts. Registered mode uses a cross-correlation seed, entropy refinement, and an overlap arbiter. With two datasets only the second is aligned, against the first. With three or more, every dataset including the reference is aligned against the others; a move within 30 nm of the current shift is damped by (N-1)/N (N = number of datasets) to remove the overcount from updating all datasets at once. Larger moves into another basin are applied in full. Continuous mode aligns consecutive-chunk boundaries by cross-correlation, with endpoint-chaining as a per-boundary fallback.
+3. **Iterative** (`:iterative` only): Repeat intra↔inter until the inter+intra parameter changes fall below `convergence_tol` or the entropy cost plateaus (relative improvement < 1e-4, both modes)
+
+No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm; each reports it in a warning as a likely collection failure (the stage moved between acquisitions). See [Theory and Workflow](https://juliasmlm.github.io/SMLMDriftCorrection.jl/stable/theory_workflow/) for the alignment rules.
 
 The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
 
 ## Aligning Independent SMLDs
 
-`align_smld` aligns a vector of independent SMLD structures to a common reference (the first) using rigid shifts. Use case: aligning separate acquisitions or multi-color channels that image the same FOV.
+`align_smld` aligns a vector of independent SMLD structures to a common reference (the first) using rigid shifts (or, in 2D, an affine transform). Use case: aligning separate acquisitions or multi-color channels that image the same FOV.
 
 ```julia
 using SMLMDriftCorrection
@@ -110,11 +113,19 @@ config = AlignConfig(method=:entropy, maxn=100, histbinsize=0.05)
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `method` | `:entropy` | `:entropy` (CC + entropy refinement) or `:fft` (CC only) |
+| `transform` | `:shift` | `:shift` (2D or 3D translation) or `:affine` (2D affine correction) |
 | `maxn` | `100` | Maximum neighbors for entropy calculation |
 | `histbinsize` | `0.05` | Histogram bin size (μm) for cross-correlation |
 | `verbose` | `0` | Verbosity (0=quiet, 1=info) |
 
-Works on both 2D and 3D data. Threaded across datasets. The entropy method uses regularization toward the CC result to prevent optimizer divergence.
+Shift alignment works on both 2D and 3D data; `transform=:affine` is 2D only. Shift alignment is threaded across datasets. The entropy method uses regularization toward the CC result to prevent optimizer divergence. See the [`align_smld` API reference](https://juliasmlm.github.io/SMLMDriftCorrection.jl/stable/api/#SMLMDriftCorrection.align_smld) for affine requirements.
+
+| Alignment output | Description |
+|------------------|-------------|
+| `aligned` | Aligned SMLDs (the first is unchanged) |
+| `info.shifts` | Translation component for each SMLD |
+| `info.transforms` | Shift transforms, or similarity approximations of the affine corrections |
+| `info.diagnostic` | Exact affine coefficients and global shifts for `:affine`; `nothing` for `:shift` |
 
 ## Utility Functions
 
@@ -124,6 +135,12 @@ traj = drift_trajectory(info.model)
 traj = drift_trajectory(info.model; cumulative=true)  # for continuous mode
 ```
 Extract drift trajectory for plotting. Returns NamedTuple with `frames`, `x`, `y` (and `z` for 3D), `dataset`.
+
+### position_frame_correlation
+```julia
+diag = position_frame_correlation(smld_corrected; K=20, mode=:intra)  # or mode=:inter
+```
+Residual-drift diagnostic: correlation of local position residuals with frame number (`:intra`, per dataset) or dataset index (`:inter`). `driftcorrect` stores it in `info.residual_correlation`.
 
 ### filter_emitters
 ```julia
@@ -138,8 +155,9 @@ config = DriftConfig(warm_start=info1.model)
 (smld2, info2) = driftcorrect(smld2, config)
 
 # Continue iterating from previous result
-(smld2, info2) = driftcorrect(smld1, info1; max_iterations=5)
+(smld2, info2) = driftcorrect(smld, info1; max_iterations=5)
 ```
+Pass the original, uncorrected `smld` with its `info1`. Continuation reuses the original run's `dataset_mode` and chunking, so it also works on chunked continuous results.
 
 ## Algorithm References
 

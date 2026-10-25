@@ -17,12 +17,16 @@ Each SMLD is assumed to be an independent acquisition of the same FOV/structure.
 - `histbinsize=0.05`: Histogram bin size (μm) for cross-correlation
 - `verbose=0`: Verbosity: 0=quiet, 1=info
 
+`transform=:affine` is 2D only (3D data throws) and ignores `method`: it always runs the
+shift-field cross-correlation method and needs about 200 localizations per tile
+(`min_locs=200`).
+
 # Returns
 Tuple `(aligned_smlds, info::AlignInfo)` where:
 - `aligned_smlds`: Vector of aligned SMLDs (first is unchanged)
 - `info.shifts[i]`: translation component for `smlds[i]` (`shifts[1]` = zeros)
 - `info.transforms[i]`: diagnostic transform (ShiftTransform for `:shift`; a similarity
-  fit `AffineTransform2D`/`AffineTransform3D` for `:affine`).
+  fit `AffineTransform2D` for `:affine`).
 - `info.diagnostic`: `nothing` for `:shift`; for `:affine` a NamedTuple with
   `affine_coeffs[i] = (a, b, c, d, e, f)` and `global_shifts[i]` — the **exact**
   per-dataset correction applied (summed across internal passes). The similarity
