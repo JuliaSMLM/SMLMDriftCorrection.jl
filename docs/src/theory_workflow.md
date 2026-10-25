@@ -113,7 +113,7 @@ An **overlap arbiter** chooses among {refined, cross-correlation, current}. The 
 
 With **two datasets**, only the second is aligned, against the first; the first is held fixed. With **three or more**, every dataset including the reference is aligned against the others. In the small-offset regime, each dataset's refine measures its offset from the mean of the others, which move in the same pass, so a simultaneous update overcounts the relative correction by ``N/(N-1)``. A move within 30 nm of the incumbent is therefore damped by ``(N-1)/N`` to remove that overcount; larger moves into another basin are applied in full. The result is then re-anchored to keep the reference shift at zero, preserving the global frame. This damping applies to the registered CC-primary passes; the cold start, `:fft`, and continuous mode use their own update rules.
 
-No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm; each reports it in a warning as a likely collection failure (the stage moved between acquisitions). The dataset stays at its kept shift.
+No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions); the warning leaves the kept shift unchanged. Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning.
 
 ## Quality Tiers
 
@@ -136,7 +136,7 @@ The fastest tier. Uses **cross-correlation** of histogram images to estimate int
 3. **Pass 2**: Refine each dataset's shift against a merged histogram of all other (shifted) datasets
 4. **Pass 3**: Detect outlier shifts (more than `median + 5*max(MAD, 100 nm)`, with at least 4 datasets) and re-align them against dataset 1 using a Gaussian-damped cross-correlation prior
 
-Every CC shift, in all three passes, is computed on bin-count-capped histograms. Subject to the 5 μm component limit, it replaces the current shift unless the current shift has strictly higher occupancy near the reference (ties go to the CC). A CC with a component over 5 μm is not applied and is reported in a warning as a likely collection failure (the stage moved between acquisitions). `:fft` ignores `dataset_mode`: `:fft` with `:continuous` runs the same registered-style passes against dataset 1 and the merged others.
+Every CC shift, in all three passes, is computed on bin-count-capped histograms. Subject to the 5 μm component limit, it replaces the current shift unless the current shift has strictly higher occupancy near the reference (ties go to the CC). A CC with a component over 5 μm is not applied; when a dropped CC overlaps clearly better than the shift the dataset ends with, `:fft` warns once per dataset per call of a likely collection failure (the stage moved between acquisitions). `:fft` ignores `dataset_mode`: `:fft` with `:continuous` runs the same registered-style passes against dataset 1 and the merged others.
 
 Best for: quick previews, very large datasets, or as initialization for entropy-based methods.
 

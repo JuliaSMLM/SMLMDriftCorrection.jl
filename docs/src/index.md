@@ -205,7 +205,7 @@ The algorithm uses **entropy minimization** (Cnossen et al., 2021) with **Legend
 
 3. **Iterative** (`:iterative` quality only): Repeat intra↔inter until the inter and intra parameter changes fall below `convergence_tol` or the entropy cost plateaus (relative improvement < 1e-4, both modes).
 
-No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm; each reports it in a warning as a likely collection failure (the stage moved between acquisitions). See [Theory and Workflow](@ref "Theory and Workflow") for the alignment rules.
+No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions). Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning. See [Theory and Workflow](@ref "Theory and Workflow") for the alignment rules.
 
 The Legendre polynomial basis provides better optimization conditioning than standard polynomials because the basis functions are orthogonal over the normalized time domain [-1, 1].
 

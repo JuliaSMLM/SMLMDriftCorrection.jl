@@ -180,11 +180,17 @@ info.residual_correlation.inter.corr_y                   # inter-dataset alignme
     n_chunks::Int = 0
 end
 
-# Preserve the original positional constructor; new metadata is supplied by keyword.
+# Preserve the original positional constructors with defaults for the new metadata.
 function DriftInfo(model, elapsed_s, backend, iterations, converged, entropy, history,
                    roi_indices, residual_correlation)
     return DriftInfo(; model, elapsed_s, backend, iterations, converged, entropy, history,
                        roi_indices, residual_correlation)
+end
+
+function DriftInfo{M}(model, elapsed_s, backend, iterations, converged, entropy, history,
+                      roi_indices, residual_correlation) where {M<:AbstractIntraInter}
+    return DriftInfo{M}(model, elapsed_s, backend, iterations, converged, entropy, history,
+                        roi_indices, residual_correlation, :registered, 0, 0)
 end
 
 """
