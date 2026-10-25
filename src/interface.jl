@@ -196,16 +196,19 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
 
     elapsed_s = (time_ns() - t_start) / 1e9
 
-    info = DriftInfo(
-        driftmodel,
+    info = DriftInfo(;
+        model = driftmodel,
         elapsed_s,
-        :cpu,
-        result.iterations,
-        result.converged,
-        final_entropy,
-        result.history,
+        backend = :cpu,
+        iterations = result.iterations,
+        converged = result.converged,
+        entropy = final_entropy,
+        history = result.history,
         roi_indices,
-        residual_corr
+        residual_correlation = residual_corr,
+        dataset_mode,
+        chunk_frames = chunk_info === nothing ? 0 : chunk_frames,
+        n_chunks = chunk_info === nothing ? 0 : n_chunks
     )
 
     return (smld_corrected, info)
@@ -215,16 +218,22 @@ end
     driftcorrect(smld, info::DriftInfo; kwargs...) -> (corrected_smld, info)
 
 Continue drift correction from a previous result using the model from info.
+The dataset mode and chunking settings default to those of the original run.
+Corrections preserve the input's dataset and frame numbering.
 
 # Keyword Arguments
-- `dataset_mode=:registered`: Dataset mode (`:registered` or `:continuous`)
+- `dataset_mode=info.dataset_mode`: Dataset mode (`:registered` or `:continuous`)
+- `chunk_frames=info.chunk_frames`: Frames per chunk for continuous mode
+- `n_chunks=info.n_chunks`: Chunks per dataset for continuous mode
 - `max_iterations=10`: Additional iterations to run
 - `convergence_tol=0.001`: Convergence tolerance (μm)
 - `maxn=100`: Maximum neighbors for entropy calculation
 - `verbose=0`: Verbosity level
 """
 function driftcorrect(smld::SMLD, info::DriftInfo;
-    dataset_mode::Symbol = :registered,
+    dataset_mode::Symbol = info.dataset_mode,
+    chunk_frames::Int = info.chunk_frames,
+    n_chunks::Int = info.n_chunks,
     max_iterations::Int = 10,
     convergence_tol::Float64 = 0.001,
     maxn::Int = 100,
@@ -232,9 +241,37 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
 
     t_start = time_ns()
 
+    if dataset_mode ∉ (:registered, :continuous)
+        throw(ArgumentError("Unknown dataset_mode: $dataset_mode. Use :registered or :continuous"))
+    end
+    if dataset_mode != :continuous && (chunk_frames > 0 || n_chunks > 0)
+        throw(ArgumentError("Cannot continue a chunked model in $dataset_mode mode; chunking requires :continuous"))
+    end
+
     # Deep copy to avoid modifying original
     smld_work = deepcopy(smld)
     model = deepcopy(info.model)
+
+    chunk_info = nothing
+    if dataset_mode == :continuous && (chunk_frames > 0 || n_chunks > 0)
+        chunk_info = chunk_smld(smld_work; chunk_frames=chunk_frames, n_chunks=n_chunks)
+        smld_work = chunk_info.smld
+    end
+
+    if !(model isa LegendrePolynomial)
+        throw(ArgumentError("Cannot continue a $(typeof(model)) model; continuation requires LegendrePolynomial"))
+    end
+    if model.ndatasets != smld_work.n_datasets
+        throw(ArgumentError("Cannot continue: input has $(smld_work.n_datasets) datasets after chunking, " *
+                            "but the previous model has $(model.ndatasets); use the original dataset structure and chunking settings"))
+    end
+    if model.n_frames != smld_work.n_frames
+        throw(ArgumentError("Cannot continue: input has $(smld_work.n_frames) frames per dataset after chunking, " *
+                            "but the previous model uses $(model.n_frames); use the original frame structure and chunking settings"))
+    end
+    if model.intra[1].ndims != nDims(smld_work)
+        throw(ArgumentError("Cannot continue: input and previous model have different spatial dimensions"))
+    end
 
     # Continue with iterative refinement
     iter_result = _driftcorrect_iterate!(model, smld_work, dataset_mode, maxn, max_iterations,
@@ -243,7 +280,7 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
                                           warned=fill(false, smld_work.n_datasets))
 
     # Apply corrections
-    smld_corrected = correctdrift(smld_work, model)
+    smld_corrected = _apply_final_corrections(smld, smld_work, model, chunk_info, dataset_mode)
 
     # Compute final entropy
     final_entropy = _compute_entropy(smld_corrected, maxn)
@@ -260,16 +297,19 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
 
     elapsed_s = (time_ns() - t_start) / 1e9
 
-    new_info = DriftInfo(
+    new_info = DriftInfo(;
         model,
         elapsed_s,
-        :cpu,
-        iter_result.iterations,
-        iter_result.converged,
-        final_entropy,
-        iter_result.history,
-        info.roi_indices,  # Preserve ROI from original call
-        residual_corr
+        backend = :cpu,
+        iterations = iter_result.iterations,
+        converged = iter_result.converged,
+        entropy = final_entropy,
+        history = iter_result.history,
+        roi_indices = info.roi_indices,  # Preserve ROI from original call
+        residual_correlation = residual_corr,
+        dataset_mode,
+        chunk_frames,
+        n_chunks
     )
 
     return (smld_corrected, new_info)
@@ -288,7 +328,10 @@ Two-pass approach:
 Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`), so a bright
 aggregate cannot capture the peak, and each CC shift (and the pass-3 outlier re-alignment)
 replaces the incumbent unless the incumbent overlaps the reference strictly better
-(`_accept_if_better_overlap!`; ties go to the CC). This tier has no 5 μm cut on a CC shift.
+(`_accept_if_better_overlap!`; ties go to the CC). As in registered mode, a CC with a
+component over 5 μm (`_CC_MAX_SHIFT`) is not applied; where it overlaps clearly better than
+the shift the dataset ends with, one warning per dataset per call names it
+(`_warn_dropped_cc!`). `dataset_mode` is not read by this tier.
 """
 function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                             dataset_mode::Symbol, verbose::Int)
@@ -302,6 +345,9 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     if n_datasets < 2
         return (iterations=0, converged=true, history=Float64[])
     end
+
+    # last CC shift dropped as absurd (> 5 μm) per dataset; checked against the final shift below
+    dropped = Vector{Union{Nothing,Vector{Float64}}}(nothing, n_datasets)
 
     # Every CC shift below is overlap-guarded (`_accept_if_better_overlap!`): the
     # unnormalized histogram CC argmax can be captured by a hot spot present in some
@@ -317,7 +363,11 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     for nn = 2:n_datasets
         smld_n = filter_by_dataset(smld, nn)
         cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
-        _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
+        if _cc_too_far(cc_shift)
+            dropped[nn] = Float64.(cc_shift[1:n_dims])
+        else
+            _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
+        end
     end
 
     if verbose > 0
@@ -355,8 +405,12 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
         )
 
         cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
-        _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n,
-                                   _coord_tree(smld_merged, n_dims), n_dims)
+        if _cc_too_far(cc_shift)
+            dropped[nn] = Float64.(cc_shift[1:n_dims])
+        else
+            _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n,
+                                       _coord_tree(smld_merged, n_dims), n_dims)
+        end
     end
 
     if verbose > 0
@@ -394,7 +448,11 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                         histbinsize=0.05, maxcount=_CC_MAXCOUNT,
                         prior_shift=median_dm,
                         prior_sigma=prior_sigma)
-                    _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
+                    if _cc_too_far(cc_shift)
+                        dropped[nn] = Float64.(cc_shift[1:n_dims])
+                    else
+                        _accept_if_better_overlap!(model.inter[nn].dm, cc_shift, smld_n, tree_ref, n_dims)
+                    end
                     if verbose > 0
                         new_mag = sqrt(sum(model.inter[nn].dm.^2)) * 1000
                         @info("SMLMDriftCorrection: DS$nn re-aligned: $(round(new_mag, digits=1)) nm")
@@ -404,10 +462,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
         end
     end
 
-    # Normalize for continuous mode (drift at DS1, frame 1 = 0)
-    if dataset_mode == :continuous
-        # Nothing special needed for FFT mode (no intra correction)
-    end
+    _warn_dropped_cc!(model, smld, dropped, fill(false, n_datasets))
 
     return (iterations=0, converged=true, history=Float64[])
 end
@@ -497,6 +552,11 @@ const _CC_VERIFY_RADIUS = 0.030
 # (`findshift(...; maxcount)`): the CC then measures shared occupancy, so a bright
 # aggregate localized thousands of times in one bin cannot capture the peak.
 const _CC_MAXCOUNT = 4
+
+# A CC shift with a component over this (μm) is a collection failure (a stage that moved
+# between acquisitions), not drift: no tier applies it (`_warn_dropped_cc!` reports it).
+const _CC_MAX_SHIFT = 5.0
+_cc_too_far(cc) = maximum(abs.(cc)) > _CC_MAX_SHIFT
 
 """
 Iterative quality tier - full intra↔inter convergence loop.
@@ -926,7 +986,7 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
         in_kept = _overlap_inliers(sd, kept, tree, _CC_VERIFY_RADIUS, n_dims)
         cands = [dropped[d]]
         fresh = _try_findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
-        fresh !== nothing && maximum(abs.(fresh)) > 5.0 && push!(cands, Float64.(fresh[1:n_dims]))
+        fresh !== nothing && _cc_too_far(fresh) && push!(cands, Float64.(fresh[1:n_dims]))
         for c in cands
             in_c = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
             _overlap_leads(in_c, in_kept) || continue
@@ -979,8 +1039,8 @@ histograms (`findshift(...; maxcount=_CC_MAXCOUNT)`), so the CC measures shared
 occupancy and an aggregate weighs like ordinary structure; the incumbent stays a
 candidate as a backstop, so each step never lowers the dataset's consensus overlap
 as scored. The refine starts from the chosen seed even when it is zero
-(`findinter!(...; cc_init=false)`). In this registered CC-primary path (not `:fft`), a CC with a
-component over 5 μm is not a candidate; if such a CC leads the shift a dataset ends with (`_overlap_leads`), one `@warn` names it
+(`findinter!(...; cc_init=false)`). A CC with a
+component over 5 μm (`_CC_MAX_SHIFT`; `:fft` has the same rule) is not a candidate; if such a CC leads the shift a dataset ends with (`_overlap_leads`), one `@warn` names it
 (a stage that moved between acquisitions), once per dataset per `warned` (the iterative
 tier passes one vector across its iterations). The applied shift is not changed.
 The reference (DS1) is included so a misaligned reference is fixable (with two
@@ -1013,7 +1073,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
                 isempty(sd.emitters) && continue
                 cc = _try_findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
                 cc === nothing && continue
-                if maximum(abs.(cc)) >= 5.0
+                if _cc_too_far(cc)
                     dropped[d] = Float64.(cc[1:n_dims])
                     continue
                 end
@@ -1040,7 +1100,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
 
             # CC candidate; a failed or absurd CC is simply not a candidate.
             cc = _try_findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
-            cc_v = (cc === nothing || maximum(abs.(cc)) > 5.0) ? nothing : Float64.(cc[1:n_dims])
+            cc_v = (cc === nothing || _cc_too_far(cc)) ? nothing : Float64.(cc[1:n_dims])
             cc !== nothing && cc_v === nothing && (dropped[d] = Float64.(cc[1:n_dims]))
             in_cc = cc_v === nothing ? nothing : _overlap_inliers(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
 
@@ -1163,7 +1223,7 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         # Fine histogram (20 nm) — coarse bins lose the overlap contest to the smooth
         # endpoint prediction at clean boundaries even though CC is globally better.
         cc = _try_findshift(ref, cur; histbinsize=0.02)
-        if cc !== nothing && maximum(abs.(cc)) < 5.0
+        if cc !== nothing && !_cc_too_far(cc)
             inter_cc = Float64[Float64(cc[k]) for k in 1:n_dims]
             ov_cc = _overlap_score(cur, inter_cc, tree, _CC_VERIFY_RADIUS, n_dims)
             # Prefer the CC measurement: take endpoint only when CC overlap is clearly
