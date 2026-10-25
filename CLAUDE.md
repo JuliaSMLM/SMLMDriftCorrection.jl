@@ -119,6 +119,7 @@ With three or more datasets, the reference (DS1) is included so a misaligned ref
 
 - Dilution: unmatched localizations within 30 nm of matched ones lower the correct shift's occupancy, and on a hand-placed arrangement `:fft` can then accept a wrong basin.
 - A reference dataset made mostly of structure the other dataset lacks can prefer a wrong basin in registered mode (0.2.9 too).
+- Data too sparse to align (about 50-400 localizations per dataset): the cross-correlation can find a clear offset over 5 μm, which is refused as a likely collection failure; the intra polynomials and the entropy refine can then leave a dataset more than 5 μm off, with almost no co-localization. Treat such cells as failed (SMLMAnalysis flags them). A 5 μm cap on every final shift is planned for 0.2.11.
 
 ### Quality Tiers
 
