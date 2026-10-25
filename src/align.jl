@@ -235,7 +235,7 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
         θ_cc = zeros(Float64, ndims_ref)
         try
             cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize))
-            if maximum(abs.(cc_result)) < 5.0
+            if !_cc_too_far(cc_result)
                 θ_cc = cc_result
             end
         catch
@@ -302,4 +302,3 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
         shifts[i] = Float64.(res.minimizer)
     end
 end
-

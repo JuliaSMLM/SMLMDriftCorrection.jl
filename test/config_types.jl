@@ -57,3 +57,18 @@ params_small = StaticSMLMConfig(
     @test_throws ErrorException DC.align_smld([smld_small, smld_small]; method = :bad)
     @test_throws ErrorException DC.align_smld([smld_small, smld_small]; transform = :bad)
 end
+
+@testset "DriftInfo construction" begin
+    model = DC.LegendrePolynomial(smld_small; degree = 1)
+    info = DC.DriftInfo(model, 0.0, :cpu, 1, true, 0.0, Float64[], nothing, NamedTuple())
+    @test info.dataset_mode == :registered
+    @test info.chunk_frames == 0
+    @test info.n_chunks == 0
+
+    info = DC.DriftInfo(; model, elapsed_s = 0.0, backend = :cpu, iterations = 1,
+        converged = true, entropy = 0.0, history = Float64[], roi_indices = nothing,
+        residual_correlation = NamedTuple(), dataset_mode = :continuous, n_chunks = 3)
+    @test info.dataset_mode == :continuous
+    @test info.chunk_frames == 0
+    @test info.n_chunks == 3
+end

@@ -524,8 +524,8 @@ function findinter!(dm::AbstractIntraInter,
             # findshift(A, B) returns the shift of B relative to A
             # If B is shifted by +Δ relative to A, findshift returns +Δ
             # To correct B back to A, inter.dm = Δ (correctdrift subtracts it)
-            # Sanity check: shift should be < 5 μm typically
-            if maximum(abs.(cc_shift)) < 5.0
+            # Reject a CC with a component over the shared limit.
+            if !_cc_too_far(cc_shift)
                 θ0 = Float64.(cc_shift)
             end
         catch

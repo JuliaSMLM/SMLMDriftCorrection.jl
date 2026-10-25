@@ -134,6 +134,9 @@ Supports warm start via `info.model`.
 - `entropy::Float64`: Final entropy value after correction
 - `history::Vector{Float64}`: Entropy per iteration (empty for :fft)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subsampling (nothing if not used)
+- `dataset_mode::Symbol`: Dataset mode used for fitting (default `:registered`)
+- `chunk_frames::Int`: Frames per chunk requested for continuous mode (default `0`)
+- `n_chunks::Int`: Chunks per dataset requested for continuous mode (default `0`)
 - `residual_correlation::NamedTuple`: Position-frame correlation diagnostic on corrected data.
   - `intra_summary`: `(mean_abs_corr_x, mean_abs_corr_y, mean_abs_corr_z)` — per-dataset average
   - `intra_per_dataset`: vector of `(dataset, n_locs, corr_x, corr_y, corr_z)` — flag bad datasets
@@ -156,7 +159,7 @@ info.residual_correlation.inter.corr_y                   # inter-dataset alignme
 (smld2, info2) = driftcorrect(smld2; warm_start=info.model)
 ```
 """
-struct DriftInfo{M<:AbstractIntraInter} <: AbstractSMLMInfo
+@kwdef struct DriftInfo{M<:AbstractIntraInter} <: AbstractSMLMInfo
     model::M
     elapsed_s::Float64
     backend::Symbol
@@ -166,6 +169,16 @@ struct DriftInfo{M<:AbstractIntraInter} <: AbstractSMLMInfo
     history::Vector{Float64}
     roi_indices::Union{Nothing, Vector{Int}}
     residual_correlation::NamedTuple
+    dataset_mode::Symbol = :registered
+    chunk_frames::Int = 0
+    n_chunks::Int = 0
+end
+
+# Preserve the original positional constructor; new metadata is supplied by keyword.
+function DriftInfo(model, elapsed_s, backend, iterations, converged, entropy, history,
+                   roi_indices, residual_correlation)
+    return DriftInfo(; model, elapsed_s, backend, iterations, converged, entropy, history,
+                       roi_indices, residual_correlation)
 end
 
 """
