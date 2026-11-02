@@ -74,6 +74,8 @@ As in Wester et al., the constant term (``P_0``) is excluded from the intra-data
 
 The package supports three acquisition scenarios through the `dataset_mode` parameter and chunking options. `dataset_mode` selects the inter-dataset algorithm: registered mode uses CC-primary alignment against the consensus, while continuous mode uses consecutive-chunk CC. `quality=:fft` ignores `dataset_mode` and uses registered-style CC passes. Continuation, `driftcorrect(smld, info)`, reuses the original run's `dataset_mode` and chunking.
 
+A failed CC stops the run. A cross-correlation that throws is logged once at `@error` and its original exception is rethrown. No quality tier continues without it. CC is the primary inter-dataset objective in registered mode and the boundary measurement in continuous mode. Entropy is about ``1/N`` blind to one dataset's offset, so without CC a dataset can end up microns off with `converged=true` and no other sign. A failure on valid input indicates a broken FFT environment or a bug. The same error behavior applies to `align_smld`, including `transform=:affine`. Interrupts propagate without an error log.
+
 ### Continuous (Single Polynomial)
 
 For short acquisitions (fewer than ~4000 frames), drift is modeled as a single polynomial over the entire dataset:
@@ -94,7 +96,7 @@ config = DriftConfig(dataset_mode=:continuous, chunk_frames=4000)
 (smld_corrected, info) = driftcorrect(smld, config)
 ```
 
-Each chunk is treated as a separate "dataset" internally. The inter-chunk shift at each boundary is **measured by cross-correlating consecutive chunks** rather than extrapolated from polynomial endpoints -- consecutive chunks image the same structure (same field of view, adjacent in time), so cross-correlation locks on reliably. The endpoint-chained prediction (``\text{inter}[n] = \text{inter}[n-1] + \text{endpoint}(n-1) - \text{startpoint}(n)``) is kept only as a per-boundary fallback for a sparse or featureless boundary where cross-correlation cannot, chosen by a consensus-overlap test, and the result is entropy-refined with regularization from boundary-gap estimates. Measuring each boundary independently avoids the two failure modes of endpoint extrapolation: slow directional residual accumulation across many seams, and a single mis-fit boundary (a polynomial extrapolating poorly at ``t = \pm 1``) propagating downstream through the cumulative chain. This piecewise approach provides the flexibility of high-order modeling without requiring a single high-degree polynomial over the full acquisition.
+Each chunk is treated as a separate "dataset" internally. The inter-chunk shift at each boundary is **measured by cross-correlating consecutive chunks** rather than extrapolated from polynomial endpoints -- consecutive chunks image the same structure (same field of view, adjacent in time), so cross-correlation locks on reliably. The endpoint-chained prediction (``\text{inter}[n] = \text{inter}[n-1] + \text{endpoint}(n-1) - \text{startpoint}(n)``) is kept only as a per-boundary fallback at a boundary with an empty chunk (no CC is attempted), where a completed CC overlaps clearly worse by more than 0.05 of the localizations according to the consensus-overlap test, or where its shift exceeds the 5 μm component limit. A cross-correlation that throws stops the run. The result is entropy-refined with regularization from boundary-gap estimates. Measuring each boundary independently avoids the two failure modes of endpoint extrapolation: slow directional residual accumulation across many seams, and a single mis-fit boundary (a polynomial extrapolating poorly at ``t = \pm 1``) propagating downstream through the cumulative chain. This piecewise approach provides the flexibility of high-order modeling without requiring a single high-degree polynomial over the full acquisition.
 
 ### Registered
 
@@ -151,7 +153,7 @@ The default tier. Performs one pass of entropy-based intra-dataset correction fo
    - Adaptive KDTree rebuilding avoids unnecessary recomputation
 2. **Inter-dataset alignment** -- mode-specific:
    - **Registered**: CC-primary, as described under Dataset Modes: a CC cold start against dataset 1 followed by two passes of CC seeding, BFGS entropy refinement, and overlap arbitration against the corrected consensus. With two datasets only the second is aligned; with three or more, all datasets including the reference are aligned, with small moves damped as described above.
-   - **Continuous**: CC-seeded per boundary. The boundary cross-correlations walk the chunks **sequentially** (each placement builds on the previous chunk's), falling back to endpoint-chaining only where CC cannot lock on; the entropy refine that follows (with boundary-gap regularization) is threaded against chunk 1, then sequential against earlier chunks.
+   - **Continuous**: CC-seeded per boundary. The boundary cross-correlations walk the chunks **sequentially** (each placement builds on the previous chunk's), falling back to endpoint-chaining at a boundary with an empty chunk (no CC is attempted), where a completed CC overlaps clearly worse by more than 0.05 of the localizations, or where its shift exceeds the 5 μm component limit. A CC that throws stops the run. The entropy refine that follows (with boundary-gap regularization) is threaded against chunk 1, then sequential against earlier chunks.
 3. Apply corrections to produce the final SMLD
 
 ### Iterative (`:iterative`)
@@ -173,7 +175,7 @@ The iteration resolves the coupling between intra and inter corrections: the opt
 
 - Dilution: unmatched localizations within 30 nm of matched ones lower the correct shift's occupancy, and on a hand-placed arrangement `:fft` can then accept a wrong basin.
 - A reference dataset made mostly of structure the other dataset lacks can prefer a wrong basin in registered mode.
-- Data too sparse to align (about 50-400 localizations per dataset): the cross-correlation can find a clear offset over 5 μm, which is refused as a likely collection failure; the intra polynomials and the entropy refine can then leave a dataset more than 5 μm off, with almost no co-localization. Treat such cells as failed (SMLMAnalysis flags them). A 5 μm cap on every final shift is planned for 0.2.11.
+- Data too sparse to align (about 50-400 localizations per dataset): the cross-correlation can find a clear offset over 5 μm, which is refused as a likely collection failure; the intra polynomials and the entropy refine can then leave a dataset more than 5 μm off, with almost no co-localization. Treat such cells as failed (SMLMAnalysis flags them). A 5 μm cap on every final shift is planned for a later release.
 
 ## References
 

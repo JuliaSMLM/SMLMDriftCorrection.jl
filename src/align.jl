@@ -6,6 +6,8 @@
 
 Align a vector of independent SMLD structures to a common reference (the first).
 Each SMLD is assumed to be an independent acquisition of the same FOV/structure.
+All SMLDs must have the same concrete SMLD type and share the same camera field
+(the same x and y edge limits). Cross-correlation requires both for every method.
 
 # Arguments
 - `smlds`: Vector of SMLD structures (>= 2 required)
@@ -32,6 +34,13 @@ Tuple `(aligned_smlds, info::AlignInfo)` where:
   per-dataset correction applied (summed across internal passes). The similarity
   stored in `info.transforms[i]` is only a best-fit approximation of this general
   affine.
+
+# Errors
+A cross-correlation that fails stops the call and rethrows its original error after
+an `@error` log line. Neither method continues without it. This also applies to
+`transform=:affine`.
+On threaded paths, the original error arrives inside a `TaskFailedException` or
+`CompositeException`.
 
 # Example
 ```julia
@@ -200,7 +209,7 @@ end
 function _align_fft!(shifts, smlds, ndims_ref, config)
     N = length(smlds)
     Threads.@threads for i in 2:N
-        shifts[i] = findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize)
+        shifts[i] = _cc_or_stop(findshift, smlds[1], smlds[i]; histbinsize=config.histbinsize)
     end
 end
 
@@ -237,13 +246,9 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
 
         # CC initial guess
         θ_cc = zeros(Float64, ndims_ref)
-        try
-            cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize))
-            if !_cc_too_far(cc_result)
-                θ_cc = cc_result
-            end
-        catch
-            # Keep zero initialization
+        cc_result = Float64.(_cc_or_stop(findshift, smlds[1], smlds[i]; histbinsize=config.histbinsize))
+        if !_cc_too_far(cc_result)
+            θ_cc = cc_result
         end
 
         # Build entropy cost function (same pattern as findinter!)

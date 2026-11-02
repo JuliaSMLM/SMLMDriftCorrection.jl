@@ -56,11 +56,7 @@ function gaussian_subpixel_2d(cc::AbstractMatrix, peak_idx::CartesianIndex; half
     end
 
     # Solve least squares: A * coeffs = z
-    coeffs = try
-        A \ z
-    catch
-        return float(pi), float(pj)
-    end
+    coeffs = A \ z
 
     # Check for NaN in coefficients
     if any(isnan, coeffs) || any(isinf, coeffs)
@@ -274,7 +270,7 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
     ROI::AbstractVector{T}=[-1.0],
     histbinsize::Union{AbstractVector{T}, T}=1.0
 ) where {T<:Real}
-    if size(ROI, 1) == 6 && ROI[1] >= 0.0
+    if size(ROI, 1) == 6
         x_min = ROI[1]
         x_max = ROI[2]
         y_min = ROI[3]
@@ -520,6 +516,24 @@ function findshift(smld1::T, smld2::T;
 end
 
 """
+    _cc_or_stop(f, args...; kw...)
+
+Run `f(args...; kw...)` and log each failed CC with an `@error` log line before
+rethrowing the original exception to the caller. SMLMAnalysis tees the run's log
+to `log.txt`, which an exception does not reach. Alignment without CC cannot be
+trusted, so a failed CC stops the run. Interrupts propagate without an error log.
+"""
+function _cc_or_stop(f, args...; kw...)
+    try
+        return f(args...; kw...)
+    catch e
+        e isa InterruptException || @error("SMLMDriftCorrection: cross-correlation failed, stopping: alignment without it can end up microns off with no other sign",
+                                          exception = e)
+        rethrow()
+    end
+end
+
+"""
     findshift_damped(smld1, smld2; histbinsize, prior_shift, prior_sigma)
 
 Find shift with Gaussian damping centered at prior_shift.
@@ -700,7 +714,7 @@ function find_affine_shift_field(smld1::S, smld2::S;
     nDims(smld1) == 2 || error("find_affine_shift_field: only 2D supported")
 
     # --- Step 1: global CC shift ---
-    global_shift = findshift(smld1, smld2; histbinsize=histbinsize)
+    global_shift = _cc_or_stop(findshift, smld1, smld2; histbinsize=histbinsize)
     smld2_shifted = deepcopy(smld2)
     correctdrift!(smld2_shifted, global_shift)
 
@@ -756,7 +770,7 @@ function find_affine_shift_field(smld1::S, smld2::S;
         sub_x2 = [e.x for e in sub2.emitters]; sub_y2 = [e.y for e in sub2.emitters]
         im_a = _gaussian_image(sub_x1, sub_y1, xlo, ylo, xhi, yhi, hbs)
         im_b = _gaussian_image(sub_x2, sub_y2, xlo, ylo, xhi, yhi, hbs)
-        cc = crosscorr2D(im_a, im_b)
+        cc = _cc_or_stop(crosscorr2D, im_a, im_b)
 
         # Peak and quality
         peak_idx = argmax(cc)

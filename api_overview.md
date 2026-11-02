@@ -15,6 +15,8 @@ Drift correction uses entropy minimization to find polynomial drift models that 
 
 No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions). Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning.
 
+A cross-correlation that throws stops `driftcorrect` or `align_smld`, including `transform=:affine`. The original exception is rethrown after an `@error` log line. No tier continues without it. Continuous endpoint chaining is used at a boundary with an empty chunk (no CC is attempted), where a completed CC overlaps clearly worse by more than 0.05 of the localizations, or where its shift exceeds the 5 μm component limit. A CC that throws never uses that fallback. Interrupts propagate without an error log.
+
 The `:iterative` tier converges when both inter and intra parameter changes fall below `convergence_tol`, or when the entropy cost plateaus (relative improvement < 1e-4, both modes). Continuation (`driftcorrect(smld, info)`) reuses the original run's `dataset_mode` and chunking. See [Theory and Workflow](docs/src/theory_workflow.md) for the alignment rules.
 
 ## Types

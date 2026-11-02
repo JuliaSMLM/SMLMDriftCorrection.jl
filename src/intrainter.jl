@@ -519,17 +519,13 @@ function findinter!(dm::AbstractIntraInter,
         end
 
         θ0 = zeros(Float64, n_dims)
-        try
-            cc_shift = findshift(smld_ref, smld_n_intra_only; histbinsize=0.05)  # 50nm bins
-            # findshift(A, B) returns the shift of B relative to A
-            # If B is shifted by +Δ relative to A, findshift returns +Δ
-            # To correct B back to A, inter.dm = Δ (correctdrift subtracts it)
-            # Reject a CC with a component over the shared limit.
-            if !_cc_too_far(cc_shift)
-                θ0 = Float64.(cc_shift)
-            end
-        catch
-            # Keep zero initialization
+        cc_shift = _cc_or_stop(findshift, smld_ref, smld_n_intra_only; histbinsize=0.05)  # 50nm bins
+        # findshift(A, B) returns the shift of B relative to A
+        # If B is shifted by +Δ relative to A, findshift returns +Δ
+        # To correct B back to A, inter.dm = Δ (correctdrift subtracts it)
+        # Reject a CC with a component over the shared limit.
+        if !_cc_too_far(cc_shift)
+            θ0 = Float64.(cc_shift)
         end
     end
 
