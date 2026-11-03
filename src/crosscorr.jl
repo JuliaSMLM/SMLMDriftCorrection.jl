@@ -415,8 +415,10 @@ Perform a cross-correlation between images representing localizations in two
 SMLD structures and compute the shift between the two original images.
 histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates. `maxcount`, when given, clips every
-histogram bin to at most that many localizations before correlating, so one bright
-aggregate cannot dominate the correlation; `nothing` (default) correlates raw counts.
+histogram bin to at most that many localizations before correlating, limiting how
+much any heavily populated bin counts, so a single bright spot no longer captures
+the peak (an aggregate spread over many bins still can); `nothing` (default)
+correlates raw counts.
 It must be a positive integer.
 """
 function findshift(smld1::T, smld2::T;
@@ -689,8 +691,8 @@ end
 # ============================================================================
 
 """
-    find_affine_shift_field(smld1, smld2; histbinsize=0.05, grid_n=5,
-                            sub_histbinsize=0.02, min_locs=100) -> NamedTuple
+    find_affine_shift_field(smld1, smld2; histbinsize=0.05, sub_histbinsize=0.005,
+                            grid_n=5, min_locs=30) -> NamedTuple
 
 Recover a full 2D affine transform between two SMLDs using local
 cross-correlation shifts measured on a grid of sub-regions, weighted
@@ -700,10 +702,11 @@ cross-correlations use uncapped Gaussian-rendered images.
 
 Algorithm:
 1. Global CC shift to coarsely align
-2. Divide overlapping FOV into grid_n × grid_n tiles
-3. For each tile: CC shift + quality metrics (peak CC value, loc count)
+2. Divide overlapping FOV into grid_n × grid_n tiles, automatically reducing the
+   grid (no lower than 2 × 2) if the smaller dataset averages fewer than min_locs per tile
+3. For each tile with at least min_locs in both SMLDs: CC shift and normalized CC quality
 4. Weighted least-squares affine fit: Δx = a*x + b*y + c,  Δy = d*x + e*y + f
-   Weight = normalized_cc_peak × min(n1, n2) / max_locs
+   Weight = cc_quality * sqrt(min(n1, n2))
 
 Returns a NamedTuple with affine params and diagnostics.
 """

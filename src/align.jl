@@ -8,8 +8,9 @@ Align a vector of independent SMLD structures to a common reference (the first).
 Each SMLD is assumed to be an independent acquisition of the same FOV/structure.
 All SMLDs must have the same concrete SMLD type and share the same camera field
 (the same x and y edge limits). Cross-correlation requires both for every method.
-Cross-correlation histograms are capped at 4 localizations per bin so one bright
-aggregate cannot dominate the correlation; affine tiles use uncapped
+Cross-correlation histograms are capped at 4 localizations per bin to limit how much
+any heavily populated bin counts, so a single bright spot no longer captures the
+peak (an aggregate spread over many bins still can); affine tiles use uncapped
 Gaussian-rendered images.
 
 # Arguments

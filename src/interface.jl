@@ -340,9 +340,11 @@ FFT quality tier - fast cross-correlation only, no entropy optimization.
 Two-pass approach:
 1. First pass: align each dataset to dataset 1 (rough alignment)
 2. Second pass: align each dataset to all others (refinement)
-Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`), so a bright
-aggregate cannot capture the peak, and each CC shift (and the pass-3 outlier re-alignment)
-replaces the incumbent unless the incumbent overlaps the reference strictly better
+Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`) to limit
+how much any heavily populated bin counts, so a single bright spot no longer captures
+the peak (an aggregate spread over many bins still can), and each CC shift (and the
+pass-3 outlier re-alignment) replaces the incumbent unless the incumbent overlaps the
+reference strictly better
 (`_accept_if_better_overlap!`; ties go to the CC). As in registered mode, a CC with a
 component over 5 μm (`_CC_MAX_SHIFT`) is not applied; where it overlaps clearly better than
 the shift the dataset ends with, one warning per dataset per call names it as a likely
@@ -1076,8 +1078,9 @@ in the entropy value. A raw-count histogram CC can be captured by a hot spot (a
 bright aggregate localized thousands of times in one bin, present in some datasets
 only): its peak then lands wherever the dataset's densest cluster lines up with the
 hot spot, microns away. The CCs here are therefore computed on bin-count-capped
-histograms (`findshift(...; maxcount=_CC_MAXCOUNT)`), so the CC measures shared
-occupancy and an aggregate weighs like ordinary structure; the incumbent stays a
+histograms (`findshift(...; maxcount=_CC_MAXCOUNT)`) to limit how much any heavily
+populated bin counts, so a single bright spot no longer captures the peak (an
+aggregate spread over many bins still can); the incumbent stays a
 candidate as a backstop, so each step never lowers the dataset's consensus overlap
 as scored. The refine starts from the chosen seed even when it is zero
 (`findinter!(...; cc_init=false)`). A CC with a
@@ -1210,8 +1213,9 @@ end
 """
 Seed continuous-mode inter-shifts by cross-correlating against the last chunk with
 localizations (FFT), with a per-boundary endpoint-chaining fallback.
-The CC histograms are capped at `_CC_MAXCOUNT` localizations per bin so a bright
-spot cannot capture the peak.
+The CC histograms are capped at `_CC_MAXCOUNT` localizations per bin to limit how
+much any heavily populated bin counts, so a single bright spot no longer captures
+the peak (an aggregate spread over many bins still can).
 
 Continuous chunks share structure (same FOV, consecutive in time), so the inter
 shift across each boundary can be *measured* by cross-correlating the intra-
