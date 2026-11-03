@@ -2,6 +2,8 @@
 using Test, SMLMDriftCorrection, SMLMSim, Random, Logging
 
 const DC = SMLMDriftCorrection
+const DARK_INTER_TOL = 0.010  # μm
+const DARK_FFT_INTER_TOL = 0.025  # μm
 
 function with_broken_cc(body; fail_at = 0, err = MethodError(DC.FourierTools.ccorr, ()))
     cc = (calls = Threads.Atomic{Int}(0), fail_at = Threads.Atomic{Int}(fail_at),
@@ -188,20 +190,50 @@ end
     @test maximum(abs.(shift .- collect(truth))) <= 0.05
 end
 
+# Each site localized six times with 10 nm scatter, as real sites are. One localization per site
+# on 50 nm grid points sits exactly on half-bins of the 20 nm continuous CC, which splits the
+# true peak and lets a chance coincidence win; that is the fixture, not the method.
+function jitter_fixture(points, shifts; nloc = 6, σ = 0.010, seed = 5)
+    rng = MersenneTwister(seed)
+    em = [Emitter2DFit{Float64}(p[1] + s[1] + σ * randn(rng), p[2] + s[2] + σ * randn(rng), 1000.0, 10.0,
+              σ, σ, 0.0, 0.0; σ_xy = 0.0, frame = f, dataset = d)
+          for (d, s) in enumerate(shifts) for p in points for f in 1:nloc]
+    return BasicSMLD(em, IdealCamera(1:12, 1:12, 0.1), nloc, length(shifts), Dict{String,Any}())
+end
+
 @testset "A dark dataset runs on every tier" begin
-    full = cc_fixture(points, fill((0.0, 0.0), 3))
+    true_shifts = [(0.0, 0.0), (0.12, -0.08), (-0.10, 0.15)]
+    full = jitter_fixture(points, true_shifts)
+    @test all(full.camera.pixel_edges_x[1] < e.x < full.camera.pixel_edges_x[end] &&
+              full.camera.pixel_edges_y[1] < e.y < full.camera.pixel_edges_y[end]
+              for e in full.emitters)
     for dark in 1:3, quality in (:singlepass, :iterative, :fft), mode in (:registered, :continuous)
-        s = BasicSMLD([e for e in full.emitters if e.dataset != dark], full.camera,
-                      full.n_frames, 3, Dict{String,Any}())
-        # Iteration needs a nonempty intra model; its zero warm start is deterministic.
-        warm_start = quality == :iterative ? DC.LegendrePolynomial(s; degree = 1) : nothing
-        @test_logs min_level = Logging.Error driftcorrect(s; quality, dataset_mode = mode,
-            degree = 0, maxn = 3, warm_start, max_iterations = 2)
+        @testset "dark=$dark quality=$quality mode=$mode" begin
+            s = BasicSMLD([e for e in full.emitters if e.dataset != dark], full.camera,
+                          full.n_frames, 3, Dict{String,Any}())
+            # Iteration needs a nonempty intra model; its zero warm start is deterministic.
+            warm_start = quality == :iterative ? DC.LegendrePolynomial(s; degree = 1) : nothing
+            _, info = @test_logs min_level = Logging.Error driftcorrect(s; quality, dataset_mode = mode,
+                degree = 0, maxn = 3, warm_start, max_iterations = 2)
+            inter = info.model.inter
+            i, j = [d for d in 1:3 if d != dark]
+            recovered = inter[j].dm - inter[i].dm
+            expected = collect(true_shifts[j]) - collect(true_shifts[i])
+            tol = quality == :fft ? DARK_FFT_INTER_TOL : DARK_INTER_TOL
+            @test maximum(abs.(recovered - expected)) <= tol
+        end
     end
-    # The outlier pass needs four datasets: a dark DS1 leaves it no reference.
-    no_ref = BasicSMLD([e for e in outlier.emitters if e.dataset != 1], outlier.camera,
-                       outlier.n_frames, 4, Dict{String,Any}())
-    @test_logs min_level = Logging.Error driftcorrect(no_ref; quality = :fft, degree = 0, maxn = 3)
+    @testset "dark=1 quality=fft mode=registered outlier" begin
+        # Pass 2 sets the frame when DS1 is dark; only relative shifts are defined.
+        no_ref = BasicSMLD([e for e in outlier.emitters if e.dataset != 1], outlier.camera,
+                           outlier.n_frames, 4, Dict{String,Any}())
+        _, info = @test_logs min_level = Logging.Error driftcorrect(no_ref;
+            quality = :fft, degree = 0, maxn = 3)
+        inter = info.model.inter
+        @test maximum(abs.(inter[3].dm - inter[2].dm)) <= DARK_FFT_INTER_TOL
+        # findshift reports the target's displacement; correctdrift subtracts inter.
+        @test maximum(abs.((inter[4].dm - inter[2].dm) - [2.0, 0.0])) <= DARK_FFT_INTER_TOL
+    end
 end
 
 @testset "A refused camera field throws without an error record" begin

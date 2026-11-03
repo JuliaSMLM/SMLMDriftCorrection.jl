@@ -1014,14 +1014,15 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
 end
 
 """
-Damping factor `(N-1)/N` for a registered pass over `N >= 3` datasets, 1 for `N = 2`.
+Damping factor `(N-1)/N` for a registered pass over `N >= 3` datasets with
+localizations, 1 for `N = 2`.
 
-In a Jacobi pass every dataset (DS1 included) is aligned against one snapshot of the
-others while all of them move. A dataset's refine measures its offset from the mean of
-the others, which move too, so applying the full measured step overcounts the relative
+In a Jacobi pass every dataset with localizations (the reference included) is aligned
+against one snapshot of the others while all of them move. A dataset's refine measures
+its offset from the mean of the others, which move too, so applying the full measured step overcounts the relative
 correction by `N/(N-1)`; scaling a small step by `(N-1)/N` removes that overcount (exact
-in the small-offset regime). With two datasets only DS2 moves (see `_cc_primary_inter!`),
-so nothing is overcounted.
+in the small-offset regime). With two datasets that have localizations only the second
+one moves (see `_cc_primary_inter!`), so nothing is overcounted.
 """
 _jacobi_damping(n_datasets::Int) = n_datasets > 2 ? (n_datasets - 1) / n_datasets : 1.0
 
@@ -1054,32 +1055,41 @@ a dropped CC overlaps clearly better than the shift a dataset ends with (`_overl
 one `@warn` names it as a likely collection failure (the stage moved between acquisitions),
 once per dataset per call (`warned`; the iterative tier passes one vector across its
 initialization, iterations, and retries). The warning does not change the applied shift.
-The reference (DS1) is included so a misaligned reference is fixable (with two
-datasets only DS2 is aligned, to DS1); the result is
+The reference is included when at least three datasets have localizations, so a
+misaligned reference is fixable; with two datasets that have localizations only
+the second is aligned, against the first. The result is
 re-anchored to inter[1]=0 (an image-invariant global shift). Where the arbiter's step for
-a dataset moves it less than `_CC_VERIFY_RADIUS`, the step is damped by `_jacobi_damping`;
-a larger move (another basin) is applied in full. `init=true` first does
-a rough cross-correlation init vs DS1 (cold start), accepted unless the incumbent
-(zero for registered data) overlaps DS1 strictly better. Jacobi: each pass uses one
-corrected snapshot. Subsumes the old post-hoc CC-rescue.
+a dataset moves it less than `_CC_VERIFY_RADIUS`, the step is damped by `_jacobi_damping`
+using the number of datasets with localizations; a larger move (another basin) is
+applied in full. `init=true` first does
+a rough cross-correlation init against the first dataset with localizations (cold
+start), accepted unless the incumbent (zero for registered data) overlaps it strictly
+better. Jacobi: each pass uses one corrected snapshot. Subsumes the old post-hoc
+CC-rescue.
 """
 function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
                              n_passes::Int=2, init::Bool=false, verbose::Int=0,
                              warned::Union{Nothing,Vector{Bool}}=nothing)
     n_dims = nDims(smld)
     n_datasets = smld.n_datasets
-    n_datasets < 2 && return
+    counts = zeros(Int, n_datasets)
+    for e in smld.emitters
+        1 <= e.dataset <= n_datasets && (counts[e.dataset] += 1)
+    end
+    live = findall(>(0), counts)
+    length(live) < 2 && return
     warned === nothing && (warned = fill(false, n_datasets))
     # last CC shift dropped as absurd (> 5 μm) per dataset; checked against the final shift below
     dropped = Vector{Union{Nothing,Vector{Float64}}}(nothing, n_datasets)
 
-    # Cold start: rough CC alignment of each dataset to DS1, kept unless the incumbent
-    # overlaps DS1 strictly better (ties go to the CC).
+    # Cold start: align each live dataset to the first live one, kept unless the
+    # incumbent overlaps the reference strictly better (ties go to the CC).
     if init
-        ds1 = _intra_only_corrected(smld, model, 1)
+        r = live[1]
+        ds1 = _intra_only_corrected(smld, model, r)
         if !isempty(ds1.emitters)
             tree1 = _coord_tree(ds1, n_dims)
-            Threads.@threads for d in 2:n_datasets
+            Threads.@threads for d in live[2:end]
                 sd = _intra_only_corrected(smld, model, d)
                 isempty(sd.emitters) && continue
                 cc = findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
@@ -1092,9 +1102,9 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
         end
     end
 
-    # With two datasets only their relative shift is defined: DS1 stays and DS2 aligns to it.
-    aligned = n_datasets == 2 ? (2:2) : (1:n_datasets)
-    damp = _jacobi_damping(n_datasets)
+    # With two live datasets only their relative shift is defined: hold the first.
+    aligned = length(live) == 2 ? live[2:2] : live
+    damp = _jacobi_damping(length(live))
     for pass in 1:n_passes
         snap = correctdrift(smld, model)             # Jacobi snapshot (read-only across threads)
         Threads.@threads for d in aligned
@@ -1167,17 +1177,17 @@ function _max_inter_change(inter_old::Vector{Vector{Float64}},
 end
 
 """
-Seed continuous-mode inter-shifts by cross-correlating consecutive chunks (FFT),
-with a per-boundary endpoint-chaining fallback.
+Seed continuous-mode inter-shifts by cross-correlating against the last chunk with
+localizations (FFT), with a per-boundary endpoint-chaining fallback.
 
 Continuous chunks share structure (same FOV, consecutive in time), so the inter
 shift across each boundary can be *measured* by cross-correlating the intra-
-corrected chunk against the already-placed previous chunk — rather than
+corrected chunk against the already-placed last chunk with localizations, rather than
 *extrapolated* from the polynomial endpoints. Per boundary (n-1)→n, both
 candidates are formed: the CC-measured shift, and the endpoint-chained shift
 `inter[n-1] + endpoint(n-1) - startpoint(n)`. Whichever puts chunk n in better
 consensus overlap (`_overlap_score` within `_CC_VERIFY_RADIUS`) with the corrected
-chunk n-1 is kept.
+last chunk with localizations is kept.
 
 As in every tier, a CC with a component over 5 μm is dropped. Continuous mode then falls
 back to endpoint chaining at that boundary without a warning.
@@ -1208,14 +1218,15 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
 
     n_cc = 0; n_ep = 0
     prev = intra_only(1)
+    last = 1
     for nn in 2:n_datasets
         cur = intra_only(nn)
-        # reference = chunk n-1 placed in the corrected frame (its inter applied)
+        # Reference = last chunk with localizations placed in the corrected frame.
         ref = deepcopy(prev)
         for e in ref.emitters
-            e.x -= model.inter[nn-1].dm[1]
-            e.y -= model.inter[nn-1].dm[2]
-            n_dims == 3 && (e.z -= model.inter[nn-1].dm[3])
+            e.x -= model.inter[last].dm[1]
+            e.y -= model.inter[last].dm[2]
+            n_dims == 3 && (e.z -= model.inter[last].dm[3])
         end
 
         # endpoint-chained candidate (always available, even where CC can't lock on)
@@ -1223,7 +1234,11 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         inter_ep = Float64[model.inter[nn-1].dm[k] + Float64(ep[k]) for k in 1:n_dims]
 
         if isempty(ref.emitters) || isempty(cur.emitters)
-            model.inter[nn].dm .= inter_ep; n_ep += 1; prev = cur; continue
+            model.inter[nn].dm .= inter_ep; n_ep += 1
+            if !isempty(cur.emitters)
+                prev = cur; last = nn
+            end
+            continue
         end
 
         refmat = n_dims == 2 ?
@@ -1251,7 +1266,7 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         else
             model.inter[nn].dm .= inter_ep; n_ep += 1
         end
-        prev = cur
+        prev = cur; last = nn
     end
     verbose > 0 && @info("SMLMDriftCorrection: continuous CC-seed — $n_cc/$(n_datasets-1) " *
                          "boundaries from cross-correlation, $n_ep from endpoint fallback")
