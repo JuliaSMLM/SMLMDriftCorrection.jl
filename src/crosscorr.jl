@@ -695,6 +695,8 @@ end
 Recover a full 2D affine transform between two SMLDs using local
 cross-correlation shifts measured on a grid of sub-regions, weighted
 by CC quality and localization density.
+The global shift uses histograms capped at 4 localizations per bin; tile
+cross-correlations use uncapped Gaussian-rendered images.
 
 Algorithm:
 1. Global CC shift to coarsely align
@@ -714,7 +716,7 @@ function find_affine_shift_field(smld1::S, smld2::S;
     nDims(smld1) == 2 || error("find_affine_shift_field: only 2D supported")
 
     # --- Step 1: global CC shift ---
-    global_shift = findshift(smld1, smld2; histbinsize=histbinsize)
+    global_shift = findshift(smld1, smld2; histbinsize=histbinsize, maxcount=_CC_MAXCOUNT)
     smld2_shifted = deepcopy(smld2)
     correctdrift!(smld2_shifted, global_shift)
 
@@ -766,10 +768,12 @@ function find_affine_shift_field(smld1::S, smld2::S;
         sub2 = BasicSMLD(smld2_shifted.emitters[mask2], sub_cam, smld2_shifted.n_frames, 1)
 
         # Gaussian-rendered images for CC (smooth, sub-bin precision)
-        sub_x1 = [e.x for e in sub1.emitters]; sub_y1 = [e.y for e in sub1.emitters]
-        sub_x2 = [e.x for e in sub2.emitters]; sub_y2 = [e.y for e in sub2.emitters]
-        im_a = _gaussian_image(sub_x1, sub_y1, xlo, ylo, xhi, yhi, hbs)
-        im_b = _gaussian_image(sub_x2, sub_y2, xlo, ylo, xhi, yhi, hbs)
+        sub_x1 = Float64[e.x for e in sub1.emitters]; sub_y1 = Float64[e.y for e in sub1.emitters]
+        sub_x2 = Float64[e.x for e in sub2.emitters]; sub_y2 = Float64[e.y for e in sub2.emitters]
+        im_a = _gaussian_image(sub_x1, sub_y1, Float64(xlo), Float64(ylo),
+                               Float64(xhi), Float64(yhi), Float64(hbs))
+        im_b = _gaussian_image(sub_x2, sub_y2, Float64(xlo), Float64(ylo),
+                               Float64(xhi), Float64(yhi), Float64(hbs))
         cc = crosscorr2D(im_a, im_b)
 
         # Peak and quality

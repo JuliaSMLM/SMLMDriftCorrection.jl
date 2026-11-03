@@ -247,8 +247,9 @@ findshift(smld1::SMLD, smld2::SMLD; histbinsize=1.0, maxcount=nothing) -> Vector
 ```
 Find shift between two SMLDs via cross-correlation of histogram images. Returns `[dx, dy]` or `[dx, dy, dz]`.
 `maxcount` (a positive integer) clips each histogram bin to at most that many localizations before correlating,
-so one bright aggregate cannot dominate the correlation; `nothing` correlates raw counts. `driftcorrect`'s registered CC-primary,
-continuous and `:fft` alignment use `maxcount=4`; `align_smld` correlates raw counts.
+so one bright aggregate cannot dominate the correlation; `nothing` correlates raw counts.
+Every cross-correlation in `driftcorrect` and `align_smld` uses `maxcount=4`, except the affine tiles,
+which use uncapped Gaussian-rendered images.
 
 ### find_affine_shift_field
 ```julia

@@ -8,6 +8,9 @@ Align a vector of independent SMLD structures to a common reference (the first).
 Each SMLD is assumed to be an independent acquisition of the same FOV/structure.
 All SMLDs must have the same concrete SMLD type and share the same camera field
 (the same x and y edge limits). Cross-correlation requires both for every method.
+Cross-correlation histograms are capped at 4 localizations per bin so one bright
+aggregate cannot dominate the correlation; affine tiles use uncapped
+Gaussian-rendered images.
 
 # Arguments
 - `smlds`: Vector of SMLD structures (>= 2 required)
@@ -210,7 +213,7 @@ end
 function _align_fft!(shifts, smlds, ndims_ref, config)
     N = length(smlds)
     Threads.@threads for i in 2:N
-        shifts[i] = findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize)
+        shifts[i] = findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize, maxcount=_CC_MAXCOUNT)
     end
 end
 
@@ -247,7 +250,7 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
 
         # CC initial guess
         θ_cc = zeros(Float64, ndims_ref)
-        cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize))
+        cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize, maxcount=_CC_MAXCOUNT))
         if !_cc_too_far(cc_result)
             θ_cc = cc_result
         end
