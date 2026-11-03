@@ -259,6 +259,8 @@ The CC histograms are capped at 4 localizations per bin; affine tiles use uncapp
 
 `method=:entropy` now arbitrates the refine against its CC seed: at `4d00714`, drift-corrected Genmab DNA-PAINT halves ended 95 and 173 nm off on 2 of 11 pairs despite CC seeds within 3 nm, and seeds 1 to 5 nm apart on one pair ended 1, 41, 162, 242 and 290 nm off.
 
+Long regression "align_smld :entropy on real Genmab halves" (`test/long/align_real_genmab.jl`) checks the two delivered fields and requires their localization files on the lab NAS; it skips when either file is absent.
+
 Note: `transform=:affine` is 2D only and ignores `method`; see the `align_smld` docstring for requirements. `info.transforms` stores a similarity approximation (`AffineTransform2D` with fields `θ`, `scale`, `tx`, `ty`); the exact affine correction is in `info.diagnostic`.
 
 ## Units
