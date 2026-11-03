@@ -151,9 +151,10 @@ align_smld(smlds::Vector{<:SMLD}, config::AlignConfig) -> (Vector{<:SMLD}, Align
 ```
 
 Align a vector of independent SMLD structures to a common reference (smlds[1]).
+For `method=:entropy`, registered mode's overlap arbiter picks the basin by occupancy and uses lower entropy among candidates within 30 nm of the winner that it does not significantly lead at the site level.
 
 **Transform modes:**
-- `transform=:shift` (default): Translation only. Methods: `:entropy` (CC + entropy refinement) or `:fft` (CC only).
+- `transform=:shift` (default): Translation only. Methods: `:entropy` (CC + entropy refinement + overlap arbiter) or `:fft` (CC only).
 - `transform=:affine`: Full 2D affine (anisotropic scale + rotation + shear + translation). Uses a 5×5 grid of local CC shifts and a quality-weighted least-squares affine fit, with two passes for refinement. See the `align_smld` docstring for requirements.
 
 **Arguments:**

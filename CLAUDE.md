@@ -193,6 +193,9 @@ smld_recovered = DC.correctdrift(smld_drifted, drift_model)
 ```
 
 ### Aligning Independent SMLDs
+
+`method=:entropy` uses a CC seed, entropy refinement, and the registered overlap arbiter to guard against the 95 and 173 nm errors seen on 2 of 11 real Genmab DNA-PAINT pairs despite CC seeds within 3 nm.
+
 ```julia
 using SMLMDriftCorrection
 
@@ -246,12 +249,14 @@ When `auto_roi=true`, selects a contiguous rectangular region from the densest p
 
 ### Alignment Parameters (align_smld)
 
-- `method=:entropy`: `:entropy` (CC + entropy refinement) or `:fft` (CC only)
+- `method=:entropy`: `:entropy` (CC + entropy refinement + registered overlap arbiter) or `:fft` (CC only)
 - `transform=:shift`: `:shift` (translation only) or `:affine` (rotation + scale + translation)
 - `maxn=100`: Maximum neighbors for entropy calculation
 - `histbinsize=0.05`: Histogram bin size (μm) for cross-correlation
 
 The CC histograms are capped at 4 localizations per bin; affine tiles use uncapped Gaussian-rendered images.
+
+`method=:entropy` now arbitrates the refine against its CC seed: at `4d00714`, drift-corrected Genmab DNA-PAINT halves ended 95 and 173 nm off on 2 of 11 pairs despite CC seeds within 3 nm, and seeds 1 to 5 nm apart on one pair ended 1, 41, 162, 242 and 290 nm off.
 
 Note: `transform=:affine` is 2D only and ignores `method`; see the `align_smld` docstring for requirements. `info.transforms` stores a similarity approximation (`AffineTransform2D` with fields `θ`, `scale`, `tx`, `ty`); the exact affine correction is in `info.diagnostic`.
 
