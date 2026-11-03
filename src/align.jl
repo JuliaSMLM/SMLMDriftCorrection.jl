@@ -6,16 +6,27 @@
 
 Align a vector of independent SMLD structures to a common reference (the first).
 Each SMLD is assumed to be an independent acquisition of the same FOV/structure.
+All SMLDs must have the same concrete SMLD type and share the same camera field
+(the same x and y edge limits). Cross-correlation requires both for every method.
+Cross-correlation histograms are capped at 4 localizations per bin to limit how much
+any heavily populated bin counts, so a single bright spot no longer captures the
+peak (an aggregate spread over many bins still can); affine tiles use uncapped
+Gaussian-rendered images.
 
 # Arguments
 - `smlds`: Vector of SMLD structures (>= 2 required)
 
 # Keyword Arguments
-- `method=:entropy`: `:entropy` (CC initial guess + entropy refinement) or `:fft` (CC only)
+- `method=:entropy`: `:entropy` (CC seed + entropy refine + registered overlap arbiter) or `:fft` (CC only)
 - `transform=:shift`: `:shift` (translation only) or `:affine` (rotation + scale + translation)
 - `maxn=100`: Maximum neighbors for entropy calculation
 - `histbinsize=0.05`: Histogram bin size (μm) for cross-correlation
 - `verbose=0`: Verbosity: 0=quiet, 1=info
+
+`method=:entropy` keeps a refined shift only when registered mode's overlap arbiter
+allows it. Occupancy chooses the basin; within 30 nm of the winner, lower entropy
+decides among candidates without a significant site-level deficit. This guards
+against refinement wandering to a wrong minimum.
 
 `transform=:affine` is 2D only (3D data throws) and ignores `method`: it always runs the
 shift-field cross-correlation method and needs about 200 localizations per tile
@@ -32,6 +43,14 @@ Tuple `(aligned_smlds, info::AlignInfo)` where:
   per-dataset correction applied (summed across internal passes). The similarity
   stored in `info.transforms[i]` is only a best-fit approximation of this general
   affine.
+
+# Errors
+A cross-correlation that fails in the FFT logs an `@error` line and stops the call
+by rethrowing its original error. Neither method continues without it. An input
+the cross-correlation refuses throws its own error without an `@error` line.
+This also applies to `transform=:affine`.
+On threaded paths, the original error arrives inside a `TaskFailedException` or
+`CompositeException`.
 
 # Example
 ```julia
@@ -200,11 +219,21 @@ end
 function _align_fft!(shifts, smlds, ndims_ref, config)
     N = length(smlds)
     Threads.@threads for i in 2:N
-        shifts[i] = findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize)
+        shifts[i] = findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize, maxcount=_CC_MAXCOUNT)
     end
 end
 
-# --- Entropy method (shift): CC initial guess + regularized entropy refinement ---
+# --- Entropy method (shift): CC seed + regularized entropy refine + overlap arbiter ---
+
+function _align_choose(sd, refined, θ_cc, tree, n_dims, cost)
+    in_ref = _overlap_inliers(sd, refined, tree, _CC_VERIFY_RADIUS, n_dims)
+    in_cc = _overlap_inliers(sd, θ_cc, tree, _CC_VERIFY_RADIUS, n_dims)
+    w = _occupancy_weights(sd, _disagreeing(in_ref, in_cc))
+    score = f -> _occupancy(w, f)
+    # The CC is also the incumbent, so equal entropy costs keep the seed.
+    return Float64.(_arbitrate(refined, in_ref, θ_cc, in_cc, θ_cc, in_cc;
+                               score, cost, w))
+end
 
 function _align_entropy!(shifts, smlds, ndims_ref, config)
     N = length(smlds)
@@ -220,6 +249,7 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
         σ_z_ref = Float64[e.σ_z for e in ref_emitters]
     end
     N_ref = length(ref_emitters)
+    tree_ref = _coord_tree(smlds[1], ndims_ref)
 
     Threads.@threads for i in 2:N
         # Extract target coords
@@ -237,13 +267,9 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
 
         # CC initial guess
         θ_cc = zeros(Float64, ndims_ref)
-        try
-            cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize))
-            if !_cc_too_far(cc_result)
-                θ_cc = cc_result
-            end
-        catch
-            # Keep zero initialization
+        cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize, maxcount=_CC_MAXCOUNT))
+        if !_cc_too_far(cc_result)
+            θ_cc = cc_result
         end
 
         # Build entropy cost function (same pattern as findinter!)
@@ -275,8 +301,8 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
         end
 
         # Regularize toward CC result: cost = entropy + λ*||θ - θ_cc||²
-        # Allows entropy to refine the CC shift but prevents wandering to
-        # spurious local minima. Same pattern as findinter! regularization.
+        # Penalize departures from the CC seed; the overlap arbiter guards the basin.
+        # Same pattern as findinter! regularization.
         # λ chosen so that a 0.5 μm deviation from CC adds ~0.25 to cost,
         # which is significant relative to typical entropy differences (~0.1-1.0).
         λ = 1.0
@@ -303,6 +329,11 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
             entropy_cost(θ0)
             state.allow_rebuild = false
         end
-        shifts[i] = Float64.(res.minimizer)
+        cost = θ -> begin
+            state.needs_initial_build = true
+            entropy_cost(θ)
+        end
+        shifts[i] = _align_choose(smlds[i], Float64.(res.minimizer), θ_cc,
+                                  tree_ref, ndims_ref, cost)
     end
 end

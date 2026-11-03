@@ -15,6 +15,8 @@ Drift correction uses entropy minimization to find polynomial drift models that 
 
 No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions). Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning.
 
+A cross-correlation that fails in the FFT logs an `@error` line and stops `driftcorrect` or `align_smld` by rethrowing its original error, including `transform=:affine`. An input the cross-correlation refuses throws its own error without an `@error` line. No tier continues without it. Continuous endpoint chaining is used at a boundary with an empty chunk (no CC is attempted), where a completed CC overlaps clearly worse by more than 0.05 of the localizations, or where its shift exceeds the 5 μm component limit. A CC that throws never uses that fallback. Interrupts propagate without an error log.
+
 The `:iterative` tier converges when both inter and intra parameter changes fall below `convergence_tol`, or when the entropy cost plateaus (relative improvement < 1e-4, both modes). Continuation (`driftcorrect(smld, info)`) reuses the original run's `dataset_mode` and chunking. See [Theory and Workflow](docs/src/theory_workflow.md) for the alignment rules.
 
 ## Types
@@ -149,9 +151,10 @@ align_smld(smlds::Vector{<:SMLD}, config::AlignConfig) -> (Vector{<:SMLD}, Align
 ```
 
 Align a vector of independent SMLD structures to a common reference (smlds[1]).
+For `method=:entropy`, registered mode's overlap arbiter picks the basin by occupancy and uses lower entropy among candidates within 30 nm of the winner that it does not significantly lead at the site level.
 
 **Transform modes:**
-- `transform=:shift` (default): Translation only. Methods: `:entropy` (CC + entropy refinement) or `:fft` (CC only).
+- `transform=:shift` (default): Translation only. Methods: `:entropy` (CC + entropy refinement + overlap arbiter) or `:fft` (CC only).
 - `transform=:affine`: Full 2D affine (anisotropic scale + rotation + shear + translation). Uses a 5×5 grid of local CC shifts and a quality-weighted least-squares affine fit, with two passes for refinement. See the `align_smld` docstring for requirements.
 
 **Arguments:**
@@ -245,8 +248,10 @@ findshift(smld1::SMLD, smld2::SMLD; histbinsize=1.0, maxcount=nothing) -> Vector
 ```
 Find shift between two SMLDs via cross-correlation of histogram images. Returns `[dx, dy]` or `[dx, dy, dz]`.
 `maxcount` (a positive integer) clips each histogram bin to at most that many localizations before correlating,
-so a bright aggregate cannot outweigh the structure; `nothing` correlates raw counts. `driftcorrect`'s registered CC-primary and
-`:fft` alignment use `maxcount=4`; `align_smld` correlates raw counts.
+limiting how much any heavily populated bin counts, so a single bright spot no longer captures the peak
+(an aggregate spread over many bins still can); `nothing` correlates raw counts.
+Every cross-correlation in `driftcorrect` and `align_smld` uses `maxcount=4`, except the affine tiles,
+which use uncapped Gaussian-rendered images.
 
 ### find_affine_shift_field
 ```julia
