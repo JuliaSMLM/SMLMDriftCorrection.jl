@@ -519,7 +519,7 @@ function findinter!(dm::AbstractIntraInter,
         end
 
         θ0 = zeros(Float64, n_dims)
-        cc_shift = _cc_or_stop(findshift, smld_ref, smld_n_intra_only; histbinsize=0.05)  # 50nm bins
+        cc_shift = findshift(smld_ref, smld_n_intra_only; histbinsize=0.05)  # 50nm bins
         # findshift(A, B) returns the shift of B relative to A
         # If B is shifted by +Δ relative to A, findshift returns +Δ
         # To correct B back to A, inter.dm = Δ (correctdrift subtracts it)

@@ -36,9 +36,10 @@ Tuple `(aligned_smlds, info::AlignInfo)` where:
   affine.
 
 # Errors
-A cross-correlation that fails stops the call and rethrows its original error after
-an `@error` log line. Neither method continues without it. This also applies to
-`transform=:affine`.
+A cross-correlation that fails in the FFT logs an `@error` line and stops the call
+by rethrowing its original error. Neither method continues without it. An input
+the cross-correlation refuses throws its own error without an `@error` line.
+This also applies to `transform=:affine`.
 On threaded paths, the original error arrives inside a `TaskFailedException` or
 `CompositeException`.
 
@@ -209,7 +210,7 @@ end
 function _align_fft!(shifts, smlds, ndims_ref, config)
     N = length(smlds)
     Threads.@threads for i in 2:N
-        shifts[i] = _cc_or_stop(findshift, smlds[1], smlds[i]; histbinsize=config.histbinsize)
+        shifts[i] = findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize)
     end
 end
 
@@ -246,7 +247,7 @@ function _align_entropy!(shifts, smlds, ndims_ref, config)
 
         # CC initial guess
         θ_cc = zeros(Float64, ndims_ref)
-        cc_result = Float64.(_cc_or_stop(findshift, smlds[1], smlds[i]; histbinsize=config.histbinsize))
+        cc_result = Float64.(findshift(smlds[1], smlds[i]; histbinsize=config.histbinsize))
         if !_cc_too_far(cc_result)
             θ_cc = cc_result
         end

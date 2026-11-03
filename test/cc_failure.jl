@@ -57,7 +57,14 @@ function check_cc_sites(body, cc; sample = false)
     lost = Int[]
     for k in sites
         reset_cc!(cc, k)
-        failure_root(body) === cc.err[] || push!(lost, k)
+        logger = Test.TestLogger(; min_level = Logging.Error)
+        cause = with_logger(logger) do
+            failure_root(body)
+        end
+        errors = filter(log -> log.level == Logging.Error, logger.logs)
+        logged_once = length(errors) == 1 &&
+            occursin(r"cross-correlation failed", string(only(errors).message))
+        (cause === cc.err[] && logged_once) || push!(lost, k)
     end
     @test isempty(lost)
     return n
@@ -179,6 +186,30 @@ end
     shift = DC.findshift(DC.filter_by_dataset(negative, 1), DC.filter_by_dataset(negative, 2);
         histbinsize = 0.05)
     @test maximum(abs.(shift .- collect(truth))) <= 0.05
+end
+
+@testset "A dark dataset runs on every tier" begin
+    full = cc_fixture(points, fill((0.0, 0.0), 3))
+    for dark in 1:3, quality in (:singlepass, :iterative, :fft), mode in (:registered, :continuous)
+        s = BasicSMLD([e for e in full.emitters if e.dataset != dark], full.camera,
+                      full.n_frames, 3, Dict{String,Any}())
+        # Iteration needs a nonempty intra model; its zero warm start is deterministic.
+        warm_start = quality == :iterative ? DC.LegendrePolynomial(s; degree = 1) : nothing
+        @test_logs min_level = Logging.Error driftcorrect(s; quality, dataset_mode = mode,
+            degree = 0, maxn = 3, warm_start, max_iterations = 2)
+    end
+    # The outlier pass needs four datasets: a dark DS1 leaves it no reference.
+    no_ref = BasicSMLD([e for e in outlier.emitters if e.dataset != 1], outlier.camera,
+                       outlier.n_frames, 4, Dict{String,Any}())
+    @test_logs min_level = Logging.Error driftcorrect(no_ref; quality = :fft, degree = 0, maxn = 3)
+end
+
+@testset "A refused camera field throws without an error record" begin
+    other = cc_fixture(points, [(0.0, 0.0)]; camera = IdealCamera(1:13, 1:12, 0.1))
+    @test_logs min_level = Logging.Error begin
+        cause = failure_root(() -> align_smld([smlds[1], other]; method = :entropy, maxn = 3))
+        @test cause isa ErrorException && occursin("Images must have the same size", cause.msg)
+    end
 end
 
 @testset "Healthy CC after injected methods are removed" begin

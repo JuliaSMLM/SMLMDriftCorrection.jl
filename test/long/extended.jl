@@ -765,7 +765,6 @@ using Random
         @testset "position_frame_correlation" begin
             # Build a small synthetic SMLD specifically for this test
             # (3 datasets, 500 frames, density ~10) to keep things fast.
-            Random.seed!(7)
             params_pfc = StaticSMLMConfig(
                 30.0,    # density (higher for enough locs)
                 0.13,    # σ_psf
@@ -776,23 +775,27 @@ using Random
                 2,       # ndims (2D)
                 [0.0, 1.0]
             )
-            (smld_pfc, _) = simulate(
-                params_pfc;
-                pattern=Nmer2D(n=6, d=0.2),
-                molecule=GenericFluor(; photons=5000.0, k_on=0.05, k_off=50.0),
-                camera=IdealCamera(1:64, 1:64, 0.1)
-            )
+            function pfc_fixture(rscale)
+                Random.seed!(7)
+                (truth, _) = simulate(
+                    params_pfc;
+                    pattern=Nmer2D(n=6, d=0.2),
+                    molecule=GenericFluor(; photons=5000.0, k_on=0.05, k_off=50.0),
+                    camera=IdealCamera(1:64, 1:64, 0.1)
+                )
+                Random.seed!(321)
+                drift = DC.LegendrePolynomial(truth; degree=2,
+                                               initialize="random", rscale=rscale)
+                drift.inter[1].dm .= 0.0
+                return truth, DC.applydrift(truth, drift)
+            end
 
             # Apply a known random drift large enough to dominate noise, and inside what
             # the default fit can remove on this dense fixture: rscale=0.15 (about 200 nm
             # RMSD) corrects to under 4 nm on every seed tried, while 0.2 leaves 47-184 nm
             # on 4 of 8 seeds and 0.3 most of the drift. The metric's floor on true data
             # is about 0.02, so a corrected value far above that is a failed fit.
-            Random.seed!(321)
-            drift_pfc = DC.LegendrePolynomial(smld_pfc; degree=2,
-                                              initialize="random", rscale=0.1)
-            drift_pfc.inter[1].dm .= 0.0
-            smld_drifted_pfc = DC.applydrift(smld_pfc, drift_pfc)
+            smld_pfc, smld_drifted_pfc = pfc_fixture(0.1)
 
             # Drift-correct
             (smld_corr_pfc, _info_pfc) = DC.driftcorrect(smld_drifted_pfc)
@@ -834,6 +837,17 @@ using Random
             corrected_total = res_corrected.summary.mean_abs_corr_x + res_corrected.summary.mean_abs_corr_y
             print("position_frame_correlation: |corr_x|+|corr_y| drifted=$drifted_total corrected=$corrected_total\n")
             @test drifted_total > corrected_total
+            @test corrected_total < 0.05
+
+            truth_large, drifted_large = pfc_fixture(0.3)
+            corrected_large, _ = DC.driftcorrect(drifted_large)
+            errors_x = [c.x - t.x for (c, t) in zip(corrected_large.emitters, truth_large.emitters)]
+            errors_y = [c.y - t.y for (c, t) in zip(corrected_large.emitters, truth_large.emitters)]
+            errors_x .-= sum(errors_x) / length(errors_x)
+            errors_y .-= sum(errors_y) / length(errors_y)
+            rmsd = 1000 * sqrt((sum(abs2, errors_x) + sum(abs2, errors_y)) / length(errors_x))
+            # A fix flips this assertion; the limit is documented in Known limits.
+            @test_broken rmsd < 10
 
             # --- Inter mode ---
             res_inter = SMLMDriftCorrection.position_frame_correlation(

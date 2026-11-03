@@ -49,8 +49,9 @@ Tuple `(corrected_smld, info)` where `info::DriftInfo` contains:
 - `residual_correlation`: Position-frame correlation diagnostic on corrected data; see [`position_frame_correlation`](@ref)
 
 # Errors
-A cross-correlation that fails stops the call and rethrows its original error after
-an `@error` log line. No quality tier continues without it.
+A cross-correlation that fails in the FFT logs an `@error` line and stops the call
+by rethrowing its original error. No quality tier continues without it. An input
+the cross-correlation refuses throws its own error without an `@error` line.
 On threaded paths, the original error arrives inside a `TaskFailedException` or
 `CompositeException`.
 
@@ -239,8 +240,9 @@ Corrections preserve the input's dataset and frame numbering.
 - `verbose=0`: Verbosity level
 
 # Errors
-A cross-correlation that fails stops the call and rethrows its original error after
-an `@error` log line. Continuation does not proceed without it.
+A cross-correlation that fails in the FFT logs an `@error` line and stops the call
+by rethrowing its original error. An input the cross-correlation refuses throws
+its own error without an `@error` line. Continuation does not proceed without CC.
 """
 function driftcorrect(smld::SMLD, info::DriftInfo;
     dataset_mode::Symbol = info.dataset_mode,
@@ -375,7 +377,8 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     tree_ref = _coord_tree(smld_ref, n_dims)
     for nn = 2:n_datasets
         smld_n = filter_by_dataset(smld, nn)
-        cc_shift = _cc_or_stop(findshift, smld_ref, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        (isempty(smld_ref.emitters) || isempty(smld_n.emitters)) && continue
+        cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
         if _cc_too_far(cc_shift)
             dropped[nn] = Float64.(cc_shift[1:n_dims])
         else
@@ -408,6 +411,8 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
             end
         end
 
+        (isempty(ref_emitters) || isempty(smld_n.emitters)) && continue
+
         # Create reference SMLD from merged emitters
         smld_merged = typeof(smld)(
             ref_emitters,
@@ -417,7 +422,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
             copy(smld.metadata)
         )
 
-        cc_shift = _cc_or_stop(findshift, smld_merged, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
         if _cc_too_far(cc_shift)
             dropped[nn] = Float64.(cc_shift[1:n_dims])
         else
@@ -456,8 +461,9 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                 prior_sigma = max(median_shift, 0.5)  # at least 500nm sigma
 
                 for nn in outliers
+                    isempty(smld_ref.emitters) && continue
                     smld_n = filter_by_dataset(smld, nn)
-                    cc_shift = _cc_or_stop(findshift_damped, smld_ref, smld_n;
+                    cc_shift = findshift_damped(smld_ref, smld_n;
                         histbinsize=0.05, maxcount=_CC_MAXCOUNT,
                         prior_shift=median_dm,
                         prior_sigma=prior_sigma)
@@ -988,7 +994,7 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
         kept = copy(model.inter[d].dm)
         in_kept = _overlap_inliers(sd, kept, tree, _CC_VERIFY_RADIUS, n_dims)
         cands = [dropped[d]]
-        fresh = _cc_or_stop(findshift, ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        fresh = findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
         _cc_too_far(fresh) && push!(cands, Float64.(fresh[1:n_dims]))
         for c in cands
             in_c = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
@@ -1076,7 +1082,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             Threads.@threads for d in 2:n_datasets
                 sd = _intra_only_corrected(smld, model, d)
                 isempty(sd.emitters) && continue
-                cc = _cc_or_stop(findshift, ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+                cc = findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
                 if _cc_too_far(cc)
                     dropped[d] = Float64.(cc[1:n_dims])
                     continue
@@ -1103,7 +1109,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             in_inc = _overlap_inliers(sd, inc, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # CC candidate; a CC with a component over 5 μm is not a candidate.
-            cc = _cc_or_stop(findshift, ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+            cc = findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
             cc_v = _cc_too_far(cc) ? nothing : Float64.(cc[1:n_dims])
             cc_v === nothing && (dropped[d] = Float64.(cc[1:n_dims]))
             in_cc = cc_v === nothing ? nothing : _overlap_inliers(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
@@ -1177,9 +1183,9 @@ As in every tier, a CC with a component over 5 μm is dropped. Continuous mode t
 back to endpoint chaining at that boundary without a warning.
 
 This is strictly ≥ either method alone: it uses CC where it locks on (the common
-case) and falls back to endpoint-chaining at a sparse/featureless boundary where
-CC can't. It avoids endpoint-chaining's two failure modes — slow directional
-residual accumulation, and a single bad boundary blowing up and propagating down
+case) and falls back to endpoint-chaining where the CC runs but overlaps clearly
+worse, or a chunk is empty. It avoids endpoint-chaining's two failure modes: slow
+directional residual accumulation, and a single bad boundary blowing up and propagating down
 the cumulative chain when a degree-d polynomial extrapolates wildly at t=±1
 (measuring beats extrapolating). See Continuous Mode Internals in CLAUDE.md.
 """
@@ -1229,7 +1235,7 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         # CC-measured candidate: rigid shift of cur onto the corrected ref = full inter[n].
         # Fine histogram (20 nm) — coarse bins lose the overlap contest to the smooth
         # endpoint prediction at clean boundaries even though CC is globally better.
-        cc = _cc_or_stop(findshift, ref, cur; histbinsize=0.02)
+        cc = findshift(ref, cur; histbinsize=0.02)
         if !_cc_too_far(cc)
             inter_cc = Float64[Float64(cc[k]) for k in 1:n_dims]
             ov_cc = _overlap_score(cur, inter_cc, tree, _CC_VERIFY_RADIUS, n_dims)

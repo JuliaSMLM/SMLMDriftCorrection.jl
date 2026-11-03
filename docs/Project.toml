@@ -1,6 +1,5 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-FFTA = "b86e33f2-c0db-4aa1-a6e0-ab43e668529e"
 SMLMData = "5488f106-40b8-4660-84c5-84a168990d1b"
 SMLMDriftCorrection = "34bda2d1-2fff-475a-a8c4-7f53d4251312"
 SMLMRender = "d945b928-cd23-4282-89d9-fc086b52682d"
@@ -8,6 +7,3 @@ SMLMSim = "5a0a87e4-02d4-41f5-bf26-b8c94c784a04"
 
 [compat]
 Documenter = "1"
-# FFTA 0.3.2 makes plan_rfft ambiguous with FFTW, so the cross-correlation fails and driftcorrect
-# stops (JuliaMath/FFTA.jl#146). FFTA comes in through the plotting stack. Remove when FFTA ships a fix.
-FFTA = "<0.3.2"
