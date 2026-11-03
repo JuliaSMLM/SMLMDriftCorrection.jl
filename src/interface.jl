@@ -568,7 +568,8 @@ const _ENTROPY_REL_TOL = 1.0e-4
 # reveal a wrong CC peak or a bad refine on its own.
 const _CC_VERIFY_RADIUS = 0.030
 
-# Histogram bin-count cap for the registered CC-primary and :fft cross-correlations
+# Histogram bin-count cap for the registered CC-primary, continuous chunk seed,
+# and :fft cross-correlations
 # (`findshift(...; maxcount)`): the CC then measures shared occupancy, so a bright
 # aggregate localized thousands of times in one bin cannot capture the peak.
 const _CC_MAXCOUNT = 4
@@ -1209,6 +1210,8 @@ end
 """
 Seed continuous-mode inter-shifts by cross-correlating against the last chunk with
 localizations (FFT), with a per-boundary endpoint-chaining fallback.
+The CC histograms are capped at `_CC_MAXCOUNT` localizations per bin so a bright
+spot cannot capture the peak.
 
 Continuous chunks share structure (same FOV, consecutive in time), so the inter
 shift across each boundary can be *measured* by cross-correlating the intra-
@@ -1280,7 +1283,7 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         # CC-measured candidate: rigid shift of cur onto the corrected ref = full inter[n].
         # Fine histogram (20 nm) — coarse bins lose the overlap contest to the smooth
         # endpoint prediction at clean boundaries even though CC is globally better.
-        cc = findshift(ref, cur; histbinsize=0.02)
+        cc = findshift(ref, cur; histbinsize=0.02, maxcount=_CC_MAXCOUNT)
         if !_cc_too_far(cc)
             inter_cc = Float64[Float64(cc[k]) for k in 1:n_dims]
             ov_cc = _overlap_score(cur, inter_cc, tree, _CC_VERIFY_RADIUS, n_dims)
