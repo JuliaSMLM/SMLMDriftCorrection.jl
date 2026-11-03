@@ -150,6 +150,7 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
         if n_locs_total > 2 * n_locs_required
             roi_indices = find_dense_roi(smld_work, n_locs_required)
             smld_estimation = filter_emitters(smld_work, roi_indices)
+            _warn_datasets_outside_roi(smld_work, smld_estimation)
             if verbose > 0
                 @info("SMLMDriftCorrection: auto_roi selected $(length(roi_indices)) of $n_locs_total locs for estimation")
             end
@@ -706,12 +707,20 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
             λ_boundary = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
             start_targets = Vector{Union{Nothing, Vector{Float64}}}(undef, n_datasets)
             end_targets   = Vector{Union{Nothing, Vector{Float64}}}(undef, n_datasets)
+            # The drift across an empty chunk is unknown, so no continuity prior crosses one:
+            # an empty neighbor's placeholder model would otherwise pull this chunk's intra.
+            has_locs = falses(n_datasets)
+            for e in smld.emitters
+                1 <= e.dataset <= n_datasets && (has_locs[e.dataset] = true)
+            end
             for n in 1:n_datasets
                 # Startpoint target: target value for intra[n](1).
                 # Chunk 1 anchors origin — total drift at (DS=1, frame=1) = 0 after
                 # normalization, so intra[1](1) ≈ -inter[1].
                 if n == 1
                     start_targets[1] = [-model.inter[1].dm[d] for d in 1:n_dims]
+                elseif !has_locs[n-1]
+                    start_targets[n] = nothing
                 else
                     # total_end_{n-1} = inter[n-1] + intra[n-1](N);  target for
                     # intra[n](1) is total_end_{n-1} - inter[n].
@@ -722,7 +731,7 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
                 end
                 # Endpoint target: target value for intra[n](N). No constraint for
                 # the last chunk (nothing to chain into).
-                if n == n_datasets
+                if n == n_datasets || !has_locs[n+1]
                     end_targets[n] = nothing
                 else
                     # total_start_{n+1} = inter[n+1] + intra[n+1](1);  target for
@@ -885,6 +894,27 @@ end
 # ============================================================================
 # Helper functions
 # ============================================================================
+
+"""
+Warn when `auto_roi` leaves a dataset that has localizations with none in its region: that
+dataset keeps its starting model (zero, a warm start's, or in continuous mode a shift chained
+from its neighbor), which no localization of its own has fit. Returns the datasets left out.
+"""
+function _warn_datasets_outside_roi(full::SMLD, roi::SMLD)
+    n = full.n_datasets
+    in_full = falses(n); in_roi = falses(n)
+    for e in full.emitters
+        1 <= e.dataset <= n && (in_full[e.dataset] = true)
+    end
+    for e in roi.emitters
+        1 <= e.dataset <= n && (in_roi[e.dataset] = true)
+    end
+    lost = findall(in_full .& .!in_roi)
+    isempty(lost) || @warn("SMLMDriftCorrection: auto_roi kept no localizations of dataset(s) $(lost) in its " *
+                           "region, so their drift is not fit to their own localizations; " *
+                           "run with auto_roi=false")
+    return lost
+end
 
 """
 Apply only inter-dataset shifts (not intra) - used for re-running intra in iterative mode.

@@ -236,6 +236,48 @@ end
     end
 end
 
+# Corrected positions, not only inter shifts: in continuous :iterative the chunk after an empty
+# chunk took its continuity prior from the empty chunk's placeholder model, which bent its intra
+# (123 nm off with its inter shift right). Each live chunk must land on the true sites.
+# Five chunks under :iterative are left out: on this 6-frame fixture the iterative tier is 26-86 nm
+# off with no chunk empty at all (the same before and after this fix), so it cannot tell a gap apart.
+@testset "Continuous: chunks after an empty chunk land on the true sites" begin
+    three = [(0.0, 0.0), (0.12, -0.08), (-0.10, 0.15)]
+    five = [(0.0, 0.0), (0.05, -0.04), (0.12, -0.08), (-0.10, 0.15), (-0.05, 0.10)]
+    for (shifts, dark, quality) in ((three, 2, :singlepass), (three, 2, :iterative), (five, 3, :singlepass))
+        @testset "$(length(shifts)) chunks, chunk $dark empty, $quality" begin
+            full = jitter_fixture(points, shifts)
+            truth = [(p[1], p[2]) for (d, s) in enumerate(shifts) for p in points for f in 1:full.n_frames]
+            keep = findall(e -> e.dataset != dark, full.emitters)
+            s = BasicSMLD(full.emitters[keep], full.camera, full.n_frames, length(shifts), Dict{String,Any}())
+            warm_start = quality == :iterative ? DC.LegendrePolynomial(s; degree = 1) : nothing
+            c, _ = @test_logs min_level = Logging.Error driftcorrect(s; quality, dataset_mode = :continuous,
+                degree = 0, maxn = 3, warm_start, max_iterations = 2)
+            ex = [e.x - truth[keep[i]][1] for (i, e) in enumerate(c.emitters)]
+            ey = [e.y - truth[keep[i]][2] for (i, e) in enumerate(c.emitters)]
+            ex .-= sort(ex)[cld(length(ex), 2)]; ey .-= sort(ey)[cld(length(ey), 2)]
+            for d in unique(e.dataset for e in s.emitters)
+                m = [e.dataset == d for e in s.emitters]
+                # the fixture scatters each localization by 10 nm per axis
+                @test sqrt(sum(ex[m] .^ 2 .+ ey[m] .^ 2) / count(m)) <= 0.025
+            end
+        end
+    end
+end
+
+# auto_roi can keep no localization of a dataset that has some; that dataset then keeps a model
+# none of its localizations fit, so it must not pass in silence.
+@testset "auto_roi warns about a dataset it leaves out" begin
+    near = jitter_fixture(points, [(0.0, 0.0)])
+    far = jitter_fixture(points, [(2.5, 2.5)])
+    em = vcat(near.emitters, [Emitter2DFit{Float64}(e.x, e.y, e.photons, e.bg, e.σ_x, e.σ_y, e.σ_photons, e.σ_bg;
+        σ_xy = 0.0, frame = e.frame, dataset = 2) for e in far.emitters])
+    s = BasicSMLD(em, IdealCamera(1:40, 1:40, 0.1), near.n_frames, 2, Dict{String,Any}())
+    @test_logs (:warn, r"auto_roi kept no localizations of dataset") match_mode = :any driftcorrect(s;
+        auto_roi = true, degree = 0, maxn = 3)
+    @test DC._warn_datasets_outside_roi(s, s) == Int[]
+end
+
 @testset "A refused camera field throws without an error record" begin
     other = cc_fixture(points, [(0.0, 0.0)]; camera = IdealCamera(1:13, 1:12, 0.1))
     @test_logs min_level = Logging.Error begin

@@ -240,7 +240,7 @@ smld_roi = filter_emitters(smld, mask)
 - `σ_target=0.001`: Target drift precision (μm) for ROI sizing
 - `roi_safety_factor=4.0`: Safety multiplier for required localizations
 
-When `auto_roi=true`, selects a contiguous rectangular region from the densest part of the FOV. This preserves blink pairs from the same emitters which is essential for entropy-based optimization.
+When `auto_roi=true`, selects a contiguous rectangular region from the densest part of the FOV. This preserves blink pairs from the same emitters which is essential for entropy-based optimization. A dataset with localizations but none in the region keeps its starting model, which none of its localizations fit; a warning names it (`_warn_datasets_outside_roi`).
 
 ### Alignment Parameters (align_smld)
 
