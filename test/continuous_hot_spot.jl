@@ -35,6 +35,9 @@ const DC = SMLMDriftCorrection
             cc_cap = DC.findshift(chunk1, chunk2; histbinsize = 0.02,
                                   maxcount = DC._CC_MAXCOUNT)
             @test sqrt(sum(abs2, cc_raw .- truth)) > 1.0
+            # The captured raw CC is within the 5 μm limit, so before the cap
+            # the seed applied it.
+            @test maximum(abs.(cc_raw)) < DC._CC_MAX_SHIFT
             @test sqrt(sum(abs2, cc_cap .- truth)) < 0.010
 
             @testset "$quality" for quality in (:singlepass, :iterative)

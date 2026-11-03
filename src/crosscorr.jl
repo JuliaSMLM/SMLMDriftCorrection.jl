@@ -415,10 +415,9 @@ Perform a cross-correlation between images representing localizations in two
 SMLD structures and compute the shift between the two original images.
 histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates. `maxcount`, when given, clips every
-histogram bin to at most that many localizations before correlating, so the CC
-measures shared occupancy and one bright aggregate (thousands of localizations in a
-bin) cannot outweigh the structure; `nothing` (default) correlates raw counts. It must
-be a positive integer.
+histogram bin to at most that many localizations before correlating, so one bright
+aggregate cannot dominate the correlation; `nothing` (default) correlates raw counts.
+It must be a positive integer.
 """
 function findshift(smld1::T, smld2::T;
     histbinsize::Real=1.0,

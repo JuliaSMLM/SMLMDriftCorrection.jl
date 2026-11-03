@@ -1218,19 +1218,18 @@ shift across each boundary can be *measured* by cross-correlating the intra-
 corrected chunk against the already-placed last chunk with localizations, rather than
 *extrapolated* from the polynomial endpoints. Per boundary (n-1)→n, both
 candidates are formed: the CC-measured shift, and the endpoint-chained shift
-`inter[n-1] + endpoint(n-1) - startpoint(n)`. Whichever puts chunk n in better
-consensus overlap (`_overlap_score` within `_CC_VERIFY_RADIUS`) with the corrected
-last chunk with localizations is kept.
+`inter[n-1] + endpoint(n-1) - startpoint(n)`. Keep the CC unless its overlap
+with the corrected last chunk with localizations is more than 0.05 of chunk n's
+localizations below the endpoint candidate's overlap (`_overlap_score` within
+`_CC_VERIFY_RADIUS`).
 
 As in every tier, a CC with a component over 5 μm is dropped. Continuous mode then falls
 back to endpoint chaining at that boundary without a warning.
 
-This is strictly ≥ either method alone: it uses CC where it locks on (the common
-case) and falls back to endpoint-chaining where the CC runs but overlaps clearly
-worse, or a chunk is empty. It avoids endpoint-chaining's two failure modes: slow
-directional residual accumulation, and a single bad boundary blowing up and propagating down
-the cumulative chain when a degree-d polynomial extrapolates wildly at t=±1
-(measuring beats extrapolating). See Continuous Mode Internals in CLAUDE.md.
+Measuring avoids two endpoint-chaining failure modes: slow directional residual
+accumulation, and a single bad boundary propagated down the cumulative chain when
+a degree-d polynomial extrapolates poorly at t=±1. A wrong CC is still accepted
+when both candidates overlap poorly (see Known limits in CLAUDE.md).
 """
 function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbose::Int=0)
     n_dims = nDims(smld)
