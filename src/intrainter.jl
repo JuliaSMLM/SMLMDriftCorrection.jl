@@ -294,8 +294,8 @@ function findintra!(intra::AbstractIntraDrift,
     # what findinter/warmstart will apply next. Either target may be `nothing`
     # (no term) — chunk 1 has no left neighbour, chunk N has no right neighbour.
     # Without this prior on :continuous, merged-cloud intra can find polynomials
-    # whose endpoints are far from the warmstart chain → catastrophic DS7-style
-    # blow-up on sparse data (see hs-tirf Gattaquant stress test).
+    # whose endpoints are far from the warmstart chain → a catastrophic
+    # chunk-boundary blow-up on sparse data.
     myfun = if boundary_prior === nothing
         base_cost
     else
