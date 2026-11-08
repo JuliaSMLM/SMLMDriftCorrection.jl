@@ -684,7 +684,7 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         #
         # Without this prior, merged-cloud intra on sparse data can drift into
         # polynomials whose endpoints don't match the warmstart chain, producing
-        # DS7-style chunk-boundary blow-ups (see hs-tirf Gattaquant stress test).
+        # chunk-boundary blow-ups.
         boundary_priors = nothing
         if dataset_mode == :continuous
             λ_boundary = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
@@ -747,8 +747,7 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         # boundary gaps in nm — max across chunks and per-chunk list if verbose≥2.
         # A well-controlled run should show residuals of O(σ_endpoint) ≈ few nm.
         # Large sustained residuals on one boundary indicate the prior is being
-        # overruled by the entropy cost (e.g. DS6→DS7 of hs-tirf in the
-        # pre-prior run showed ~1900 nm gaps).
+        # overruled by the entropy cost.
         if dataset_mode == :continuous && verbose > 0
             max_gap_nm = 0.0
             worst_boundary = 0

@@ -243,9 +243,8 @@ using Random
 
     # --- End-to-end registered driftcorrect vs a hot spot in early datasets ---
     # 0.2.8 regression: a bright aggregate imaged only in DS1-2 captured the CC of
-    # the later datasets, which 0.2.8 accepted as micron inter shifts (real cohort
-    # cells came back 1.5-6 um off). Applies a known drift and checks that both
-    # registered tiers recover every dataset. With the capped CC the aggregate no
+    # the later datasets, which 0.2.8 accepted as micron inter shifts. Applies a
+    # known drift and checks that both registered tiers recover every dataset. With the capped CC the aggregate no
     # longer captures the peak, so even DS6 (true inter ~100 nm, beyond the entropy
     # refine's reach from zero) is recovered (0.2.9: <4 nm; v0.2.5 ~118 nm; 0.2.8
     # 1.2-2.4 um; an overlap guard alone left it 80-115 nm off).
@@ -850,8 +849,7 @@ using Random
         # One dense acquisition with a known smooth drift (zero at frame 1, matching the
         # continuous gauge). Dense enough (~10^5 locs) that consecutive-chunk CC locks on
         # reliably, so the CC seed recovers the drift where endpoint-chaining would
-        # accumulate it. (On real cohort data this is 593nm→10nm; here we assert the
-        # synthetic drift is substantially removed.)
+        # accumulate it. The test asserts the synthetic drift is substantially removed.
         Random.seed!(7)
         params_cont = StaticSMLMConfig(80.0, 0.13, 30, 1, 4000, 50.0, 2, [0.0, 1.0])
         (smld_c0, _) = simulate(params_cont; pattern = Nmer2D(n = 8, d = 0.3),
