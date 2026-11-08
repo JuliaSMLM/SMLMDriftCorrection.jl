@@ -265,9 +265,9 @@ Note: `transform=:affine` is 2D only and ignores `method`; see the `align_smld` 
 
 All distance units are in **micrometers (μm)**.
 
-### SMLMData Compatibility
+### SMLMData Compatibility and Emitter Types
 
-The package supports both SMLMData 0.5 and 0.6+ via `_HAS_SIGMA_XY` (compile-time `const`). The `_make_emitter_2d` / `_make_emitter_3d` helpers in `utilities.jl` dispatch to positional (0.5) or keyword (0.6+) constructors. Current compat: SMLMData 0.7.
+Current compat: SMLMData 0.7. The package never constructs emitters: it copies them and sets fields (`x`, `y`, `z`, and `frame`/`dataset` when `chunk_smld` relabels chunks), so any mutable emitter type works, including GaussMLE's fit types (`Emitter2DFitSigma`, `Emitter2DFitGaussMLE`, ...), which carry extra fields and define no keyword constructor. Rebuilding emitters through SMLMData's keyword constructor made chunked continuous mode throw a `MethodError` on the fitter's own output (fixed in 0.2.11; test `chunk_emitter_type.jl`). `nDims` falls back to `hasfield(:z)` for types outside SMLMData.
 
 ### Continuous Mode Internals
 
