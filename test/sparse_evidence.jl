@@ -131,3 +131,51 @@ end
     # a positional DriftInfo still constructs (empty support)
     @test isempty(DC.DriftInfo(info.model, 0.0, :cpu, 1, true, 0.0, Float64[], nothing, (;)).dataset_support)
 end
+
+# Codex review of d9577f6, three findings.
+@testset "evidence rule: candidates are judged before the arbiter" begin
+    # Five sites 200 nm apart, ten coincident localizations each; the target holds them at +3 um in x,
+    # the fifth 20 nm further. The CC (3, 0) covers all five (z = sqrt(5) > 2); a refine at 2.985 covers
+    # four (the fifth is 35 nm off), z = 2, not significant; the incumbent (0) covers none.
+    sites5 = sites8[1:5]
+    tree = DC._coord_tree(points_smld([[p for p in sites5 for _ in 1:10]]), 2)
+    tgt = points_smld([[(p[1] + 3.0 + (k == 5 ? 0.020 : 0.0), p[2]) for (k, p) in enumerate(sites5) for _ in 1:10]])
+    inl(s) = DC._overlap_inliers(tgt, s, tree, DC._CC_VERIFY_RADIUS, 2)
+    inc, cc, refd = [0.0, 0.0], [3.0, 0.0], [2.985, 0.0]
+    cost(θ) = θ == refd ? 0.0 : 1.0              # the refine has the lowest entropy
+    w = DC._occupancy_weights(tgt, DC._disagreeing(inl(refd), inl(cc), inl(inc)))
+    # 0.2.11 before the fix: the arbiter alone picks the refine (a one-site deficit is a near tie), and the
+    # evidence veto that followed refused it and restored the incumbent, losing the admissible CC
+    @test DC._arbitrate(refd, inl(refd), cc, inl(cc), inc, inl(inc); score = f -> DC._occupancy(w, f), w = w,
+                        cost = cost) == refd
+    @test DC._far_without_evidence(tgt, tree, refd, inc, 2; raw_cc = false)
+    # now the refine leaves first and the CC wins
+    (r, ir, c, ic) = DC._eligible_candidates(tgt, tree, refd, inl(refd), cc, inl(cc), inc, inl(inc), 2)
+    @test r == inc && c == cc
+    @test DC._arbitrate(r, ir, c, ic, inc, inl(inc); score = f -> DC._occupancy(w, f), w = w, cost = cost) == cc
+end
+
+@testset "continuous: the refine cannot carry a chunk far without evidence" begin
+    # one localization per chunk, 1.004 um apart: the boundary CC (one site, z = 1) is refused, and the
+    # regularized refine used to carry chunk 2 by 335 nm (:singlepass) and 1.0 um (:iterative)
+    em(x, ds) = Emitter2DFit{Float64}(x, 1.0, 1000.0, 0.0, 0.001, 0.001, 0.0, 0.0; σ_xy = 0.0, frame = 1, dataset = ds)
+    s = BasicSMLD([em(1.013, 1), em(2.017, 2)], IdealCamera(1:64, 1:64, 0.1), 10, 2, Dict{String,Any}())
+    for q in (:singlepass, :iterative)
+        (_, info) = with_logger(NullLogger()) do
+            driftcorrect(s; dataset_mode = :continuous, degree = 0, quality = q)
+        end
+        @test sqrt(sum(abs2, info.model.inter[2].dm .- info.model.inter[1].dm)) <= DC._EVIDENCE_RADIUS
+    end
+end
+
+@testset "dataset support: sampling keeps a repeated site's weight" begin
+    # two aligned datasets, one site localized 25,000 times in each: sampling every 5th localization with
+    # full-dataset weights gave z = 1.84 (unsupported); each tested localization now stands for n / M
+    rng = MersenneTwister(9)
+    site = [(2.0 + 0.002randn(rng), 2.0 + 0.002randn(rng)) for _ in 1:25_000]
+    sup = DC._dataset_support(points_smld([site, site]))
+    @test all(x -> x.supported && x.z > 4, sup)
+    # and the sample does not depend on emitter order
+    sh = points_smld([site, reverse(site)])
+    @test DC._dataset_support(sh)[2].z ≈ sup[2].z rtol = 0.05
+end

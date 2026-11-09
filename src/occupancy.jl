@@ -303,8 +303,11 @@ function _arbiter_cost(model::LegendrePolynomial, smld::SMLD, snap::SMLD, d::Int
     end
 end
 
-"Most localizations per dataset that `_dataset_support` tests (every k-th beyond this)."
+"Most localizations per dataset that `_dataset_support` tests (a pseudo-random sample beyond this)."
 const _SUPPORT_MAX_TESTED = 5000
+
+"Hash seed of `_dataset_support`'s sample: deterministic, independent of emitter order periodicity."
+const _SUPPORT_SALT = 0x5eed_5a3b_1e00_0000
 
 "Displacement (μm) of `_dataset_support`'s chance level: the test is repeated this far off, in 8 directions."
 const _SUPPORT_OFFSET = 0.150
@@ -319,9 +322,11 @@ Whether each dataset of the corrected `sc` co-localizes with the other datasets 
 chance, i.e. whether its inter alignment rests on evidence. `labels` (one per emitter, `1:n`)
 can name other units than the datasets: chunked continuous mode passes the chunks, the units
 its inter alignment placed. Per dataset, over its tested
-localizations `i` (all, or every k-th so that at most `_SUPPORT_MAX_TESTED` are tested), with
-occupancy weights `w_i = 1 / n_i` (`n_i` its own localizations within `_OCC_SEP` of `i`, so a
-site localized many times counts once):
+localizations `i` (all, or a pseudo-random sample of `M = _SUPPORT_MAX_TESTED` of its `n`, chosen
+by a hash of the index, so no periodicity in emitter order can bias it), with occupancy weights
+`w_i = (n / M) / n_i` (`n_i` its own localizations within `_OCC_SEP` of `i`, so a site localized
+many times counts once; each tested localization stands for `n / M`, so sampling keeps the
+effective-site count and `z` does not shrink with `n`):
 
 - `c_i`: whether another dataset has a localization within `radius` of `i`. The radius is
   `_CC_VERIFY_RADIUS` (the inlier test of the inter alignment), reduced on dense data until a
@@ -357,9 +362,11 @@ function _dataset_support(sc::SMLD, ds::Vector{Int} = Int[e.dataset for e in sc.
             continue
         end
         own_tree = _PopKDTree(all_tree.pts[:, idx])
-        X = all_tree.pts[:, idx[1:cld(n, _SUPPORT_MAX_TESTED):n]]   # tested localizations
+        M = min(n, _SUPPORT_MAX_TESTED)
+        tested = M == n ? idx : idx[sort(partialsortperm([hash(i, _SUPPORT_SALT) for i in 1:n], 1:M))]
+        X = all_tree.pts[:, tested]
         others(r, Q) = _count_near(all_tree, r, Q) .- _count_near(own_tree, r, Q)
-        w = 1.0 ./ _count_near(own_tree, _OCC_SEP, X)
+        w = (n / M) ./ _count_near(own_tree, _OCC_SEP, X)   # each tested localization stands for n / M
         # radius: chance coverage _SUPPORT_CHANCE at the median local density of the others
         m = median(others(δ, X))
         r = m > 0 ? min(_CC_VERIFY_RADIUS, δ * (-log1p(-_SUPPORT_CHANCE) / m)^(1 / D)) :

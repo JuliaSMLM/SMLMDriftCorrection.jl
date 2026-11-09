@@ -158,7 +158,7 @@ Supports warm start via `info.model`.
   more than chance after alignment, i.e. whether its inter alignment rests on evidence. Each entry is
   `(dataset, n_locs, colocalized, expected, z, radius, supported)`: `colocalized` is the fraction of the
   dataset's effective sites (a site localized many times counts once) with another dataset's localization
-  within `radius` (30 nm, reduced on dense data until chance coverage is 25%), `expected` the same
+  within `radius` (30 nm, reduced on dense data until a Poisson estimate of chance coverage is 25%), `expected` the same
   fraction with the dataset displaced 150 nm (chance), `z` the significance of the difference, and
   `supported = z > 2`. A dataset placed at random relative to the others (too sparse to align, or not the
   same structure) has `z` near 0 and `supported = false`; `driftcorrect` logs one warning naming such

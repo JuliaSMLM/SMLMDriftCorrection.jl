@@ -549,15 +549,20 @@ function _driftcorrect_singlepass!(model::LegendrePolynomial, smld::SMLD,
         reg_lambda = _estimate_continuous_lambda(model, smld.n_frames, verbose)
         warmstart_values = [copy(model.inter[nn].dm) for nn in 1:smld.n_datasets]
         precomputed = correctdrift(smld, model)
+        # The seeds are chosen (cc_init=false: no fresh, unguarded CC inside the refine), and a
+        # refine may not carry a chunk far from its seed without evidence.
         Threads.@threads for nn = 2:smld.n_datasets
             findinter!(model, smld, nn, [1], maxn;
                 precomputed_corrected = precomputed,
-                regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda)
+                regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda,
+                cc_init = false)
         end
         for nn = 2:smld.n_datasets
             findinter!(model, smld, nn, collect(1:(nn-1)), maxn;
-                regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda)
+                regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda,
+                cc_init = false)
         end
+        _hold_far_refines!(model, smld, warmstart_values)
         _normalize_continuous!(model)
     end
 
@@ -827,8 +832,10 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
             Threads.@threads for nn = 2:n_datasets
                 findinter!(model, smld, nn, collect(setdiff(1:n_datasets, nn)), maxn;
                     precomputed_corrected = precomputed,
-                    regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda)
+                    regularization_target = warmstart_values[nn], regularization_lambda = reg_lambda,
+                    cc_init = false)
             end
+            _hold_far_refines!(model, smld, warmstart_values)
             _normalize_continuous!(model)
         end
 
@@ -1061,6 +1068,49 @@ function _intra_only_corrected(smld::SMLD, model::LegendrePolynomial, d::Int)
 end
 
 """
+    _eligible_candidates(sd, tree, refined, in_ref, cc, in_cc, inc, in_inc, n_dims)
+
+The registered arbiter's candidates after the evidence rule: a CC (judged as a raw CC) or a
+refine more than `_EVIDENCE_RADIUS` from the incumbent `inc` without a significant lead
+(`_far_without_evidence`) leaves before arbitration (the CC becomes `nothing`, the refine the
+incumbent), so a veto cannot discard an admissible CC after the arbiter picked a nearby refine
+(Codex review of d9577f6). A refine that stayed on the raw CC keeps the CC's half-bin allowance.
+Returns `(refined, in_ref, cc, in_cc)`.
+"""
+function _eligible_candidates(sd::SMLD, tree, refined, in_ref, cc, in_cc, inc, in_inc, n_dims::Int)
+    if cc !== nothing && _far_without_evidence(sd, tree, cc, inc, n_dims; raw_cc = true)
+        cc = nothing; in_cc = nothing
+    end
+    if _far_without_evidence(sd, tree, refined, inc, n_dims; raw_cc = cc !== nothing && refined == cc)
+        refined = inc; in_ref = in_inc
+    end
+    return refined, in_ref, cc, in_cc
+end
+
+"""
+    _hold_far_refines!(model, smld, seeds)
+
+After a continuous inter refine (`findinter!` regularized toward `seeds`), put back any chunk
+the refine carried more than `_EVIDENCE_RADIUS` from its seed without a significant overlap
+lead over the seed against the other chunks (`_far_without_evidence`): the rule the boundary
+seed itself obeyed. Chunks are checked in order against the current model.
+"""
+function _hold_far_refines!(model::LegendrePolynomial, smld::SMLD, seeds)
+    n_dims = nDims(smld)
+    n = smld.n_datasets
+    for nn in 2:n
+        sqrt(sum(abs2, model.inter[nn].dm .- seeds[nn])) > _EVIDENCE_RADIUS || continue
+        ref = filter_by_dataset(correctdrift(smld, model), [x for x in 1:n if x != nn])
+        cur = _intra_only_corrected(smld, model, nn)
+        (isempty(ref.emitters) || isempty(cur.emitters)) && continue
+        tree = _coord_tree(ref, n_dims)
+        _far_without_evidence(cur, tree, model.inter[nn].dm, seeds[nn], n_dims; raw_cc = false) &&
+            (model.inter[nn].dm .= seeds[nn])
+    end
+    return model
+end
+
+"""
 Warn, once per dataset per call (`warned`), where a CC shift dropped for a component over 5 μm
 (`dropped[d]`, else `nothing`) would have overlapped clearly better (`_overlap_leads`) than
 the shift the dataset ends with: a likely collection failure (the stage moved between
@@ -1232,15 +1282,15 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             refined = copy(model.inter[d].dm)
             in_ref = _overlap_inliers(sd, refined, tree, _CC_VERIFY_RADIUS, n_dims)
 
+            # a move beyond _EVIDENCE_RADIUS needs a significant lead (sparse data)
+            refined, in_ref, cc_v, in_cc = _eligible_candidates(sd, tree, refined, in_ref, cc_v, in_cc,
+                                                                inc, in_inc, n_dims)
             # overlap arbiter over {refined, CC, incumbent}; near ties go to the lowest entropy cost
             w = _occupancy_weights(sd, cc_v === nothing ? _disagreeing(in_ref, in_inc) :
                                        _disagreeing(in_ref, in_cc, in_inc))
             best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc;
                               score = f -> _occupancy(w, f), w = w,
                               cost = _arbiter_cost(model, smld, snap, d, others, maxn))
-            # a move beyond _EVIDENCE_RADIUS needs a significant lead (sparse data: keep the incumbent)
-            _far_without_evidence(sd, tree, best, inc, n_dims;
-                                  raw_cc = cc_v !== nothing && best == cc_v && best != refined) && (best = inc)
             step = best .- inc
             model.inter[d].dm .= sqrt(sum(abs2, step)) < _CC_VERIFY_RADIUS ? inc .+ damp .* step : best
         end
