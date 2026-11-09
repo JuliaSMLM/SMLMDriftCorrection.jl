@@ -782,10 +782,13 @@ using Random
                 camera=IdealCamera(1:64, 1:64, 0.1)
             )
 
-            # Apply a known random drift large enough to dominate noise
+            # Apply a known random drift large enough to dominate noise, and inside what
+            # the default fit can remove on this dense fixture: rscale=0.1 corrects to a few
+            # nm, while 0.3 leaves most of the drift. The metric's floor on true positions
+            # is about 0.02, so a corrected value far above that is a failed fit.
             Random.seed!(321)
             drift_pfc = DC.LegendrePolynomial(smld_pfc; degree=2,
-                                              initialize="random", rscale=0.3)
+                                              initialize="random", rscale=0.1)
             drift_pfc.inter[1].dm .= 0.0
             smld_drifted_pfc = DC.applydrift(smld_pfc, drift_pfc)
 
@@ -829,6 +832,7 @@ using Random
             corrected_total = res_corrected.summary.mean_abs_corr_x + res_corrected.summary.mean_abs_corr_y
             print("position_frame_correlation: |corr_x|+|corr_y| drifted=$drifted_total corrected=$corrected_total\n")
             @test drifted_total > corrected_total
+            @test corrected_total < 0.05
 
             # --- Inter mode ---
             res_inter = SMLMDriftCorrection.position_frame_correlation(
