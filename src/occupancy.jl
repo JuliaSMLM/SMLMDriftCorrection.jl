@@ -306,7 +306,7 @@ end
 "Most localizations per dataset that `_dataset_support` tests (a pseudo-random sample beyond this)."
 const _SUPPORT_MAX_TESTED = 5000
 
-"Hash seed of `_dataset_support`'s sample: deterministic, independent of emitter order periodicity."
+"Hash seed of `_dataset_support`'s sample: reproducible for a given emitter order, without the aliasing of a fixed stride."
 const _SUPPORT_SALT = 0x5eed_5a3b_1e00_0000
 
 "Displacement (μm) of `_dataset_support`'s chance level: the test is repeated this far off, in 8 directions."
@@ -322,11 +322,14 @@ Whether each dataset of the corrected `sc` co-localizes with the other datasets 
 chance, i.e. whether its inter alignment rests on evidence. `labels` (one per emitter, `1:n`)
 can name other units than the datasets: chunked continuous mode passes the chunks, the units
 its inter alignment placed. Per dataset, over its tested
-localizations `i` (all, or a pseudo-random sample of `M = _SUPPORT_MAX_TESTED` of its `n`, chosen
-by a hash of the index, so no periodicity in emitter order can bias it), with occupancy weights
-`w_i = (n / M) / n_i` (`n_i` its own localizations within `_OCC_SEP` of `i`, so a site localized
-many times counts once; each tested localization stands for `n / M`, so sampling keeps the
-effective-site count and `z` does not shrink with `n`):
+localizations `i` (all, or a pseudo-random sample of `_SUPPORT_MAX_TESTED`, chosen by a hash of
+the index, which avoids the aliasing of a fixed stride), with occupancy weights `w_i = 1 / m_i`
+(`m_i` the tested localizations of the same dataset within `_OCC_SEP` of `i`, itself included):
+the tested localizations of one compact site count once together, so `W = Σ w_i` is the number of
+distinct sites tested and `z` reflects the evidence actually tested. Two earlier weightings failed
+the Codex reviews: full-dataset counts `1 / n_i` on a stride sample shrank a site localized 25,000
+times to a fifth of a site (aligned datasets unsupported), and scaling those by `n / M` counted each
+sampled independent site `n / M` times (an even split reported as `z` = 6.3):
 
 - `c_i`: whether another dataset has a localization within `radius` of `i`. The radius is
   `_CC_VERIFY_RADIUS` (the inlier test of the inter alignment), reduced on dense data until a
@@ -366,7 +369,7 @@ function _dataset_support(sc::SMLD, ds::Vector{Int} = Int[e.dataset for e in sc.
         tested = M == n ? idx : idx[sort(partialsortperm([hash(i, _SUPPORT_SALT) for i in 1:n], 1:M))]
         X = all_tree.pts[:, tested]
         others(r, Q) = _count_near(all_tree, r, Q) .- _count_near(own_tree, r, Q)
-        w = (n / M) ./ _count_near(own_tree, _OCC_SEP, X)   # each tested localization stands for n / M
+        w = 1.0 ./ _count_near(_PopKDTree(X), _OCC_SEP, X)   # distinct tested sites (`m_i` within the sample)
         # radius: chance coverage _SUPPORT_CHANCE at the median local density of the others
         m = median(others(δ, X))
         r = m > 0 ? min(_CC_VERIFY_RADIUS, δ * (-log1p(-_SUPPORT_CHANCE) / m)^(1 / D)) :

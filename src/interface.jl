@@ -1068,21 +1068,25 @@ function _intra_only_corrected(smld::SMLD, model::LegendrePolynomial, d::Int)
 end
 
 """
-    _eligible_candidates(sd, tree, refined, in_ref, cc, in_cc, inc, in_inc, n_dims)
+    _eligible_candidates(sd, tree, refined, in_ref, cc, in_cc, inc, in_inc, seed, n_dims)
 
 The registered arbiter's candidates after the evidence rule: a CC (judged as a raw CC) or a
 refine more than `_EVIDENCE_RADIUS` from the incumbent `inc` without a significant lead
-(`_far_without_evidence`) leaves before arbitration (the CC becomes `nothing`, the refine the
-incumbent), so a veto cannot discard an admissible CC after the arbiter picked a nearby refine
-(Codex review of d9577f6). A refine that stayed on the raw CC keeps the CC's half-bin allowance.
+(`_far_without_evidence`) leaves before arbitration, so a veto cannot discard an admissible CC
+after the arbiter picked a nearby refine (Codex review of d9577f6). The CC becomes `nothing`; the
+refine falls back to its own `seed` (the incumbent or the CC, chosen under the same rule), so the
+incumbent does not take the refine's place and its tie preference over an eligible CC (Codex
+review of 797ad88: a bin-quantized CC covering nothing at 30 nm lost a zero-occupancy tie to the
+incumbent). A refine that stayed on the raw CC keeps the CC's half-bin allowance.
 Returns `(refined, in_ref, cc, in_cc)`.
 """
-function _eligible_candidates(sd::SMLD, tree, refined, in_ref, cc, in_cc, inc, in_inc, n_dims::Int)
+function _eligible_candidates(sd::SMLD, tree, refined, in_ref, cc, in_cc, inc, in_inc, seed, n_dims::Int)
+    in_seed = cc !== nothing && seed == cc ? in_cc : in_inc
     if cc !== nothing && _far_without_evidence(sd, tree, cc, inc, n_dims; raw_cc = true)
         cc = nothing; in_cc = nothing
     end
     if _far_without_evidence(sd, tree, refined, inc, n_dims; raw_cc = cc !== nothing && refined == cc)
-        refined = inc; in_ref = in_inc
+        refined, in_ref = seed == inc || cc === nothing ? (inc, in_inc) : (seed, in_seed)
     end
     return refined, in_ref, cc, in_cc
 end
@@ -1092,20 +1096,32 @@ end
 
 After a continuous inter refine (`findinter!` regularized toward `seeds`), put back any chunk
 the refine carried more than `_EVIDENCE_RADIUS` from its seed without a significant overlap
-lead over the seed against the other chunks (`_far_without_evidence`): the rule the boundary
-seed itself obeyed. Chunks are checked in order against the current model.
+lead over the seed (`_far_without_evidence`): the rule the boundary seed itself obeyed. Every
+such move is judged against the other chunks at their seeds, the positions already accepted, so
+no decision rests on another chunk's move that is itself put back (Codex review of 797ad88:
+checked in order against the current model, a chunk kept a 1 μm move that only a later chunk's
+reverted move supported). Moves within `_EVIDENCE_RADIUS` stay as refined.
 """
 function _hold_far_refines!(model::LegendrePolynomial, smld::SMLD, seeds)
     n_dims = nDims(smld)
     n = smld.n_datasets
+    moved = [nn for nn in 2:n if sqrt(sum(abs2, model.inter[nn].dm .- seeds[nn])) > _EVIDENCE_RADIUS]
+    isempty(moved) && return model
+    refined = [copy(model.inter[nn].dm) for nn in 1:n]
     for nn in 2:n
-        sqrt(sum(abs2, model.inter[nn].dm .- seeds[nn])) > _EVIDENCE_RADIUS || continue
-        ref = filter_by_dataset(correctdrift(smld, model), [x for x in 1:n if x != nn])
+        model.inter[nn].dm .= seeds[nn]
+    end
+    at_seeds = correctdrift(smld, model)
+    hold = falses(n)
+    for nn in moved
+        ref = filter_by_dataset(at_seeds, [x for x in 1:n if x != nn])
         cur = _intra_only_corrected(smld, model, nn)
         (isempty(ref.emitters) || isempty(cur.emitters)) && continue
         tree = _coord_tree(ref, n_dims)
-        _far_without_evidence(cur, tree, model.inter[nn].dm, seeds[nn], n_dims; raw_cc = false) &&
-            (model.inter[nn].dm .= seeds[nn])
+        hold[nn] = _far_without_evidence(cur, tree, refined[nn], seeds[nn], n_dims; raw_cc = false)
+    end
+    for nn in 2:n
+        model.inter[nn].dm .= hold[nn] ? seeds[nn] : refined[nn]
     end
     return model
 end
@@ -1284,7 +1300,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
 
             # a move beyond _EVIDENCE_RADIUS needs a significant lead (sparse data)
             refined, in_ref, cc_v, in_cc = _eligible_candidates(sd, tree, refined, in_ref, cc_v, in_cc,
-                                                                inc, in_inc, n_dims)
+                                                                inc, in_inc, seed, n_dims)
             # overlap arbiter over {refined, CC, incumbent}; near ties go to the lowest entropy cost
             w = _occupancy_weights(sd, cc_v === nothing ? _disagreeing(in_ref, in_inc) :
                                        _disagreeing(in_ref, in_cc, in_inc))

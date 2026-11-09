@@ -132,7 +132,7 @@ end
     @test isempty(DC.DriftInfo(info.model, 0.0, :cpu, 1, true, 0.0, Float64[], nothing, (;)).dataset_support)
 end
 
-# Codex review of d9577f6, three findings.
+# Codex reviews of d9577f6 and 797ad88.
 @testset "evidence rule: candidates are judged before the arbiter" begin
     # Five sites 200 nm apart, ten coincident localizations each; the target holds them at +3 um in x,
     # the fifth 20 nm further. The CC (3, 0) covers all five (z = sqrt(5) > 2); a refine at 2.985 covers
@@ -144,15 +144,33 @@ end
     inc, cc, refd = [0.0, 0.0], [3.0, 0.0], [2.985, 0.0]
     cost(θ) = θ == refd ? 0.0 : 1.0              # the refine has the lowest entropy
     w = DC._occupancy_weights(tgt, DC._disagreeing(inl(refd), inl(cc), inl(inc)))
-    # 0.2.11 before the fix: the arbiter alone picks the refine (a one-site deficit is a near tie), and the
+    # before the fix: the arbiter alone picks the refine (a one-site deficit is a near tie), and the
     # evidence veto that followed refused it and restored the incumbent, losing the admissible CC
     @test DC._arbitrate(refd, inl(refd), cc, inl(cc), inc, inl(inc); score = f -> DC._occupancy(w, f), w = w,
                         cost = cost) == refd
     @test DC._far_without_evidence(tgt, tree, refd, inc, 2; raw_cc = false)
-    # now the refine leaves first and the CC wins
-    (r, ir, c, ic) = DC._eligible_candidates(tgt, tree, refd, inl(refd), cc, inl(cc), inc, inl(inc), 2)
-    @test r == inc && c == cc
+    # now the refine leaves first, falls back to its seed (the CC), and the CC wins
+    (r, ir, c, ic) = DC._eligible_candidates(tgt, tree, refd, inl(refd), cc, inl(cc), inc, inl(inc), cc, 2)
+    @test r == cc && c == cc
     @test DC._arbitrate(r, ir, c, ic, inc, inl(inc); score = f -> DC._occupancy(w, f), w = w, cost = cost) == cc
+    # a refine seeded from the incumbent falls back to the incumbent
+    @test DC._eligible_candidates(tgt, tree, refd, inl(refd), cc, inl(cc), inc, inl(inc), inc, 2)[1] == inc
+end
+
+@testset "evidence rule: a quantized CC keeps its tie over the incumbent" begin
+    # the target sites sit at (3, 0.040): the CC (3, 0), limited to its bin, covers none at 30 nm but all five at
+    # 30 nm + half a bin diagonal (eligible), the refine (2.985, 0) covers none (not eligible), nor does the
+    # incumbent. Replacing the refine by the incumbent gave the incumbent the refine's tie preference.
+    sites5 = sites8[1:5]
+    tree = DC._coord_tree(points_smld([[p for p in sites5 for _ in 1:10]]), 2)
+    tgt = points_smld([[(p[1] + 3.0, p[2] + 0.040) for p in sites5 for _ in 1:10]])
+    inl(s) = DC._overlap_inliers(tgt, s, tree, DC._CC_VERIFY_RADIUS, 2)
+    inc, cc, refd = [0.0, 0.0], [3.0, 0.0], [2.985, 0.0]
+    @test count(inl(cc)) == 0 && !DC._far_without_evidence(tgt, tree, cc, inc, 2; raw_cc = true)
+    (r, ir, c, ic) = DC._eligible_candidates(tgt, tree, refd, inl(refd), cc, inl(cc), inc, inl(inc), cc, 2)
+    w = DC._occupancy_weights(tgt, DC._disagreeing(ir, ic, inl(inc)))
+    @test DC._arbitrate(r, ir, c, ic, inc, inl(inc); score = f -> DC._occupancy(w, f), w = w,
+                        cost = θ -> 0.0) == cc
 end
 
 @testset "continuous: the refine cannot carry a chunk far without evidence" begin
@@ -168,14 +186,37 @@ end
     end
 end
 
-@testset "dataset support: sampling keeps a repeated site's weight" begin
+@testset "continuous: far refines are judged against the other chunks at their seeds" begin
+    # A = five sites at x = 3, B = five at x = 5; chunks 1 and 3 hold A + (1, 0) and B, chunk 2 holds A. All seeds
+    # are 0; the refine proposes x shifts 1 (chunk 2) and 2 (chunk 3). Checked in order against the current model,
+    # chunk 2's move found five sites in chunk 3's proposed position and was kept; chunk 3's move was then put back
+    # (ten sites at its seed, none at its proposal), leaving chunk 2 1 um off with nothing under it.
+    A = [(3.0, 1.0 + 0.2j) for j in 0:4]
+    B = [(5.0, 3.0 + 0.2j) for j in 0:4]
+    A1 = [(p[1] + 1.0, p[2]) for p in A]
+    s = points_smld([vcat(A1, B), A, vcat(A1, B)])
+    model = DC.LegendrePolynomial(s; degree = 0)
+    model.inter[2].dm .= [1.0, 0.0]
+    model.inter[3].dm .= [2.0, 0.0]
+    DC._hold_far_refines!(model, s, [zeros(2) for _ in 1:3])
+    @test model.inter[2].dm == [0.0, 0.0]
+    @test model.inter[3].dm == [0.0, 0.0]
+    # a move with the evidence is kept: chunk 2 proposed onto chunks 1 and 3 (A + (1, 0)) at their seeds
+    model.inter[2].dm .= [-1.0, 0.0]
+    DC._hold_far_refines!(model, s, [zeros(2) for _ in 1:3])
+    @test model.inter[2].dm == [-1.0, 0.0]
+end
+
+@testset "dataset support: sampling counts the distinct sites tested" begin
     # two aligned datasets, one site localized 25,000 times in each: sampling every 5th localization with
-    # full-dataset weights gave z = 1.84 (unsupported); each tested localization now stands for n / M
+    # full-dataset weights gave z = 1.84 (unsupported); weighted within the sample, the site counts once
     rng = MersenneTwister(9)
     site = [(2.0 + 0.002randn(rng), 2.0 + 0.002randn(rng)) for _ in 1:25_000]
     sup = DC._dataset_support(points_smld([site, site]))
     @test all(x -> x.supported && x.z > 4, sup)
-    # and the sample does not depend on emitter order
-    sh = points_smld([site, reverse(site)])
-    @test DC._dataset_support(sh)[2].z ≈ sup[2].z rtol = 0.05
+    # independent sites: each tested site counts once, not n / M times (scaling by n / M reported an even split
+    # as z = 6.3), so 20,000 aligned singles, of which 5,000 are tested, test like 5,000
+    grid(n) = [(0.3 * (i % 400), 0.3 * (i ÷ 400)) for i in 0:n-1]
+    zsup(n) = DC._dataset_support(points_smld([grid(n), grid(n)]; σ = 0.010))[2].z
+    @test zsup(20_000) ≈ zsup(5_000) rtol = 0.1
 end

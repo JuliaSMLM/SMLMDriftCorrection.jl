@@ -43,15 +43,17 @@ end
     # 0.2.10: chunks 3 and 4 2.2-2.4 um off the others, no warning (here 0.40-0.82 um apart over seeds 1-3, all four
     # named: about 70 localizations per chunk do not establish where a chunk sits relative to the others)
     (smld, truth) = sparse_continuous()
-    Random.seed!(1)
-    local out, info
-    @test_logs (:warn, r"chunk\(s\) \[") match_mode = :any begin
-        (out, info) = driftcorrect(smld; dataset_mode = :continuous, degree = 2, n_chunks = 4)
+    for seed in 1:3
+        Random.seed!(seed)
+        local out, info
+        @test_logs (:warn, r"chunk\(s\) \[") match_mode = :any begin
+            (out, info) = driftcorrect(smld; dataset_mode = :continuous, degree = 2, n_chunks = 4)
+        end
+        means, _ = block_errors(out, truth)
+        @test largest_gap(means) < 0.9
+        @test length(info.dataset_support) == 4
+        @test all(s -> !s.supported, info.dataset_support)
     end
-    means, _ = block_errors(out, truth)
-    @test largest_gap(means) < 1.0
-    @test length(info.dataset_support) == 4
-    @test all(s -> !s.supported, info.dataset_support)
 end
 
 # Codex review 6 (P2), hand-built: zero drift, two chunks. The four shared singles give the correct boundary CC peak a
