@@ -326,7 +326,7 @@ localizations `i` (all, or a pseudo-random sample of `_SUPPORT_MAX_TESTED`, chos
 the index, which avoids the aliasing of a fixed stride), with occupancy weights `w_i = 1 / m_i`
 (`m_i` the tested localizations of the same dataset within `_OCC_SEP` of `i`, itself included):
 the tested localizations of one compact site count once together, so `W = Σ w_i` is the number of
-distinct sites tested and `z` reflects the evidence actually tested. Two earlier weightings failed
+effective sites tested (exactly the number of sites when they are compact and separated) and `z` reflects the evidence actually tested. Two earlier weightings failed
 the Codex reviews: full-dataset counts `1 / n_i` on a stride sample shrank a site localized 25,000
 times to a fifth of a site (aligned datasets unsupported), and scaling those by `n / M` counted each
 sampled independent site `n / M` times (an even split reported as `z` = 6.3):
@@ -369,7 +369,7 @@ function _dataset_support(sc::SMLD, ds::Vector{Int} = Int[e.dataset for e in sc.
         tested = M == n ? idx : idx[sort(partialsortperm([hash(i, _SUPPORT_SALT) for i in 1:n], 1:M))]
         X = all_tree.pts[:, tested]
         others(r, Q) = _count_near(all_tree, r, Q) .- _count_near(own_tree, r, Q)
-        w = 1.0 ./ _count_near(_PopKDTree(X), _OCC_SEP, X)   # distinct tested sites (`m_i` within the sample)
+        w = 1.0 ./ _count_near(_PopKDTree(X), _OCC_SEP, X)   # effective tested sites (`m_i` within the sample)
         # radius: chance coverage _SUPPORT_CHANCE at the median local density of the others
         m = median(others(δ, X))
         r = m > 0 ? min(_CC_VERIFY_RADIUS, δ * (-log1p(-_SUPPORT_CHANCE) / m)^(1 / D)) :
