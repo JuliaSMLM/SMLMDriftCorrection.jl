@@ -48,6 +48,13 @@ Tuple `(corrected_smld, info)` where `info::DriftInfo` contains:
 - `history`: Entropy after the singlepass start and after each iteration (`:iterative` only; empty for `:fft` and `:singlepass`)
 - `residual_correlation`: Position-frame correlation diagnostic on corrected data; see [`position_frame_correlation`](@ref)
 
+# Errors
+A cross-correlation that fails in the FFT logs an `@error` line and stops the call
+by rethrowing its original error. No quality tier continues without it. An input
+the cross-correlation refuses throws its own error without an `@error` line.
+On threaded paths, the original error arrives inside a `TaskFailedException` or
+`CompositeException`.
+
 # Example
 ```julia
 # Basic usage
@@ -143,6 +150,7 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
         if n_locs_total > 2 * n_locs_required
             roi_indices = find_dense_roi(smld_work, n_locs_required)
             smld_estimation = filter_emitters(smld_work, roi_indices)
+            _warn_datasets_outside_roi(smld_work, smld_estimation)
             if verbose > 0
                 @info("SMLMDriftCorrection: auto_roi selected $(length(roi_indices)) of $n_locs_total locs for estimation")
             end
@@ -231,6 +239,11 @@ Corrections preserve the input's dataset and frame numbering.
 - `convergence_tol=0.001`: Convergence tolerance (μm)
 - `maxn=100`: Maximum neighbors for entropy calculation
 - `verbose=0`: Verbosity level
+
+# Errors
+A cross-correlation that fails in the FFT logs an `@error` line and stops the call
+by rethrowing its original error. An input the cross-correlation refuses throws
+its own error without an `@error` line. Continuation does not proceed without CC.
 """
 function driftcorrect(smld::SMLD, info::DriftInfo;
     dataset_mode::Symbol = info.dataset_mode,
@@ -327,9 +340,11 @@ FFT quality tier - fast cross-correlation only, no entropy optimization.
 Two-pass approach:
 1. First pass: align each dataset to dataset 1 (rough alignment)
 2. Second pass: align each dataset to all others (refinement)
-Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`), so a bright
-aggregate cannot capture the peak, and each CC shift (and the pass-3 outlier re-alignment)
-replaces the incumbent unless the incumbent overlaps the reference strictly better
+Each CC is computed on bin-count-capped histograms (`maxcount=_CC_MAXCOUNT`) to limit
+how much any heavily populated bin counts, so a single bright spot no longer captures
+the peak (an aggregate spread over many bins still can), and each CC shift (and the
+pass-3 outlier re-alignment) replaces the incumbent unless the incumbent overlaps the
+reference strictly better
 (`_accept_if_better_overlap!`; ties go to the CC). As in registered mode, a CC with a
 component over 5 μm (`_CC_MAX_SHIFT`) is not applied; where it overlaps clearly better than
 the shift the dataset ends with, one warning per dataset per call names it as a likely
@@ -365,6 +380,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     tree_ref = _coord_tree(smld_ref, n_dims)
     for nn = 2:n_datasets
         smld_n = filter_by_dataset(smld, nn)
+        (isempty(smld_ref.emitters) || isempty(smld_n.emitters)) && continue
         cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
         if _cc_too_far(cc_shift)
             dropped[nn] = Float64.(cc_shift[1:n_dims])
@@ -397,6 +413,8 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                 push!(ref_emitters, e_shifted)
             end
         end
+
+        (isempty(ref_emitters) || isempty(smld_n.emitters)) && continue
 
         # Create reference SMLD from merged emitters
         smld_merged = typeof(smld)(
@@ -446,6 +464,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                 prior_sigma = max(median_shift, 0.5)  # at least 500nm sigma
 
                 for nn in outliers
+                    isempty(smld_ref.emitters) && continue
                     smld_n = filter_by_dataset(smld, nn)
                     cc_shift = findshift_damped(smld_ref, smld_n;
                         histbinsize=0.05, maxcount=_CC_MAXCOUNT,
@@ -551,7 +570,8 @@ const _ENTROPY_REL_TOL = 1.0e-4
 # reveal a wrong CC peak or a bad refine on its own.
 const _CC_VERIFY_RADIUS = 0.030
 
-# Histogram bin-count cap for the registered CC-primary and :fft cross-correlations
+# Histogram bin-count cap for the registered CC-primary, continuous chunk seed,
+# and :fft cross-correlations
 # (`findshift(...; maxcount)`): the CC then measures shared occupancy, so a bright
 # aggregate localized thousands of times in one bin cannot capture the peak.
 const _CC_MAXCOUNT = 4
@@ -596,7 +616,7 @@ function _driftcorrect_iterative!(model::LegendrePolynomial, smld::SMLD,
     # Automatic warm-start retry if not converged: the iterative loop can get
     # stuck in a local minimum where intra and inter fight each other. Restarting
     # from the current model often allows the loop to converge to a much better
-    # optimum (observed empirically: 150nm RMSD improvement on stress tests).
+    # optimum.
     max_retries = 3
     retry = 0
     while !result.converged && retry < max_retries
@@ -690,12 +710,20 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
             λ_boundary = _estimate_continuous_lambda(model, smld.n_frames, verbose > 1 ? verbose : 0)
             start_targets = Vector{Union{Nothing, Vector{Float64}}}(undef, n_datasets)
             end_targets   = Vector{Union{Nothing, Vector{Float64}}}(undef, n_datasets)
+            # The drift across an empty chunk is unknown, so no continuity prior crosses one:
+            # an empty neighbor's placeholder model would otherwise pull this chunk's intra.
+            has_locs = falses(n_datasets)
+            for e in smld.emitters
+                1 <= e.dataset <= n_datasets && (has_locs[e.dataset] = true)
+            end
             for n in 1:n_datasets
                 # Startpoint target: target value for intra[n](1).
                 # Chunk 1 anchors origin — total drift at (DS=1, frame=1) = 0 after
                 # normalization, so intra[1](1) ≈ -inter[1].
                 if n == 1
                     start_targets[1] = [-model.inter[1].dm[d] for d in 1:n_dims]
+                elseif !has_locs[n-1]
+                    start_targets[n] = nothing
                 else
                     # total_end_{n-1} = inter[n-1] + intra[n-1](N);  target for
                     # intra[n](1) is total_end_{n-1} - inter[n].
@@ -706,7 +734,7 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
                 end
                 # Endpoint target: target value for intra[n](N). No constraint for
                 # the last chunk (nothing to chain into).
-                if n == n_datasets
+                if n == n_datasets || !has_locs[n+1]
                     end_targets[n] = nothing
                 else
                     # total_start_{n+1} = inter[n+1] + intra[n+1](1);  target for
@@ -810,8 +838,8 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         #     scaffold follows.
         #   - continuous: the CC-seeded singlepass init already solves the alignment,
         #     so the iterate loop only wobbles params below the entropy scale yet above
-        #     convergence_tol (a 513-ruler hv_2ch run reached the converged run's exact
-        #     entropy but reported converged=false at the iteration cap).
+        #     convergence_tol (a run can reach the converged run's exact
+        #     entropy yet report converged=false at the iteration cap).
         # When the cost itself has stopped improving the optimization is done, so stop
         # on a relative-improvement plateau (both modes). The intra Legendre has no
         # P_0 term, so a flat-entropy param move is degenerate wobble, not a real
@@ -870,6 +898,27 @@ end
 # ============================================================================
 
 """
+Warn when `auto_roi` leaves a dataset that has localizations with none in its region: that
+dataset keeps its starting model (zero, a warm start's, or in continuous mode a shift chained
+from its neighbor), which no localization of its own has fit. Returns the datasets left out.
+"""
+function _warn_datasets_outside_roi(full::SMLD, roi::SMLD)
+    n = full.n_datasets
+    in_full = falses(n); in_roi = falses(n)
+    for e in full.emitters
+        1 <= e.dataset <= n && (in_full[e.dataset] = true)
+    end
+    for e in roi.emitters
+        1 <= e.dataset <= n && (in_roi[e.dataset] = true)
+    end
+    lost = findall(in_full .& .!in_roi)
+    isempty(lost) || @warn("SMLMDriftCorrection: auto_roi kept no localizations of dataset(s) $(lost) in its " *
+                           "region, so their drift is not fit to their own localizations; " *
+                           "run with auto_roi=false")
+    return lost
+end
+
+"""
 Apply only inter-dataset shifts (not intra) - used for re-running intra in iterative mode.
 """
 function apply_inter_only(smld::SMLD, model::LegendrePolynomial)
@@ -885,20 +934,6 @@ function apply_inter_only(smld::SMLD, model::LegendrePolynomial)
     end
 
     return smld_shifted
-end
-
-"""
-`findshift(ref, sd; kw...)`, or `nothing` when it fails (a degenerate histogram ROI): the
-callers treat a failed CC as no candidate. An `InterruptException` is not swallowed.
-"""
-function _try_findshift(ref, sd; kw...)
-    try
-        return findshift(ref, sd; kw...)
-    catch e
-        e isa InterruptException && rethrow()
-        @debug "findshift failed" exception = (e, catch_backtrace())
-        return nothing
-    end
 end
 
 """
@@ -991,8 +1026,8 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
         kept = copy(model.inter[d].dm)
         in_kept = _overlap_inliers(sd, kept, tree, _CC_VERIFY_RADIUS, n_dims)
         cands = [dropped[d]]
-        fresh = _try_findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
-        fresh !== nothing && _cc_too_far(fresh) && push!(cands, Float64.(fresh[1:n_dims]))
+        fresh = findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        _cc_too_far(fresh) && push!(cands, Float64.(fresh[1:n_dims]))
         for c in cands
             in_c = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
             _overlap_leads(in_c, in_kept) || continue
@@ -1011,14 +1046,15 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
 end
 
 """
-Damping factor `(N-1)/N` for a registered pass over `N >= 3` datasets, 1 for `N = 2`.
+Damping factor `(N-1)/N` for a registered pass over `N >= 3` datasets with
+localizations, 1 for `N = 2`.
 
-In a Jacobi pass every dataset (DS1 included) is aligned against one snapshot of the
-others while all of them move. A dataset's refine measures its offset from the mean of
-the others, which move too, so applying the full measured step overcounts the relative
+In a Jacobi pass every dataset with localizations (the reference included) is aligned
+against one snapshot of the others while all of them move. A dataset's refine measures
+its offset from the mean of the others, which move too, so applying the full measured step overcounts the relative
 correction by `N/(N-1)`; scaling a small step by `(N-1)/N` removes that overcount (exact
-in the small-offset regime). With two datasets only DS2 moves (see `_cc_primary_inter!`),
-so nothing is overcounted.
+in the small-offset regime). With two datasets that have localizations only the second
+one moves (see `_cc_primary_inter!`), so nothing is overcounted.
 """
 _jacobi_damping(n_datasets::Int) = n_datasets > 2 ? (n_datasets - 1) / n_datasets : 1.0
 
@@ -1041,8 +1077,9 @@ in the entropy value. A raw-count histogram CC can be captured by a hot spot (a
 bright aggregate localized thousands of times in one bin, present in some datasets
 only): its peak then lands wherever the dataset's densest cluster lines up with the
 hot spot, microns away. The CCs here are therefore computed on bin-count-capped
-histograms (`findshift(...; maxcount=_CC_MAXCOUNT)`), so the CC measures shared
-occupancy and an aggregate weighs like ordinary structure; the incumbent stays a
+histograms (`findshift(...; maxcount=_CC_MAXCOUNT)`) to limit how much any heavily
+populated bin counts, so a single bright spot no longer captures the peak (an
+aggregate spread over many bins still can); the incumbent stays a
 candidate as a backstop, so each step never lowers the dataset's consensus overlap
 as scored. The refine starts from the chosen seed even when it is zero
 (`findinter!(...; cc_init=false)`). A CC with a
@@ -1051,36 +1088,44 @@ a dropped CC overlaps clearly better than the shift a dataset ends with (`_overl
 one `@warn` names it as a likely collection failure (the stage moved between acquisitions),
 once per dataset per call (`warned`; the iterative tier passes one vector across its
 initialization, iterations, and retries). The warning does not change the applied shift.
-The reference (DS1) is included so a misaligned reference is fixable (with two
-datasets only DS2 is aligned, to DS1); the result is
+The reference is included when at least three datasets have localizations, so a
+misaligned reference is fixable; with two datasets that have localizations only
+the second is aligned, against the first. The result is
 re-anchored to inter[1]=0 (an image-invariant global shift). Where the arbiter's step for
-a dataset moves it less than `_CC_VERIFY_RADIUS`, the step is damped by `_jacobi_damping`;
-a larger move (another basin) is applied in full. `init=true` first does
-a rough cross-correlation init vs DS1 (cold start), accepted unless the incumbent
-(zero for registered data) overlaps DS1 strictly better. Jacobi: each pass uses one
-corrected snapshot. Subsumes the old post-hoc CC-rescue.
+a dataset moves it less than `_CC_VERIFY_RADIUS`, the step is damped by `_jacobi_damping`
+using the number of datasets with localizations; a larger move (another basin) is
+applied in full. `init=true` first does
+a rough cross-correlation init against the first dataset with localizations (cold
+start), accepted unless the incumbent (zero for registered data) overlaps it strictly
+better. Jacobi: each pass uses one corrected snapshot. Subsumes the old post-hoc
+CC-rescue.
 """
 function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
                              n_passes::Int=2, init::Bool=false, verbose::Int=0,
                              warned::Union{Nothing,Vector{Bool}}=nothing)
     n_dims = nDims(smld)
     n_datasets = smld.n_datasets
-    n_datasets < 2 && return
+    counts = zeros(Int, n_datasets)
+    for e in smld.emitters
+        1 <= e.dataset <= n_datasets && (counts[e.dataset] += 1)
+    end
+    live = findall(>(0), counts)
+    length(live) < 2 && return
     warned === nothing && (warned = fill(false, n_datasets))
     # last CC shift dropped as absurd (> 5 μm) per dataset; checked against the final shift below
     dropped = Vector{Union{Nothing,Vector{Float64}}}(nothing, n_datasets)
 
-    # Cold start: rough CC alignment of each dataset to DS1, kept unless the incumbent
-    # overlaps DS1 strictly better (ties go to the CC).
+    # Cold start: align each live dataset to the first live one, kept unless the
+    # incumbent overlaps the reference strictly better (ties go to the CC).
     if init
-        ds1 = _intra_only_corrected(smld, model, 1)
+        r = live[1]
+        ds1 = _intra_only_corrected(smld, model, r)
         if !isempty(ds1.emitters)
             tree1 = _coord_tree(ds1, n_dims)
-            Threads.@threads for d in 2:n_datasets
+            Threads.@threads for d in live[2:end]
                 sd = _intra_only_corrected(smld, model, d)
                 isempty(sd.emitters) && continue
-                cc = _try_findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
-                cc === nothing && continue
+                cc = findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
                 if _cc_too_far(cc)
                     dropped[d] = Float64.(cc[1:n_dims])
                     continue
@@ -1090,9 +1135,9 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
         end
     end
 
-    # With two datasets only their relative shift is defined: DS1 stays and DS2 aligns to it.
-    aligned = n_datasets == 2 ? (2:2) : (1:n_datasets)
-    damp = _jacobi_damping(n_datasets)
+    # With two live datasets only their relative shift is defined: hold the first.
+    aligned = length(live) == 2 ? live[2:2] : live
+    damp = _jacobi_damping(length(live))
     for pass in 1:n_passes
         snap = correctdrift(smld, model)             # Jacobi snapshot (read-only across threads)
         Threads.@threads for d in aligned
@@ -1106,10 +1151,10 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             inc = copy(model.inter[d].dm)
             in_inc = _overlap_inliers(sd, inc, tree, _CC_VERIFY_RADIUS, n_dims)
 
-            # CC candidate; a failed or absurd CC is simply not a candidate.
-            cc = _try_findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
-            cc_v = (cc === nothing || _cc_too_far(cc)) ? nothing : Float64.(cc[1:n_dims])
-            cc !== nothing && cc_v === nothing && (dropped[d] = Float64.(cc[1:n_dims]))
+            # CC candidate; a CC with a component over 5 μm is not a candidate.
+            cc = findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+            cc_v = _cc_too_far(cc) ? nothing : Float64.(cc[1:n_dims])
+            cc_v === nothing && (dropped[d] = Float64.(cc[1:n_dims]))
             in_cc = cc_v === nothing ? nothing : _overlap_inliers(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # entropy-refine from the CC seed unless the incumbent overlaps strictly better (no L2 reg:
@@ -1165,27 +1210,29 @@ function _max_inter_change(inter_old::Vector{Vector{Float64}},
 end
 
 """
-Seed continuous-mode inter-shifts by cross-correlating consecutive chunks (FFT),
-with a per-boundary endpoint-chaining fallback.
+Seed continuous-mode inter-shifts by cross-correlating against the last chunk with
+localizations (FFT), with a per-boundary endpoint-chaining fallback.
+The CC histograms are capped at `_CC_MAXCOUNT` localizations per bin to limit how
+much any heavily populated bin counts, so a single bright spot no longer captures
+the peak (an aggregate spread over many bins still can).
 
 Continuous chunks share structure (same FOV, consecutive in time), so the inter
 shift across each boundary can be *measured* by cross-correlating the intra-
-corrected chunk against the already-placed previous chunk — rather than
+corrected chunk against the already-placed last chunk with localizations, rather than
 *extrapolated* from the polynomial endpoints. Per boundary (n-1)→n, both
 candidates are formed: the CC-measured shift, and the endpoint-chained shift
-`inter[n-1] + endpoint(n-1) - startpoint(n)`. Whichever puts chunk n in better
-consensus overlap (`_overlap_score` within `_CC_VERIFY_RADIUS`) with the corrected
-chunk n-1 is kept.
+`inter[n-1] + endpoint(n-1) - startpoint(n)`. Keep the CC unless its overlap
+with the corrected last chunk with localizations is more than 0.05 of chunk n's
+localizations below the endpoint candidate's overlap (`_overlap_score` within
+`_CC_VERIFY_RADIUS`).
 
 As in every tier, a CC with a component over 5 μm is dropped. Continuous mode then falls
 back to endpoint chaining at that boundary without a warning.
 
-This is strictly ≥ either method alone: it uses CC where it locks on (the common
-case) and falls back to endpoint-chaining at a sparse/featureless boundary where
-CC can't. It avoids endpoint-chaining's two failure modes — slow directional
-residual accumulation, and a single bad boundary blowing up and propagating down
-the cumulative chain when a degree-d polynomial extrapolates wildly at t=±1
-(measuring beats extrapolating). See Continuous Mode Internals in CLAUDE.md.
+Measuring avoids two endpoint-chaining failure modes: slow directional residual
+accumulation, and a single bad boundary propagated down the cumulative chain when
+a degree-d polynomial extrapolates poorly at t=±1. A wrong CC is still accepted
+when both candidates overlap poorly (see Known limits in CLAUDE.md).
 """
 function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbose::Int=0)
     n_dims = nDims(smld)
@@ -1206,14 +1253,15 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
 
     n_cc = 0; n_ep = 0
     prev = intra_only(1)
+    last = 1
     for nn in 2:n_datasets
         cur = intra_only(nn)
-        # reference = chunk n-1 placed in the corrected frame (its inter applied)
+        # Reference = last chunk with localizations placed in the corrected frame.
         ref = deepcopy(prev)
         for e in ref.emitters
-            e.x -= model.inter[nn-1].dm[1]
-            e.y -= model.inter[nn-1].dm[2]
-            n_dims == 3 && (e.z -= model.inter[nn-1].dm[3])
+            e.x -= model.inter[last].dm[1]
+            e.y -= model.inter[last].dm[2]
+            n_dims == 3 && (e.z -= model.inter[last].dm[3])
         end
 
         # endpoint-chained candidate (always available, even where CC can't lock on)
@@ -1221,7 +1269,11 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         inter_ep = Float64[model.inter[nn-1].dm[k] + Float64(ep[k]) for k in 1:n_dims]
 
         if isempty(ref.emitters) || isempty(cur.emitters)
-            model.inter[nn].dm .= inter_ep; n_ep += 1; prev = cur; continue
+            model.inter[nn].dm .= inter_ep; n_ep += 1
+            if !isempty(cur.emitters)
+                prev = cur; last = nn
+            end
+            continue
         end
 
         refmat = n_dims == 2 ?
@@ -1233,8 +1285,8 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         # CC-measured candidate: rigid shift of cur onto the corrected ref = full inter[n].
         # Fine histogram (20 nm) — coarse bins lose the overlap contest to the smooth
         # endpoint prediction at clean boundaries even though CC is globally better.
-        cc = _try_findshift(ref, cur; histbinsize=0.02)
-        if cc !== nothing && !_cc_too_far(cc)
+        cc = findshift(ref, cur; histbinsize=0.02, maxcount=_CC_MAXCOUNT)
+        if !_cc_too_far(cc)
             inter_cc = Float64[Float64(cc[k]) for k in 1:n_dims]
             ov_cc = _overlap_score(cur, inter_cc, tree, _CC_VERIFY_RADIUS, n_dims)
             # Prefer the CC measurement: take endpoint only when CC overlap is clearly
@@ -1249,7 +1301,7 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         else
             model.inter[nn].dm .= inter_ep; n_ep += 1
         end
-        prev = cur
+        prev = cur; last = nn
     end
     verbose > 0 && @info("SMLMDriftCorrection: continuous CC-seed — $n_cc/$(n_datasets-1) " *
                          "boundaries from cross-correlation, $n_ep from endpoint fallback")

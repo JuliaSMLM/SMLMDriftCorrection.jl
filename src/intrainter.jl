@@ -161,6 +161,10 @@ function findintra!(intra::AbstractIntraDrift,
     # Convert to parameter vector for optimization
     θ0 = Float64.(intra2theta(intra))
 
+    # Degree 0: the intra model has no free parameters (no P_0 term), so there is nothing to
+    # fit. Optim 1.0's Nelder-Mead indexes out of bounds on an empty vector.
+    isempty(θ0) && return
+
     # Pre-allocate work arrays
     x_work = similar(x)
     y_work = similar(y)
@@ -455,8 +459,8 @@ end
 Find and correct inter-dataset drift using entropy minimization.
 
 Aligns `dataset_n` to the reference datasets by minimizing the entropy
-of the combined point cloud. Uses cross-correlation for initial guess,
-then refines with entropy optimization.
+of the combined point cloud. Uses capped cross-correlation for an initial guess
+when needed, then refines with entropy optimization.
 
 # Arguments
 - `dm`: drift model (modified in place)
@@ -472,8 +476,8 @@ then refines with entropy optimization.
 - `regularization_lambda`: regularization strength (default: 0.0)
   Cost becomes: entropy + λ*||shift - target||²
 - `cc_init`: when the current shift is exactly zero, seed the optimizer from a
-  cross-correlation instead (default: true). Pass `false` when the caller has already
-  chosen the seed, zero included (`_cc_primary_inter!`).
+  capped cross-correlation instead (default: true). Pass `false` when the caller has
+  already chosen the seed, zero included (`_cc_primary_inter!`).
 """
 function findinter!(dm::AbstractIntraInter,
     smld_uncorrected::SMLD,
@@ -519,17 +523,13 @@ function findinter!(dm::AbstractIntraInter,
         end
 
         θ0 = zeros(Float64, n_dims)
-        try
-            cc_shift = findshift(smld_ref, smld_n_intra_only; histbinsize=0.05)  # 50nm bins
-            # findshift(A, B) returns the shift of B relative to A
-            # If B is shifted by +Δ relative to A, findshift returns +Δ
-            # To correct B back to A, inter.dm = Δ (correctdrift subtracts it)
-            # Reject a CC with a component over the shared limit.
-            if !_cc_too_far(cc_shift)
-                θ0 = Float64.(cc_shift)
-            end
-        catch
-            # Keep zero initialization
+        cc_shift = findshift(smld_ref, smld_n_intra_only; histbinsize=0.05, maxcount=_CC_MAXCOUNT)  # 50nm bins
+        # findshift(A, B) returns the shift of B relative to A
+        # If B is shifted by +Δ relative to A, findshift returns +Δ
+        # To correct B back to A, inter.dm = Δ (correctdrift subtracts it)
+        # Reject a CC with a component over the shared limit.
+        if !_cc_too_far(cc_shift)
+            θ0 = Float64.(cc_shift)
         end
     end
 

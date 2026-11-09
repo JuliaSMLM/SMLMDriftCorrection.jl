@@ -51,7 +51,7 @@ Each chunk gets its own polynomial; consecutive chunks are aligned by cross-corr
 
 ### Auto-ROI
 
-When `auto_roi=true`, the algorithm selects a dense rectangular subregion of the field of view for drift estimation, then applies the fitted model to all localizations. This can significantly speed up processing for large datasets while trading some accuracy (~1.4 nm vs ~0.5 nm RMSD in testing).
+When `auto_roi=true`, the algorithm selects a dense rectangular subregion of the field of view for drift estimation, then applies the fitted model to all localizations. This can significantly speed up processing for large datasets while trading some accuracy (~1.4 nm vs ~0.5 nm RMSD in testing). A dataset with localizations but none in the subregion keeps its starting model, which none of its own localizations fit; a warning names such datasets, and `auto_roi=false` avoids it.
 
 The ROI size is determined by `σ_loc`, `σ_target`, and `roi_safety_factor`:
 

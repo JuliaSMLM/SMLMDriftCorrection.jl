@@ -53,11 +53,7 @@ function gaussian_subpixel_2d(cc::AbstractMatrix, peak_idx::CartesianIndex; half
     end
 
     # Solve least squares: A * coeffs = z
-    coeffs = try
-        A \ z
-    catch
-        return float(pi), float(pj)
-    end
+    coeffs = A \ z
 
     # Check for NaN in coefficients
     if any(isnan, coeffs) || any(isinf, coeffs)
@@ -271,7 +267,7 @@ function histimage3D(x::AbstractVector{T}, y::AbstractVector{T},
     ROI::AbstractVector{T}=[-1.0],
     histbinsize::Union{AbstractVector{T}, T}=1.0
 ) where {T<:Real}
-    if size(ROI, 1) == 6 && ROI[1] >= 0.0
+    if size(ROI, 1) == 6
         x_min = ROI[1]
         x_max = ROI[2]
         y_min = ROI[3]
@@ -345,7 +341,7 @@ function crosscorr2D(im1::AbstractMatrix{T}, im2::AbstractMatrix{T}
     im2_pad[1:size(im2,1), 1:size(im2,2)] .= im2
 
     # Compute the cross-correlation
-    cc = FourierTools.ccorr(im1_pad, im2_pad; centered=true)
+    cc = _ccorr_or_stop(im1_pad, im2_pad; centered=true)
     return cc
 end
 
@@ -364,7 +360,7 @@ function crosscorr3D(im1::AbstractArray{T}, im2::AbstractArray{T}
     im2_pad[1:sz1, 1:sz2, 1:sz3] .= im2
 
     # Compute the cross-correlation
-    cc = FourierTools.ccorr(im1_pad, im2_pad, [1, 2, 3]; centered=true)
+    cc = _ccorr_or_stop(im1_pad, im2_pad, [1, 2, 3]; centered=true)
     return cc
 end
 
@@ -416,10 +412,11 @@ Perform a cross-correlation between images representing localizations in two
 SMLD structures and compute the shift between the two original images.
 histbinsize is the size of the bins in the histogram image in the
 same units as the localization coordinates. `maxcount`, when given, clips every
-histogram bin to at most that many localizations before correlating, so the CC
-measures shared occupancy and one bright aggregate (thousands of localizations in a
-bin) cannot outweigh the structure; `nothing` (default) correlates raw counts. It must
-be a positive integer.
+histogram bin to at most that many localizations before correlating, limiting how
+much any heavily populated bin counts, so a single bright spot no longer captures
+the peak (an aggregate spread over many bins still can); `nothing` (default)
+correlates raw counts.
+It must be a positive integer.
 """
 function findshift(smld1::T, smld2::T;
     histbinsize::Real=1.0,
@@ -514,6 +511,25 @@ function findshift(smld1::T, smld2::T;
     shift = histbinsize .* shift
     # Return the shift.
     return shift
+end
+
+"""
+    _ccorr_or_stop(args...; kw...)
+
+Run `FourierTools.ccorr(args...; kw...)` and log an FFT failure with an `@error`
+log line before rethrowing the original exception to the caller. SMLMAnalysis
+tees the run's log to `log.txt`, which an exception does not reach. Alignment
+without CC cannot be trusted, so a failed CC stops the run. Interrupts propagate
+without an error log. Input validation happens before this FFT call.
+"""
+function _ccorr_or_stop(args...; kw...)
+    try
+        return FourierTools.ccorr(args...; kw...)
+    catch e
+        e isa InterruptException || @error("SMLMDriftCorrection: cross-correlation failed, stopping: alignment without it can end up microns off with no other sign",
+                                          exception = e)
+        rethrow()
+    end
 end
 
 """
@@ -672,19 +688,22 @@ end
 # ============================================================================
 
 """
-    find_affine_shift_field(smld1, smld2; histbinsize=0.05, grid_n=5,
-                            sub_histbinsize=0.02, min_locs=100) -> NamedTuple
+    find_affine_shift_field(smld1, smld2; histbinsize=0.05, sub_histbinsize=0.005,
+                            grid_n=5, min_locs=30) -> NamedTuple
 
 Recover a full 2D affine transform between two SMLDs using local
 cross-correlation shifts measured on a grid of sub-regions, weighted
 by CC quality and localization density.
+The global shift uses histograms capped at 4 localizations per bin; tile
+cross-correlations use uncapped Gaussian-rendered images.
 
 Algorithm:
 1. Global CC shift to coarsely align
-2. Divide overlapping FOV into grid_n × grid_n tiles
-3. For each tile: CC shift + quality metrics (peak CC value, loc count)
+2. Divide overlapping FOV into grid_n × grid_n tiles, automatically reducing the
+   grid (no lower than 2 × 2) if the smaller dataset averages fewer than min_locs per tile
+3. For each tile with at least min_locs in both SMLDs: CC shift and normalized CC quality
 4. Weighted least-squares affine fit: Δx = a*x + b*y + c,  Δy = d*x + e*y + f
-   Weight = normalized_cc_peak × min(n1, n2) / max_locs
+   Weight = cc_quality * sqrt(min(n1, n2))
 
 Returns a NamedTuple with affine params and diagnostics.
 """
@@ -697,7 +716,7 @@ function find_affine_shift_field(smld1::S, smld2::S;
     nDims(smld1) == 2 || error("find_affine_shift_field: only 2D supported")
 
     # --- Step 1: global CC shift ---
-    global_shift = findshift(smld1, smld2; histbinsize=histbinsize)
+    global_shift = findshift(smld1, smld2; histbinsize=histbinsize, maxcount=_CC_MAXCOUNT)
     smld2_shifted = deepcopy(smld2)
     correctdrift!(smld2_shifted, global_shift)
 
@@ -749,10 +768,12 @@ function find_affine_shift_field(smld1::S, smld2::S;
         sub2 = BasicSMLD(smld2_shifted.emitters[mask2], sub_cam, smld2_shifted.n_frames, 1)
 
         # Gaussian-rendered images for CC (smooth, sub-bin precision)
-        sub_x1 = [e.x for e in sub1.emitters]; sub_y1 = [e.y for e in sub1.emitters]
-        sub_x2 = [e.x for e in sub2.emitters]; sub_y2 = [e.y for e in sub2.emitters]
-        im_a = _gaussian_image(sub_x1, sub_y1, xlo, ylo, xhi, yhi, hbs)
-        im_b = _gaussian_image(sub_x2, sub_y2, xlo, ylo, xhi, yhi, hbs)
+        sub_x1 = Float64[e.x for e in sub1.emitters]; sub_y1 = Float64[e.y for e in sub1.emitters]
+        sub_x2 = Float64[e.x for e in sub2.emitters]; sub_y2 = Float64[e.y for e in sub2.emitters]
+        im_a = _gaussian_image(sub_x1, sub_y1, Float64(xlo), Float64(ylo),
+                               Float64(xhi), Float64(yhi), Float64(hbs))
+        im_b = _gaussian_image(sub_x2, sub_y2, Float64(xlo), Float64(ylo),
+                               Float64(xhi), Float64(yhi), Float64(hbs))
         cc = crosscorr2D(im_a, im_b)
 
         # Peak and quality

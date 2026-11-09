@@ -108,6 +108,30 @@ end
     @test DC._arbitrate(ref, flag(1:5), cc, flag(1:4), inc, flag(1:9);
                         score = count, cost = _ -> error("cost evaluated")) === inc
 end
+
+@testset "align_smld entropy refine is arbitrated" begin
+    @testset "$n_dims dimensions" for n_dims in (2, 3)
+        # Twenty compact sites, each localized four times.
+        pts = [ntuple(d -> (d == 1 ? 1.0 + 0.25 * i : 1.0) + 0.001 * j, n_dims)
+               for i in 0:19 for j in 0:3]
+        truth = n_dims == 2 ? [0.25, -0.15] : [0.25, -0.15, 0.08]
+        reference = points_smld([pts])
+        target = points_smld([[ntuple(d -> p[d] + truth[d], n_dims) for p in pts]])
+        tree = DC._coord_tree(reference, n_dims)
+        far = copy(truth); far[end] += 0.200
+        near = copy(truth); near[end] += 0.010
+        cost = θ -> θ == truth ? 1.0 : 0.0
+
+        # No-overlap refine loses to the fully overlapping CC, despite lower cost.
+        @test DC._align_choose(target, far, truth, tree, n_dims, cost) == truth
+        # Equal overlap within 10 nm lets the lower-cost refine improve the CC.
+        @test DC._align_choose(target, near, truth, tree, n_dims, cost) == near
+        @test DC._align_choose(target, near, truth, tree, n_dims, _ -> 0.0) == truth
+        # A refine covering more sites wins the basin even when the CC costs less.
+        @test DC._align_choose(target, truth, far, tree, n_dims, cost) == truth
+    end
+end
+
 # -----------------------------------------------------------------------
 # Occupancy sums inverse local density weights, so it is monotone in the flags and independent of
 # the emitter order.
