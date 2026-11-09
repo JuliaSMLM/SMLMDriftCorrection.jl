@@ -1,12 +1,21 @@
+"""
+    SMLMDriftCorrection
+
+Fiducial-free drift correction for single-molecule localization microscopy data, in 2D and 3D.
+Intra-dataset drift is fit with Legendre polynomials by entropy minimization; datasets are
+aligned to each other by cross-correlation refined with entropy. The main entry point is
+[`driftcorrect`](@ref); [`align_smld`](@ref) aligns independent SMLDs.
+"""
 module SMLMDriftCorrection
 
-using FourierTools
-using LinearAlgebra
-using NearestNeighbors
-using Optim
-using SMLMData
-using Statistics
-using StatsFuns
+using FourierTools: FourierTools, fft, fft2d, fftshift, fftshift2d, ifft2d
+using LinearAlgebra: LinearAlgebra, norm
+using NearestNeighbors: NearestNeighbors, KDTree, knn, nn
+using Optim: Optim, BFGS, optimize
+using SMLMData: SMLMData, AbstractSMLMConfig, AbstractSMLMInfo, BasicSMLD, Emitter2D,
+    Emitter2DFit, Emitter3D, Emitter3DFit, IdealCamera, SMLD
+using Statistics: Statistics, cor, mean, median, std
+using StatsFuns: StatsFuns
 
 include("typedefs.jl")
 include("affine.jl")

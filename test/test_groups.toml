@@ -1,9 +1,11 @@
-# Test groups (admiral decision 0008). Declare only the groups this package has; every declared
-# group needs at least one .jl file, and every folder under test/ must be a declared group.
+# Test groups. Every declared group needs at least one .jl file, and every folder under test/
+# must be a declared group.
 #   Core      test/*.jl         fast curated tests; plain Pkg.test(); at most 2 min on CI
+#   QA        test/qa/          Aqua and ExplicitImports; its own CI job
 #   Long      test/long/        slow correctness (SMLMSim drift recovery, multi-method, iterative); lab machine
-# QA (Aqua, ExplicitImports, docstrings) is adopted in its own follow-up PR.
 
 [Core]
+
+[QA]
 
 [Long]

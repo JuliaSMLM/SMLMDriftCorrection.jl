@@ -152,7 +152,7 @@ end
             camera   = IdealCamera(1:64, 1:64, 0.1))
         mat = permutedims(hcat([e.x for e in s_c.emitters], [e.y for e in s_c.emitters],
                                (nd == 3 ? [[e.z for e in s_c.emitters]] : [])...))
-        ref = DC.inrangecount(DC.KDTree(mat), mat, DC._OCC_SEP)
+        ref = DC.NearestNeighbors.inrangecount(DC.NearestNeighbors.KDTree(mat), mat, DC._OCC_SEP)
         @test DC._count_within(DC._PopKDTree(s_c), DC._OCC_SEP, 1:length(s_c.emitters)) == ref
     end
 end

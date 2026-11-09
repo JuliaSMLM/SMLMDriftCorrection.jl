@@ -11,8 +11,9 @@ SMLMDriftCorrection.jl is a Julia package for fiducial-free drift correction in 
 ```bash
 # Run all tests
 julia --project -e 'using Pkg; Pkg.test()'                    # Core group (what CI runs)
+GROUP=QA julia --project -e 'using Pkg; Pkg.test()'           # QA group (test/qa/: Aqua, ExplicitImports)
 GROUP=Long julia --project -e 'using Pkg; Pkg.test()'         # Long group (test/long/)
-GROUP=Everything julia --project -e 'using Pkg; Pkg.test()'   # Core + Long (the recorded run)
+GROUP=Everything julia --project -e 'using Pkg; Pkg.test()'   # Core + QA + Long (the recorded run)
 
 # Record the Everything run for the lab/tests status (from the package root, clean pushed checkout)
 julia /home/kalidke/julia_shared_dev/kalidke/admiral/conventions/templates/package/record_tests.jl
@@ -21,7 +22,7 @@ julia /home/kalidke/julia_shared_dev/kalidke/admiral/conventions/templates/packa
 julia --project=docs docs/make.jl
 ```
 
-Core is the bare function tests (test/*.jl, about 40 s); GitHub CI runs it. Long (test/long/) runs the pipeline end to end on simulated data (cross-basin seeds, Codex fixtures, sweeps, hot spots, continuous mode, the extended suite) and runs locally.
+Core is the bare function tests (test/*.jl, about 40 s); GitHub CI runs it with QA (package quality checks) through the lab's shared workflow. Long (test/long/) runs the pipeline end to end on simulated data (cross-basin seeds, Codex fixtures, sweeps, hot spots, continuous mode, the extended suite) and runs locally.
 
 ### Project Environments
 - Root `Project.toml`: Main package
@@ -264,4 +265,4 @@ For continuous mode (singlepass), inter-shifts are **CC-seeded per boundary** (`
 - **NearestNeighbors.jl**: KDTree for efficient spatial queries
 - **Optim.jl**: BFGS for inter-dataset, Nelder-Mead for intra-dataset (10000 iterations)
 - **LegendrePolynomials.jl**: Orthogonal polynomial basis (`Pl`)
-- **SMLMSim.jl**: Test data generation (compat: 0.3-0.7)
+- **SMLMSim.jl**: Test data generation (a test dependency only, in test/Project.toml)
