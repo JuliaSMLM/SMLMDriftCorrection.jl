@@ -83,7 +83,8 @@ end
     for e in moved.emitters
         e.dataset == 3 && (e.x += 10.0)
     end
-    res = @test_logs (:warn, r"dataset 3: .*likely a collection failure") min_level = Logging.Warn DC.driftcorrect(
+    # dataset 3 stays 10 um off, so the support check also names it
+    res = @test_logs (:warn, r"dataset 3: .*likely a collection failure") (:warn, r"dataset\(s\) \[3\] do not co-localize") min_level = Logging.Warn DC.driftcorrect(
         moved; quality = :fft)
     @test maximum(abs.(res[2].model.inter[3].dm .- res[2].model.inter[1].dm)) <= DC._CC_MAX_SHIFT
     # ordinary small inter shift: applied, nothing to warn about

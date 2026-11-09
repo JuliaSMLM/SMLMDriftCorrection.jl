@@ -170,52 +170,68 @@ function findintra!(intra::AbstractIntraDrift,
 
     if ref_coords === nothing
         # -------- per-dataset adaptive path (iteration 1 / no ref) --------
+        # Two starts, one objective. The background floor (_neighbor_term) ends a pair's pull at
+        # _BG_C σ, which keeps sparse data from running away but also stops a large drift from
+        # being found from zero. So the fit runs twice: directly at the true σ from θ0, and coarse
+        # to fine (every σ times _INTRA_COARSE_SCALE, floor at _INTRA_COARSE_SCALE × _BG_C σ, then
+        # the true σ from that result). The one with the lower true-σ cost, each evaluated with
+        # neighbors built at its own corrected positions, is kept: the coarse stage proposes a
+        # start and never changes the objective (on very sparse data its wide floor lets far,
+        # unrelated pairs pull again, and the direct fit wins there).
         k = min(maxn, N - 1)
         state = NeighborState(N, k, rebuild_threshold, intra.ndims)
-
-        if intra.ndims == 2
-            build_neighbors!(state, x, y)
-            drift_vecs!(state.last_drift_vecs, intra, nframes)  # record drift at build time
-            myfun = θ -> costfun_entropy_intra_2D_adaptive(θ, x, y, σ_x, σ_y, framenum, maxn, intra,
-                                                           state, nframes;
-                                                           x_work=x_work, y_work=y_work)
-        else
-            build_neighbors!(state, x, y, z)
-            drift_vecs!(state.last_drift_vecs, intra, nframes)
-            myfun = θ -> costfun_entropy_intra_3D_adaptive(θ, x, y, z, σ_x, σ_y, σ_z, framenum, maxn, intra,
-                                                           state, nframes;
-                                                           x_work=x_work, y_work=y_work, z_work=z_work)
-        end
-
-        state.allow_rebuild = false
         opt = Optim.Options(iterations=10000, f_abstol=1e-2, x_abstol=1e-4, show_trace=false)
         max_outer = 3
-        local res
-        for _ in 1:max_outer
-            res = optimize(myfun, θ0, opt)
-            theta2intra!(intra, res.minimizer)
-            θ0 = res.minimizer
 
-            drift_vecs!(state.current_drift_vecs, intra, nframes)
-            if max_drift_vec_delta(state.current_drift_vecs, state.last_drift_vecs) < state.rebuild_threshold
-                break
-            end
-
+        # Neighbors rebuilt at the positions corrected by the current `intra`; returns the cost
+        # at σ × scale over them.
+        function stage_cost(scale)
+            sx = σ_x .* scale
+            sy = σ_y .* scale
             @inbounds for i in 1:N
                 x_work[i] = correctdrift(x[i], framenum[i], intra.dm[1])
                 y_work[i] = correctdrift(y[i], framenum[i], intra.dm[2])
             end
+            drift_vecs!(state.last_drift_vecs, intra, nframes)  # record drift at build time
+            state.allow_rebuild = false
             if intra.ndims == 2
                 build_neighbors!(state, x_work, y_work)
+                return θ -> costfun_entropy_intra_2D_adaptive(θ, x, y, sx, sy, framenum, maxn, intra,
+                                                              state, nframes;
+                                                              x_work=x_work, y_work=y_work)
             else
+                sz = σ_z .* scale
                 @inbounds for i in 1:N
                     z_work[i] = correctdrift(z[i], framenum[i], intra.dm[3])
                 end
                 build_neighbors!(state, x_work, y_work, z_work)
+                return θ -> costfun_entropy_intra_3D_adaptive(θ, x, y, z, sx, sy, sz,
+                                                              framenum, maxn, intra, state, nframes;
+                                                              x_work=x_work, y_work=y_work, z_work=z_work)
             end
-            state.last_drift_vecs .= state.current_drift_vecs
         end
-        theta2intra!(intra, res.minimizer)
+
+        # Fit from θstart through the given σ scales; returns the solution and its true-σ cost.
+        function fit_from(θstart, scales)
+            θ = copy(θstart)
+            theta2intra!(intra, θ)
+            for scale in scales
+                f = stage_cost(scale)
+                for _ in 1:max_outer
+                    res = optimize(f, θ, opt)
+                    θ = res.minimizer
+                    theta2intra!(intra, θ)
+                    drift_vecs!(state.current_drift_vecs, intra, nframes)
+                    max_drift_vec_delta(state.current_drift_vecs, state.last_drift_vecs) < state.rebuild_threshold && break
+                    f = stage_cost(scale)
+                end
+            end
+            return θ, stage_cost(1.0)(θ)
+        end
+
+        θ_direct, cost_direct = fit_from(θ0, (1.0,))
+        θ_coarse, cost_coarse = fit_from(θ0, (_INTRA_COARSE_SCALE, 1.0))
+        theta2intra!(intra, cost_coarse < cost_direct ? θ_coarse : θ_direct)
         return
     end
 

@@ -80,6 +80,7 @@ config = DriftConfig(quality=:iterative, degree=3, verbose=1)
 | `info.history` | Entropy after the singlepass start and after each iteration (`:iterative` only; empty for `:fft` and `:singlepass`) |
 | `info.residual_correlation` | Position-frame correlation diagnostic on the corrected data (`intra_summary`, `intra_per_dataset`, `inter`); see `position_frame_correlation` below |
 | `info.roi_indices` | Indices used for ROI subset (`nothing` if `auto_roi=false`) |
+| `info.dataset_support` | Per dataset, whether it co-localizes with the other datasets more than chance after alignment (`dataset`, `n_locs`, `colocalized`, `expected`, `z`, `radius`, `supported`). `supported == false` means its alignment rests on no evidence (too sparse, or not the same structure); `driftcorrect` logs one warning naming such datasets. Per chunk in chunked continuous runs; empty for a single unchunked dataset |
 
 ## Algorithm Pipeline
 

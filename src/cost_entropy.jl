@@ -22,6 +22,43 @@ Optimized for minimal allocations - uses scalar operations in inner loops.
     return m + log(s)
 end
 
+"""
+Background floor of the intra cost's per-localization neighbor term, in units of the
+localization uncertainty σ (`_neighbor_term`).
+"""
+const _BG_C = 5.0
+
+"""
+Factor applied to every localization uncertainty σ in the coarse stage of the per-dataset intra
+fit (`findintra!`). The background floor ends a pair's pull at `_BG_C` σ, which on its own would
+also keep the fit from finding a large drift from zero. In the coarse stage that distance is
+`_INTRA_COARSE_SCALE * _BG_C` σ, so far partners pull the fit into the right basin, and a stage at
+the true σ refines it. `findintra!` also fits directly at the true σ and keeps the result with
+the lower true-σ cost: on very sparse data the coarse stage's wide floor lets far, unrelated
+pairs pull again, and the direct fit wins there.
+"""
+const _INTRA_COARSE_SCALE = 4.0
+
+"""
+    _neighbor_term(lse, log_k)
+
+One localization's term of the intra entropy cost, given `lse = log Σ_j exp(-KL_ij)` over its `k`
+nearest neighbors (`log_k = log k`): `log((Σ_j exp(-KL_ij) + exp(-_BG_C^2 / 2)) / k)`, the neighbor
+mixture plus a uniform background as strong as one neighbor `_BG_C` σ away (for equal σ,
+`KL_ij = |r_i - r_j|^2 / 2σ^2`). Without the background (`lse - log_k`) a localization with no
+partner within a few σ, most of a sparse dataset, adds a penalty quadratic in its distance to
+unrelated localizations, and the intra polynomial bends to pull them together (simulated sparse
+registered datasets, 18-110 localizations per dataset, were left microns off). With it, such a localization
+adds a constant and does not steer the fit; a neighbor at distance `d` keeps weight
+`exp(-KL) / (Σ exp(-KL) + exp(-_BG_C^2 / 2))`, unchanged for `d` well inside `_BG_C` σ.
+Computed as a log-add-exp of the two log terms (overflow safe).
+"""
+@inline function _neighbor_term(lse::T, log_k::T) where {T}
+    t = lse - log_k
+    b = -log_k - T(_BG_C)^2 / 2
+    return max(t, b) + log1p(exp(-abs(t - b)))
+end
+
 # ============================================================================
 # Entropy of localization uncertainties (H_i(D) base term)
 # ============================================================================

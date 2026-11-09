@@ -75,6 +75,7 @@ end
         @test info.dataset_mode == :continuous
         @test info.chunk_frames == 50
         @test info.n_chunks == 3
+        @test isempty(info.dataset_support)
     end
 
     info = DC.DriftInfo(; model, elapsed_s = 0.0, backend = :cpu, iterations = 1,

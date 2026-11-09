@@ -69,6 +69,8 @@ Output metadata from drift correction. Returned as second element of tuple.
 - `history::Vector{Float64}`: Entropy after the singlepass start and after each iteration (`:iterative` only; empty for `:fft` and `:singlepass`)
 - `roi_indices::Union{Nothing, Vector{Int}}`: Indices used for ROI subset (`nothing` if `auto_roi=false`)
 - `residual_correlation::NamedTuple`: Position-frame correlation diagnostic (intra_summary, intra_per_dataset, inter)
+- `dataset_mode::Symbol`, `chunk_frames::Int`, `n_chunks::Int`: The run's dataset mode and chunking (reused by `driftcorrect(smld, info)`)
+- `dataset_support::Vector{DatasetSupport}`: Per dataset `(dataset, n_locs, colocalized, expected, z, radius, supported)`: the fraction of its effective sites with another dataset's localization within `radius` (30 nm, less on dense data), the same fraction by chance (the test repeated 150 nm off), the z score of the difference, and `supported = z > 2`. `false` means the dataset's alignment rests on no evidence; `driftcorrect` logs one warning naming such datasets. Per chunk in chunked continuous runs (chunk `c` of dataset `d` is entry `(d - 1) * n_chunks + c`); empty for a single unchunked dataset
 
 ### AlignConfig
 

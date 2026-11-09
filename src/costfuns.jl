@@ -235,7 +235,7 @@ function entropy1_2D_adaptive(neighbor_indices::Matrix{Int}, k::Int,
             kldiv[j] = -divKL_2D(xi, yi, sxi, syi, x[jj], y[jj], σ_x[jj], σ_y[jj])
         end
 
-        out += _logsumexp(kldiv, k) - log_k
+        out += _neighbor_term(_logsumexp(kldiv, k), log_k)
     end
 
     return entropy_HD(σ_x, σ_y) - out / N
@@ -269,7 +269,7 @@ function entropy1_3D_adaptive(neighbor_indices::Matrix{Int}, k::Int,
                                x[jj], y[jj], z[jj], σ_x[jj], σ_y[jj], σ_z[jj])
         end
 
-        out += _logsumexp(kldiv, k) - log_k
+        out += _neighbor_term(_logsumexp(kldiv, k), log_k)
     end
 
     return entropy_HD(σ_x, σ_y, σ_z) - out / N
@@ -422,7 +422,7 @@ function costfun_entropy_intra_2D_merged(θ,
             state.kldiv[j] = -divKL_2D(xi, yi, sxi, syi, xj, yj, sxj, syj)
         end
 
-        out += _logsumexp(state.kldiv, k) - log_k
+        out += _neighbor_term(_logsumexp(state.kldiv, k), log_k)
     end
 
     return entropy_HD(σ_x_n, σ_y_n) - out / N_n
@@ -505,7 +505,7 @@ function costfun_entropy_intra_3D_merged(θ,
                                        xj, yj, zj, sxj, syj, szj)
         end
 
-        out += _logsumexp(state.kldiv, k) - log_k
+        out += _neighbor_term(_logsumexp(state.kldiv, k), log_k)
     end
 
     return entropy_HD(σ_x_n, σ_y_n, σ_z_n) - out / N_n

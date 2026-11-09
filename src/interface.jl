@@ -47,6 +47,8 @@ Tuple `(corrected_smld, info)` where `info::DriftInfo` contains:
 - `entropy`: Final entropy value; scales with the number of localizations. Divide by `length(smld.emitters)` for a size-independent number
 - `history`: Entropy after the singlepass start and after each iteration (`:iterative` only; empty for `:fft` and `:singlepass`)
 - `residual_correlation`: Position-frame correlation diagnostic on corrected data; see [`position_frame_correlation`](@ref)
+- `dataset_support`: Per dataset, whether it co-localizes with the other datasets more than chance after
+  alignment (see [`DriftInfo`](@ref)); one warning names the datasets whose alignment rests on no evidence
 
 # Errors
 A cross-correlation that fails in the FFT logs an `@error` line and stops the call
@@ -203,6 +205,9 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
         inter = (corr_x=_diag_inter.corr_x, corr_y=_diag_inter.corr_y, corr_z=_diag_inter.corr_z),
     )
 
+    # Alignment support per dataset (per chunk when chunked); name those whose alignment rests on no evidence
+    support = _support_and_warn(smld_corrected, smld_work, chunk_info !== nothing && chunk_info.n_chunks > 1)
+
     elapsed_s = (time_ns() - t_start) / 1e9
 
     info = DriftInfo(;
@@ -217,7 +222,8 @@ function driftcorrect(smld::SMLD, config::DriftConfig)
         residual_correlation = residual_corr,
         dataset_mode,
         chunk_frames = chunk_info === nothing ? 0 : chunk_frames,
-        n_chunks = chunk_info === nothing ? 0 : n_chunks
+        n_chunks = chunk_info === nothing ? 0 : n_chunks,
+        dataset_support = support
     )
 
     return (smld_corrected, info)
@@ -310,6 +316,9 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
         inter = (corr_x=_diag_inter.corr_x, corr_y=_diag_inter.corr_y, corr_z=_diag_inter.corr_z),
     )
 
+    # Alignment support per dataset (per chunk when chunked); name those whose alignment rests on no evidence
+    support = _support_and_warn(smld_corrected, smld_work, chunk_info !== nothing && chunk_info.n_chunks > 1)
+
     elapsed_s = (time_ns() - t_start) / 1e9
 
     new_info = DriftInfo(;
@@ -324,7 +333,8 @@ function driftcorrect(smld::SMLD, info::DriftInfo;
         residual_correlation = residual_corr,
         dataset_mode,
         chunk_frames,
-        n_chunks
+        n_chunks,
+        dataset_support = support
     )
 
     return (smld_corrected, new_info)
@@ -381,7 +391,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
     for nn = 2:n_datasets
         smld_n = filter_by_dataset(smld, nn)
         (isempty(smld_ref.emitters) || isempty(smld_n.emitters)) && continue
-        cc_shift = findshift(smld_ref, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        cc_shift = findshift(smld_ref, smld_n; histbinsize=_CC_HISTBIN, maxcount=_CC_MAXCOUNT)
         if _cc_too_far(cc_shift)
             dropped[nn] = Float64.(cc_shift[1:n_dims])
         else
@@ -425,7 +435,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
             copy(smld.metadata)
         )
 
-        cc_shift = findshift(smld_merged, smld_n; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        cc_shift = findshift(smld_merged, smld_n; histbinsize=_CC_HISTBIN, maxcount=_CC_MAXCOUNT)
         if _cc_too_far(cc_shift)
             dropped[nn] = Float64.(cc_shift[1:n_dims])
         else
@@ -467,7 +477,7 @@ function _driftcorrect_fft!(model::LegendrePolynomial, smld::SMLD,
                     isempty(smld_ref.emitters) && continue
                     smld_n = filter_by_dataset(smld, nn)
                     cc_shift = findshift_damped(smld_ref, smld_n;
-                        histbinsize=0.05, maxcount=_CC_MAXCOUNT,
+                        histbinsize=_CC_HISTBIN, maxcount=_CC_MAXCOUNT,
                         prior_shift=median_dm,
                         prior_sigma=prior_sigma)
                     if _cc_too_far(cc_shift)
@@ -970,10 +980,11 @@ end
 """
 Overlap guard for a cross-correlation shift: overwrite `inter` with `cand` unless the
 incumbent `inter` has a strictly larger occupancy (`_occupancy` of the localizations within
-`_CC_VERIFY_RADIUS` of a reference localization in `tree`). Ties go to the CC: with the
-CC computed on capped histograms, a tie (typically both zero, when a correct but
-bin-quantized CC lands just past the radius on sparse precise data) carries no
-evidence for the incumbent. Returns whether `cand` was accepted.
+`_CC_VERIFY_RADIUS` of a reference localization in `tree`), or `cand` lies more than
+`_EVIDENCE_RADIUS` from the incumbent without a significant lead (`_far_without_evidence`).
+Within `_EVIDENCE_RADIUS` ties go to the CC: with the CC computed on capped histograms, a tie
+(typically both zero, when a correct but bin-quantized CC lands just past the radius on sparse
+precise data) carries no evidence for the incumbent. Returns whether `cand` was accepted.
 """
 function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree, n_dims::Int)
     c = Float64.(cand[1:n_dims])
@@ -981,8 +992,57 @@ function _accept_if_better_overlap!(inter::Vector{Float64}, cand, sd::SMLD, tree
     in_inc  = _overlap_inliers(sd, inter, tree, _CC_VERIFY_RADIUS, n_dims)
     w = _occupancy_weights(sd, _disagreeing(in_cand, in_inc))
     _occ_gt(_occupancy(w, in_inc), _occupancy(w, in_cand)) && return false   # reject only on evidence: ties go to the CC
+    _far_without_evidence(sd, tree, c, inter, n_dims; raw_cc = true) && return false
     inter .= c
     return true
+end
+
+"Histogram bin (μm) of the registered and `:fft` inter cross-correlations (`findshift`)."
+const _CC_HISTBIN = 0.05
+
+"Histogram bin (μm) of the continuous-mode boundary cross-correlation (`_ccseed_inter_continuous!`)."
+const _CC_CONT_HISTBIN = 0.02
+
+"""
+Distance (μm) beyond which a new inter shift replaces a dataset's incumbent only with a
+significant lead in overlap (`_far_without_evidence`). The datasets of a registered
+acquisition are offset from each other by much less than this on real data, while a
+cross-correlation or refine with nothing to lock onto (sparse data) lands microns away.
+Within this distance of the incumbent the tie rule still applies, so a dataset too sparse to
+show a lead can move up to this far per pass, and further over the passes of a run (most in
+`:iterative`); `info.dataset_support` names such a dataset. At 30 nm, correct 40-100 nm moves
+on simulated sparse data were held at zero.
+"""
+const _EVIDENCE_RADIUS = 0.200
+
+"""
+Whether the localization flags of `sd` at shift `cand` lead those at `inc` significantly, inliers
+within `r` of a localization in `tree`: weighted McNemar on effective sites (`_overlap_leads`,
+`z = _TIE_Z`, weights `_occupancy_weights` of the localizations whose flags differ).
+"""
+function _leads_at(sd::SMLD, tree, cand, inc, n_dims::Int, r::Float64)
+    ic = _overlap_inliers(sd, Float64.(cand), tree, r, n_dims)
+    ii = _overlap_inliers(sd, Float64.(inc), tree, r, n_dims)
+    w = _occupancy_weights(sd, _disagreeing(ic, ii))
+    return _overlap_leads(ic, ii; z = _TIE_Z, w = w)
+end
+
+"""
+Evidence rule for a large inter move: whether `cand` lies more than `_EVIDENCE_RADIUS` from the
+incumbent `inc` without leading it significantly (`_leads_at`) at `_CC_VERIFY_RADIUS`, or, for a
+raw cross-correlation shift (`raw_cc`), at `_CC_VERIFY_RADIUS` plus half a histogram bin
+(`binsize`) diagonal, the precision a CC is measured to (a correct CC can sit up to that far from the truth,
+just past `_CC_VERIFY_RADIUS`, where it and a far incumbent both cover nothing). A move needs
+a lead of at least five effective sites when the incumbent covers none of them (`z > 2`); with
+too little data to show one, the dataset keeps its incumbent and `_dataset_support` names it.
+"""
+function _far_without_evidence(sd::SMLD, tree, cand, inc, n_dims::Int; raw_cc::Bool,
+                               binsize::Float64 = _CC_HISTBIN)
+    sqrt(sum(abs2, cand .- inc)) > _EVIDENCE_RADIUS || return false
+    _leads_at(sd, tree, cand, inc, n_dims, _CC_VERIFY_RADIUS) && return false
+    raw_cc || return true
+    rq = _CC_VERIFY_RADIUS + sqrt(n_dims) * binsize / 2
+    return !_leads_at(sd, tree, cand, inc, n_dims, rq)
 end
 
 """
@@ -1026,7 +1086,7 @@ function _warn_dropped_cc!(model::LegendrePolynomial, smld::SMLD,
         kept = copy(model.inter[d].dm)
         in_kept = _overlap_inliers(sd, kept, tree, _CC_VERIFY_RADIUS, n_dims)
         cands = [dropped[d]]
-        fresh = findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+        fresh = findshift(ref, sd; histbinsize=_CC_HISTBIN, maxcount=_CC_MAXCOUNT)
         _cc_too_far(fresh) && push!(cands, Float64.(fresh[1:n_dims]))
         for c in cands
             in_c = _overlap_inliers(sd, c, tree, _CC_VERIFY_RADIUS, n_dims)
@@ -1125,7 +1185,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             Threads.@threads for d in live[2:end]
                 sd = _intra_only_corrected(smld, model, d)
                 isempty(sd.emitters) && continue
-                cc = findshift(ds1, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+                cc = findshift(ds1, sd; histbinsize=_CC_HISTBIN, maxcount=_CC_MAXCOUNT)
                 if _cc_too_far(cc)
                     dropped[d] = Float64.(cc[1:n_dims])
                     continue
@@ -1152,7 +1212,7 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             in_inc = _overlap_inliers(sd, inc, tree, _CC_VERIFY_RADIUS, n_dims)
 
             # CC candidate; a CC with a component over 5 μm is not a candidate.
-            cc = findshift(ref, sd; histbinsize=0.05, maxcount=_CC_MAXCOUNT)
+            cc = findshift(ref, sd; histbinsize=_CC_HISTBIN, maxcount=_CC_MAXCOUNT)
             cc_v = _cc_too_far(cc) ? nothing : Float64.(cc[1:n_dims])
             cc_v === nothing && (dropped[d] = Float64.(cc[1:n_dims]))
             in_cc = cc_v === nothing ? nothing : _overlap_inliers(sd, cc_v, tree, _CC_VERIFY_RADIUS, n_dims)
@@ -1162,7 +1222,8 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             seed = inc
             if cc_v !== nothing
                 w = _occupancy_weights(sd, _disagreeing(in_cc, in_inc))
-                seed = _occ_gt(_occupancy(w, in_inc), _occupancy(w, in_cc)) ? inc : cc_v
+                seed = (_occ_gt(_occupancy(w, in_inc), _occupancy(w, in_cc)) ||
+                        _far_without_evidence(sd, tree, cc_v, inc, n_dims; raw_cc = true)) ? inc : cc_v
             end
             model.inter[d].dm .= seed
             findinter!(model, smld, d, others, maxn;
@@ -1177,6 +1238,9 @@ function _cc_primary_inter!(model::LegendrePolynomial, smld::SMLD, maxn::Int;
             best = _arbitrate(refined, in_ref, cc_v, in_cc, inc, in_inc;
                               score = f -> _occupancy(w, f), w = w,
                               cost = _arbiter_cost(model, smld, snap, d, others, maxn))
+            # a move beyond _EVIDENCE_RADIUS needs a significant lead (sparse data: keep the incumbent)
+            _far_without_evidence(sd, tree, best, inc, n_dims;
+                                  raw_cc = cc_v !== nothing && best == cc_v && best != refined) && (best = inc)
             step = best .- inc
             model.inter[d].dm .= sqrt(sum(abs2, step)) < _CC_VERIFY_RADIUS ? inc .+ damp .* step : best
         end
@@ -1224,7 +1288,9 @@ candidates are formed: the CC-measured shift, and the endpoint-chained shift
 `inter[n-1] + endpoint(n-1) - startpoint(n)`. Keep the CC unless its overlap
 with the corrected last chunk with localizations is more than 0.05 of chunk n's
 localizations below the endpoint candidate's overlap (`_overlap_score` within
-`_CC_VERIFY_RADIUS`).
+`_CC_VERIFY_RADIUS`), or it lies more than `_EVIDENCE_RADIUS` from the endpoint candidate
+without leading it significantly (`_far_without_evidence`, the evidence rule of registered
+mode; a sparse chunk's CC has nothing to lock onto and landed microns away).
 
 As in every tier, a CC with a component over 5 μm is dropped. Continuous mode then falls
 back to endpoint chaining at that boundary without a warning.
@@ -1285,15 +1351,17 @@ function _ccseed_inter_continuous!(model::LegendrePolynomial, smld::SMLD; verbos
         # CC-measured candidate: rigid shift of cur onto the corrected ref = full inter[n].
         # Fine histogram (20 nm) — coarse bins lose the overlap contest to the smooth
         # endpoint prediction at clean boundaries even though CC is globally better.
-        cc = findshift(ref, cur; histbinsize=0.02, maxcount=_CC_MAXCOUNT)
+        cc = findshift(ref, cur; histbinsize=_CC_CONT_HISTBIN, maxcount=_CC_MAXCOUNT)
         if !_cc_too_far(cc)
             inter_cc = Float64[Float64(cc[k]) for k in 1:n_dims]
             ov_cc = _overlap_score(cur, inter_cc, tree, _CC_VERIFY_RADIUS, n_dims)
             # Prefer the CC measurement: take endpoint only when CC overlap is clearly
             # worse (a real lock-on failure), not on a marginal edge — endpoint errors
             # chain down the sequence, so CC wins globally even when slightly behind at a
-            # single boundary.
-            if ov_cc >= ov_ep - 0.05
+            # single boundary. A CC far from the endpoint prediction needs a significant lead.
+            if ov_cc >= ov_ep - 0.05 &&
+               !_far_without_evidence(cur, tree, inter_cc, inter_ep, n_dims; raw_cc = true,
+                                      binsize = _CC_CONT_HISTBIN)
                 model.inter[nn].dm .= inter_cc; n_cc += 1
             else
                 model.inter[nn].dm .= inter_ep; n_ep += 1

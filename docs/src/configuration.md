@@ -93,6 +93,7 @@ info.iterations    # iterations completed (0 for :fft, 1 for :singlepass)
 info.residual_correlation  # position-frame correlation diagnostic (intra_summary, intra_per_dataset, inter)
 info.history       # entropy after the singlepass start and each iteration (:iterative only; empty otherwise)
 info.roi_indices   # indices used for ROI subset (nothing if auto_roi=false)
+info.dataset_support  # per dataset: co-localization with the others vs chance; supported=false names an unaligned dataset
 ```
 
 ### Drift Trajectory

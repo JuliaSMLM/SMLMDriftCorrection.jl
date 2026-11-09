@@ -197,9 +197,14 @@ end
     inter = zeros(3)
     @test DC._accept_if_better_overlap!(inter, cand, tgt, tree, 3)
     @test inter == cand
-    # differing flags still decide on occupancy: a far incumbent loses to the CC, and a far CC to the incumbent
-    @test DC._accept_if_better_overlap!(fill(5.0, 3), zeros(3), tgt, tree, 3)
+    # differing flags still decide on occupancy: an incumbent 173 nm off loses to the CC, and a far CC to the incumbent
+    @test DC._accept_if_better_overlap!(fill(0.1, 3), zeros(3), tgt, tree, 3)
     inter = zeros(3)
     @test !DC._accept_if_better_overlap!(inter, fill(5.0, 3), tgt, tree, 3)
     @test inter == zeros(3)
+    # a move beyond _EVIDENCE_RADIUS needs a significant lead: one compact aggregate is one effective site (z = 1),
+    # so it does not move an incumbent 8.7 um away (0.2.10 moved it: ties and one-site leads went to the CC)
+    inter = fill(5.0, 3)
+    @test !DC._accept_if_better_overlap!(inter, zeros(3), tgt, tree, 3)
+    @test inter == fill(5.0, 3)
 end

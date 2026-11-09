@@ -7,29 +7,34 @@ include(joinpath(@__DIR__, "..", "points_smld.jl"))
 
 # Codex review of 4323bf9: occupancy sums that are equal in exact arithmetic differ in the
 # last bits (10.0 vs 9.999999999999982) and must not decide the guard. Ten A and ten B
-# compact motifs; the target holds 6:15 copies of each A shifted by (3, 0) and a varying
-# number of B copies, the reference four copies of each. Both candidates cover ten sites.
+# compact motifs; the target holds 6:15 copies of each A shifted by (dx, 0) and a varying
+# number of B copies, the reference four copies of each. Both candidates cover ten sites, so
+# the decision is a tie in every emitter order. At dx = 0.15 um (within _EVIDENCE_RADIUS) ties
+# go to the CC; at dx = 3 um (0.2.10 applied it) a tie is no evidence for a move that large and
+# the incumbent is kept (0.2.11).
 @testset "occupancy ties are decided with a tolerance (Codex 4323bf9)" begin
     A = [(0.600 + 0.110i, 0.600 + 0.023i^2) for i in 0:9]
     B = [(4.400 + 0.105i, 4.400 + 0.011i^2) for i in 0:9]
     ref = reduce(vcat, [fill(p, 4) for p in vcat(A, B)])
     nb = [3, 3, 3, 4, 4, 3, 2, 4, 4, 2]
-    tgt = vcat(reduce(vcat, [fill((p[1] + 3.0, p[2]), 5 + i) for (i, p) in enumerate(A)]),
-               reduce(vcat, [fill(p, nb[i]) for (i, p) in enumerate(B)]))
-    smld = points_smld([ref, tgt])
-    shifts = Vector{Float64}[]
-    rng = Random.MersenneTwister(77)
-    for k in 1:6
-        sm = k == 1 ? smld : begin
-            em = deepcopy(smld.emitters)
-            i2 = findall(e -> e.dataset == 2, em)
-            em[i2] = em[i2][Random.randperm(rng, length(i2))]
-            BasicSMLD(em, smld.camera, 300, 2, Dict{String,Any}())
+    for (dx, expected) in ((0.15, [0.15, 0.0]), (3.0, [0.0, 0.0]))
+        tgt = vcat(reduce(vcat, [fill((p[1] + dx, p[2]), 5 + i) for (i, p) in enumerate(A)]),
+                   reduce(vcat, [fill(p, nb[i]) for (i, p) in enumerate(B)]))
+        smld = points_smld([ref, tgt])
+        shifts = Vector{Float64}[]
+        rng = Random.MersenneTwister(77)
+        for k in 1:6
+            sm = k == 1 ? smld : begin
+                em = deepcopy(smld.emitters)
+                i2 = findall(e -> e.dataset == 2, em)
+                em[i2] = em[i2][Random.randperm(rng, length(i2))]
+                BasicSMLD(em, smld.camera, 300, 2, Dict{String,Any}())
+            end
+            (_, info) = DC.driftcorrect(sm; quality = :fft, degree = 0)
+            push!(shifts, info.model.inter[2].dm .- info.model.inter[1].dm)
         end
-        (_, info) = DC.driftcorrect(sm; quality = :fft, degree = 0)
-        push!(shifts, info.model.inter[2].dm .- info.model.inter[1].dm)
+        @test all(sh -> maximum(abs.(sh .- expected)) < 0.005, shifts)
     end
-    @test all(sh -> maximum(abs.(sh .- [3.0, 0.0])) < 0.005, shifts)
 end
 
 # Codex review of 912f617: a center that matches neither candidate must not merge two
@@ -94,15 +99,25 @@ end
 # shrank and a relative tolerance shrank with them, so a 1e-8 difference decided. Each
 # candidate has one exclusive inlier, in a compact group of 10,000 (incumbent) or 10,001 (CC)
 # localizations: weights 1e-4 and 0.99990001e-4 on top of 100 sites covered under both shifts
-# (the reference holds A and A + 3 um, the target A + 3 um). The tie goes to the CC.
+# (the reference holds A and A + dx, the target A + dx). The guard must see a tie: within
+# _EVIDENCE_RADIUS (dx = 0.15 um) the tie goes to the CC; at dx = 3 um a tie is no evidence for
+# a move that large and the incumbent is kept (0.2.10 applied it, through :fft as well).
 @testset "occupancy tolerance is absolute (Codex b1dbd6a)" begin
     A = [(0.600 + 0.110i, 0.600 + 0.023i^2) for i in 0:99]
-    qb = (14.0, 3.0)    # incumbent-only group: one localization at qb, the rest 20 nm away
-    qa = (3.0 + 15.0, 5.0)    # CC-only group (at +3 um in x, as A)
-    grp(q, n) = vcat([q], fill((q[1] + 0.020, q[2]), n - 1))
-    ref = vcat(A, [(p[1] + 3.0, p[2]) for p in A], [(qb[1] - 0.0295, qb[2]), (qa[1] - 3.0 - 0.0295, qa[2])])
-    tgt = vcat([(p[1] + 3.0, p[2]) for p in A], grp(qb, 10_000), grp(qa, 10_001))
-    smld = points_smld([ref, tgt])
-    (_, info) = DC.driftcorrect(smld; quality = :fft, degree = 0)
-    @test abs((info.model.inter[2].dm .- info.model.inter[1].dm)[1] - 3.0) < 0.01
+    for dx in (0.15, 3.0)
+        qb = (14.0, 3.0)    # incumbent-only group: one localization at qb, the rest 20 nm away
+        qa = (dx + 15.0, 5.0)    # CC-only group (at +dx in x, as A)
+        grp(q, n) = vcat([q], fill((q[1] + 0.020, q[2]), n - 1))
+        ref = vcat(A, [(p[1] + dx, p[2]) for p in A], [(qb[1] - 0.0295, qb[2]), (qa[1] - dx - 0.0295, qa[2])])
+        tgt = vcat([(p[1] + dx, p[2]) for p in A], grp(qb, 10_000), grp(qa, 10_001))
+        smld = points_smld([ref, tgt])
+        tree = DC._coord_tree(DC.filter_by_dataset(smld, 1), 2)
+        inter = [0.0, 0.0]
+        @test DC._accept_if_better_overlap!(inter, [dx, 0.0], DC.filter_by_dataset(smld, 2), tree, 2) ==
+              (dx == 0.15)
+        if dx == 3.0
+            (_, info) = DC.driftcorrect(smld; quality = :fft, degree = 0)
+            @test abs((info.model.inter[2].dm .- info.model.inter[1].dm)[1]) < 0.01
+        end
+    end
 end

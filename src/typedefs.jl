@@ -126,6 +126,12 @@ julia> config.convergence_tol
 end
 
 """
+One dataset's alignment support (`DriftInfo.dataset_support`, computed by `_dataset_support`).
+"""
+const DatasetSupport = NamedTuple{(:dataset, :n_locs, :colocalized, :expected, :z, :radius, :supported),
+                                  Tuple{Int, Int, Float64, Float64, Float64, Float64, Bool}}
+
+"""
     DriftInfo <: AbstractSMLMInfo
 
 Metadata from drift correction, returned as second element of tuple.
@@ -148,6 +154,17 @@ Supports warm start via `info.model`.
   - `intra_per_dataset`: vector of `(dataset, n_locs, corr_x, corr_y, corr_z)` — flag bad datasets
   - `inter`: `(corr_x, corr_y, corr_z)` — cross-dataset alignment quality
   Low values (~0.01) indicate drift is well-corrected; high values indicate residual drift.
+- `dataset_support::Vector{DatasetSupport}`: Per dataset, whether it co-localizes with the other datasets
+  more than chance after alignment, i.e. whether its inter alignment rests on evidence. Each entry is
+  `(dataset, n_locs, colocalized, expected, z, radius, supported)`: `colocalized` is the fraction of the
+  dataset's effective sites (a site localized many times counts once) with another dataset's localization
+  within `radius` (30 nm, reduced on dense data until chance coverage is 25%), `expected` the same
+  fraction with the dataset displaced 150 nm (chance), `z` the significance of the difference, and
+  `supported = z > 2`. A dataset placed at random relative to the others (too sparse to align, or not the
+  same structure) has `z` near 0 and `supported = false`; `driftcorrect` logs one warning naming such
+  datasets. Chunked continuous runs report per chunk, the units their inter alignment placed (chunk `c`
+  of dataset `d` is entry `(d - 1) * n_chunks + c`, in its `dataset` field). Empty datasets have
+  `z = NaN`; empty for a single unchunked dataset. Up to 5,000 localizations per dataset are tested.
 
 # Usage
 ```julia
@@ -160,6 +177,7 @@ info.roi_indices  # ROI used for estimation (nothing if auto_roi=false)
 info.residual_correlation.intra_summary.mean_abs_corr_y  # overall residual
 info.residual_correlation.intra_per_dataset[5].corr_y    # dataset 5 residual
 info.residual_correlation.inter.corr_y                   # inter-dataset alignment
+[s.dataset for s in info.dataset_support if !s.supported] # datasets whose alignment rests on no evidence
 
 # Warm start from previous result
 (smld2, info2) = driftcorrect(smld2; warm_start=info.model)
@@ -178,6 +196,7 @@ info.residual_correlation.inter.corr_y                   # inter-dataset alignme
     dataset_mode::Symbol = :registered
     chunk_frames::Int = 0
     n_chunks::Int = 0
+    dataset_support::Vector{DatasetSupport} = DatasetSupport[]
 end
 
 # Preserve the original positional constructors with defaults for the new metadata.
@@ -190,7 +209,22 @@ end
 function DriftInfo{M}(model, elapsed_s, backend, iterations, converged, entropy, history,
                       roi_indices, residual_correlation) where {M<:AbstractIntraInter}
     return DriftInfo{M}(model, elapsed_s, backend, iterations, converged, entropy, history,
-                        roi_indices, residual_correlation, :registered, 0, 0)
+                        roi_indices, residual_correlation, :registered, 0, 0, DatasetSupport[])
+end
+
+# The 0.2.10 positional form (through `n_chunks`), from before `dataset_support`.
+function DriftInfo(model, elapsed_s, backend, iterations, converged, entropy, history,
+                   roi_indices, residual_correlation, dataset_mode, chunk_frames, n_chunks)
+    return DriftInfo(; model, elapsed_s, backend, iterations, converged, entropy, history,
+                       roi_indices, residual_correlation, dataset_mode, chunk_frames, n_chunks)
+end
+
+function DriftInfo{M}(model, elapsed_s, backend, iterations, converged, entropy, history,
+                      roi_indices, residual_correlation, dataset_mode, chunk_frames,
+                      n_chunks) where {M<:AbstractIntraInter}
+    return DriftInfo{M}(model, elapsed_s, backend, iterations, converged, entropy, history,
+                        roi_indices, residual_correlation, dataset_mode, chunk_frames, n_chunks,
+                        DatasetSupport[])
 end
 
 """

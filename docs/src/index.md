@@ -172,6 +172,15 @@ diag = position_frame_correlation(smld_corrected; K=20, mode=:intra)
 diag.summary.mean_abs_corr_x
 ```
 
+### Alignment Support
+
+With two or more datasets (or chunks, in a chunked continuous run), `info.dataset_support` says for each whether it co-localizes with the others more than chance after alignment. A dataset with `supported == false` has nothing in common with the others at its final position (too sparse to align, or not the same structure), so its position relative to them is not established; `driftcorrect` logs one warning naming such datasets.
+
+```julia
+(smld_corrected, info) = driftcorrect(smld)
+unaligned = [s.dataset for s in info.dataset_support if !s.supported]
+```
+
 ### Warm Start / Continuation
 
 ```julia

@@ -121,20 +121,26 @@ end
 Exact count of the points of `tree` (the query point itself included) within `r` of each
 point `tree.pts[:, q]`, `q` in `queries`.
 """
-function _count_within(tree::_PopKDTree{N}, r::Float64, queries::AbstractVector{Int}) where {N}
+_count_within(tree::_PopKDTree, r::Float64, queries::AbstractVector{Int}) =
+    _count_near(tree, r, view(tree.pts, :, queries))
+
+"""
+Exact count of the points of `tree` within `r` of each column of `Q` (`N` rows, any points).
+"""
+function _count_near(tree::_PopKDTree{N}, r::Float64, Q::AbstractMatrix{Float64}) where {N}
     r2 = r * r
-    pts, spts, bmin, bmax = tree.pts, tree.spts, tree.bmin, tree.bmax
-    cnt = zeros(Int, length(queries))
-    isempty(pts) && return cnt
+    spts, bmin, bmax = tree.spts, tree.bmin, tree.bmax
+    cnt = zeros(Int, size(Q, 2))
+    isempty(tree.pts) && return cnt
     stack = Int[]
-    @inbounds for (iq, q) in enumerate(queries)
+    @inbounds for iq in axes(Q, 2)
         c = 0
         push!(stack, 1)
         while !isempty(stack)
             id = pop!(stack)
             dmin = 0.0; dmax = 0.0
             for d in 1:N
-                v = pts[d, q]
+                v = Q[d, iq]
                 a = bmin[(id - 1) * N + d] - v; b = v - bmax[(id - 1) * N + d]
                 g = max(a, b, 0.0)
                 dmin += g * g
@@ -148,7 +154,7 @@ function _count_within(tree::_PopKDTree{N}, r::Float64, queries::AbstractVector{
                 for j in tree.lo[id]:tree.hi[id]
                     s = 0.0
                     for d in 1:N
-                        s += (spts[d, j] - pts[d, q])^2
+                        s += (spts[d, j] - Q[d, iq])^2
                     end
                     s <= r2 && (c += 1)
                 end
@@ -295,5 +301,113 @@ function _arbiter_cost(model::LegendrePolynomial, smld::SMLD, snap::SMLD, d::Int
         state.needs_initial_build = true
         return cost(Float64.(θ))
     end
+end
+
+"Most localizations per dataset that `_dataset_support` tests (every k-th beyond this)."
+const _SUPPORT_MAX_TESTED = 5000
+
+"Displacement (μm) of `_dataset_support`'s chance level: the test is repeated this far off, in 8 directions."
+const _SUPPORT_OFFSET = 0.150
+
+"Chance coverage (fraction) that sets `_dataset_support`'s radius on dense data."
+const _SUPPORT_CHANCE = 0.25
+
+"""
+    _dataset_support(sc::SMLD, labels = dataset of each emitter, n = sc.n_datasets) -> Vector{DatasetSupport}
+
+Whether each dataset of the corrected `sc` co-localizes with the other datasets more than
+chance, i.e. whether its inter alignment rests on evidence. `labels` (one per emitter, `1:n`)
+can name other units than the datasets: chunked continuous mode passes the chunks, the units
+its inter alignment placed. Per dataset, over its tested
+localizations `i` (all, or every k-th so that at most `_SUPPORT_MAX_TESTED` are tested), with
+occupancy weights `w_i = 1 / n_i` (`n_i` its own localizations within `_OCC_SEP` of `i`, so a
+site localized many times counts once):
+
+- `c_i`: whether another dataset has a localization within `radius` of `i`. The radius is
+  `_CC_VERIFY_RADIUS` (the inlier test of the inter alignment), reduced on dense data until a
+  point placed at random would be covered with chance `_SUPPORT_CHANCE` (from the median
+  number of other-dataset localizations within `_SUPPORT_OFFSET`, as a Poisson count): at
+  30 nm a dense reference covers every point, aligned or not, and the test says nothing;
+- `p_i`: the same test with `i` displaced by `_SUPPORT_OFFSET` in 8 directions in x-y,
+  `(k_i + 1/2) / 9` for `k_i` of the 8 covered: the chance level at that local density, with
+  the reference's own clustering;
+- `colocalized = Σ w_i c_i / W` and `expected = Σ w_i p_i / W` (`W = Σ w_i`, the effective
+  sites), `z = Σ w_i (c_i - p_i) / sqrt(Σ w_i p_i (1 - p_i))` (sites taken as independent
+  trials), and `supported = z > _TIE_Z`.
+
+A dataset placed at random relative to the others (thrown, or not the same structure) is not
+covered more at its own position than 150 nm off, so `z` is near or below 0; a correctly aligned
+one that shares localized sites with the others has `z` well above 2. Empty datasets get
+`z = NaN` and `supported = false`. Returns an empty vector for fewer than two datasets.
+"""
+function _dataset_support(sc::SMLD, ds::Vector{Int} = Int[e.dataset for e in sc.emitters],
+                          nd::Int = sc.n_datasets)
+    out = DatasetSupport[]
+    nd < 2 && return out
+    D = nDims(sc)
+    all_tree = _PopKDTree(sc)
+    δ = _SUPPORT_OFFSET
+    dirs = [(cospi(k / 4), sinpi(k / 4)) for k in 0:7]
+    for d in 1:nd
+        idx = findall(==(d), ds)
+        n = length(idx)
+        if n == 0
+            push!(out, (dataset = d, n_locs = 0, colocalized = 0.0, expected = 0.0, z = NaN,
+                        radius = NaN, supported = false))
+            continue
+        end
+        own_tree = _PopKDTree(all_tree.pts[:, idx])
+        X = all_tree.pts[:, idx[1:cld(n, _SUPPORT_MAX_TESTED):n]]   # tested localizations
+        others(r, Q) = _count_near(all_tree, r, Q) .- _count_near(own_tree, r, Q)
+        w = 1.0 ./ _count_near(own_tree, _OCC_SEP, X)
+        # radius: chance coverage _SUPPORT_CHANCE at the median local density of the others
+        m = median(others(δ, X))
+        r = m > 0 ? min(_CC_VERIFY_RADIUS, δ * (-log1p(-_SUPPORT_CHANCE) / m)^(1 / D)) :
+                    _CC_VERIFY_RADIUS
+        c = others(r, X) .> 0
+        k = zeros(Int, size(X, 2))
+        Xk = similar(X)
+        for (ux, uy) in dirs
+            Xk .= X
+            Xk[1, :] .+= δ * ux
+            Xk[2, :] .+= δ * uy
+            k .+= others(r, Xk) .> 0
+        end
+        p = (k .+ 0.5) ./ (length(dirs) + 1)
+        W = sum(w)
+        obs = sum(w[c]; init = 0.0)
+        ex = sum(w .* p)
+        z = (obs - ex) / sqrt(sum(@. w * p * (1 - p)))
+        push!(out, (dataset = d, n_locs = n, colocalized = obs / W, expected = ex / W, z = z,
+                    radius = r, supported = z > _TIE_Z))
+    end
+    return out
+end
+
+"""
+Log one warning naming the datasets (`unit = "dataset"`) or chunks (`"chunk"`) with
+localizations whose alignment rests on no evidence (`_dataset_support`): their positions
+relative to the others are not established, so treat them as unaligned.
+"""
+function _warn_unsupported(support, unit::String = "dataset")
+    bad = [s.dataset for s in support if s.n_locs > 0 && !s.supported]
+    isempty(bad) && return
+    @warn "driftcorrect: $(unit)(s) $(bad) do not co-localize with the other $(unit)s more " *
+          "than chance after alignment (info.dataset_support, z <= $(_TIE_Z)); their inter " *
+          "alignment rests on no evidence (too sparse, or not the same structure). Treat " *
+          "their positions as unaligned."
+    return
+end
+
+"""
+Alignment support of a corrected result (`_dataset_support`) over the units the inter alignment
+placed: the datasets, or in chunked continuous mode (`work` = the chunked data, emitters in the
+same order as `sc`) the chunks. Logs one warning naming the unsupported ones.
+"""
+function _support_and_warn(sc::SMLD, work::SMLD, chunked::Bool)
+    support = chunked ? _dataset_support(sc, Int[e.dataset for e in work.emitters], work.n_datasets) :
+                        _dataset_support(sc)
+    _warn_unsupported(support, chunked ? "chunk" : "dataset")
+    return support
 end
 
