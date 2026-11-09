@@ -161,6 +161,10 @@ function findintra!(intra::AbstractIntraDrift,
     # Convert to parameter vector for optimization
     θ0 = Float64.(intra2theta(intra))
 
+    # Degree 0: the intra model has no free parameters (no P_0 term), so there is nothing to
+    # fit. Optim 1.0's Nelder-Mead indexes out of bounds on an empty vector.
+    isempty(θ0) && return
+
     # Pre-allocate work arrays
     x_work = similar(x)
     y_work = similar(y)
