@@ -1,6 +1,3 @@
-using FourierTools
-using SMLMData
-using LinearAlgebra
 
 """
     gaussian_subpixel_2d(cc, peak_idx; halfwidth=3)
