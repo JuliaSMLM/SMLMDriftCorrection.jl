@@ -41,7 +41,10 @@ Tuple `(aligned_smlds, info::AlignInfo)` where:
 - `info.diagnostic`: `nothing` for `:shift`; for `:affine` a NamedTuple with
   `affine_coeffs[i] = (a, b, c, d, e, f)` and `global_shifts[i]` — the **exact**
   per-dataset correction applied (the two internal passes composed): subtract
-  `global_shifts[i]`, then `x -> x - (a·x + b·y + c)`, `y -> y - (d·x + e·y + f)`. The similarity
+  `global_shifts[i]`, then `x -> x - (a·x + b·y + c)`, `y -> y - (d·x + e·y + f)`.
+  Replaying it on the input reproduces the aligned positions to the rounding of the
+  emitter coordinate type. `info.shifts[i]` is this correction's displacement of the
+  input centroid (the mean displacement of the localizations). The similarity
   stored in `info.transforms[i]` is only a best-fit approximation of this general
   affine.
 
@@ -204,11 +207,14 @@ function _align_affine_fft(smlds, N, ndims_ref, config, t0)
         affine_coeffs[i] = (total_a, total_b, total_c, total_d, total_e, total_f)
         global_shifts[i] = collect(total_global)
 
-        # Total shift at centroid (diagnostic similarity fit — independent x/y scale
-        # and shear from the general affine are not captured here).
-        cx = mean(em.x for em in smlds[i].emitters)
-        cy = mean(em.y for em in smlds[i].emitters)
-        shifts[i] = [total_global[1] + a*cx + b*cy + c, total_global[2] + d*cx + e*cy + f]
+        # Total shift at the input centroid under the composed correction, which is
+        # also the mean displacement of the localizations: G + A*(centroid - G) + t.
+        # The similarity fit below reuses it as its translation; independent x/y scale
+        # and shear from the general affine are not captured there.
+        ux = mean(em.x for em in smlds[i].emitters) - total_global[1]
+        uy = mean(em.y for em in smlds[i].emitters) - total_global[2]
+        shifts[i] = [total_global[1] + total_a*ux + total_b*uy + total_c,
+                     total_global[2] + total_d*ux + total_e*uy + total_f]
 
         θ_fit = atan((total_d - total_b) / 2)
         s_fit = sqrt(abs((1 + total_a) * (1 + total_e)))

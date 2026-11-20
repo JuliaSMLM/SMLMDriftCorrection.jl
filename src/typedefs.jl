@@ -37,7 +37,8 @@ Transform: [x'; y'] = s * R(θ) * [x; y] + [tx; ty]
     `info.transforms[i]`. The exact per-dataset 6-parameter affine that was
     applied is available in `info.diagnostic.affine_coeffs[i]` as
     `(a, b, c, d, e, f)`, representing the correction
-    `Δx = a·x + b·y + c, Δy = d·x + e·y + f`.
+    `Δx = a·x + b·y + c, Δy = d·x + e·y + f` on coordinates from which
+    `info.diagnostic.global_shifts[i]` has first been subtracted.
 """
 struct AffineTransform2D <: AbstractAlignTransform
     θ::Float64       # rotation angle (radians)

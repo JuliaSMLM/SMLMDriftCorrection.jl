@@ -41,6 +41,15 @@ const DC = SMLMDriftCorrection
     end
     @test worst < 1.0e-9   # μm; rounding only
 
+    # info.shifts is the mean displacement of the localizations under that correction.
+    n = length(target.emitters)
+    mean_dx = sum(i.x - o.x for (i, o) in zip(target.emitters, aligned[2].emitters)) / n
+    mean_dy = sum(i.y - o.y for (i, o) in zip(target.emitters, aligned[2].emitters)) / n
+    @test abs(info.shifts[2][1] - mean_dx) < 1.0e-9
+    @test abs(info.shifts[2][2] - mean_dy) < 1.0e-9
+    @test info.transforms[2].tx == info.shifts[2][1]
+    @test info.transforms[2].ty == info.shifts[2][2]
+
     # The reference is returned unchanged with a zero record.
     @test info.diagnostic.affine_coeffs[1] == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     @test info.diagnostic.global_shifts[1] == [0.0, 0.0]
