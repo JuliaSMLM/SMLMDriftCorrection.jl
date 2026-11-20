@@ -32,7 +32,7 @@ params_small = StaticSMLMConfig(
 # -----------------------------------------------------------------------
 # Continuous mode smoke — exercises chunking + the CC-seed inter path
 # (_ccseed_inter_continuous!). Tiny data, so assert only that it runs and
-# returns valid output; full-sim drift recovery lives in extended_tests.jl.
+# returns valid output; full-sim drift recovery lives in extended.jl.
 # -----------------------------------------------------------------------
 @testset "continuous mode smoke" begin
     Random.seed!(7)
