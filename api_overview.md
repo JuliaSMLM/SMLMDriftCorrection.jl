@@ -519,5 +519,4 @@ info.shifts  # [zeros(2), [dx, dy]]
 # Recovers anisotropic scale, rotation, shear, translation
 (aligned, info) = align_smld([smld_ch1, smld_ch2]; transform=:affine)
 info.transforms[2]  # AffineTransform2D(θ, scale, tx, ty)
-# ~3nm median residual, ~13s on 1M locs
 ```
