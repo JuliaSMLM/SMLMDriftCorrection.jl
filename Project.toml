@@ -21,7 +21,7 @@ FFTA = "b86e33f2-c0db-4aa1-a6e0-ab43e668529e"
 # FFTW (JuliaMath/FFTA.jl#146), so every cross-correlation fails when both load. Remove this line
 # and the [weakdeps] entry when a fixed FFTA is released.
 FFTA = "<0.3.2"
-FourierTools = "0.4"
+FourierTools = "0.4, 0.5"
 LegendrePolynomials = "0.4"
 LinearAlgebra = "1"
 NearestNeighbors = "0.4"
