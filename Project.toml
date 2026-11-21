@@ -28,6 +28,6 @@ NearestNeighbors = "0.4"
 Optim = "1"
 SMLMData = "0.7"
 Statistics = "1"
-StatsFuns = "1"
+StatsFuns = "1, 2.2"
 julia = "1.10"
 
