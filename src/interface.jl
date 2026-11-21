@@ -669,7 +669,7 @@ function _driftcorrect_iterate!(model::LegendrePolynomial, smld::SMLD,
         # dataset has a fully-corrected snapshot available. Pass the other datasets'
         # corrected coords as `ref_coords` — intra now fits against the same structural
         # scaffold that findinter! uses, which breaks the intra ↔ inter limit cycle
-        # that blocks convergence on cells with small inter-shifts.
+        # that blocks convergence on data with small inter-shifts.
         #
         # Memory: we pass ONE set of full arrays (no per-dataset mask copies). Each
         # findintra! thread filters inline and allocates only the ref-filtered σ

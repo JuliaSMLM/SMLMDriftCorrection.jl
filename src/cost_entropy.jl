@@ -3,7 +3,7 @@ Entropy based cost function.  See
 "Drift correction in localization microscopy using entropy minimization",
 Jelmer Cnossen, Tao Ju Cui, Chirlmin Joo, and Carlas Smith;
 Optics Express, Volume 29, Issue 18, pp 27961-27974, 30 August 2021;
-https://doi.org/10.1364/OE.620
+https://doi.org/10.1364/OE.426620
 
 Optimized for minimal allocations - uses scalar operations in inner loops.
 """

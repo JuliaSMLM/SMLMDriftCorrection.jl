@@ -11,7 +11,7 @@ AI-parseable API reference for SMLMDriftCorrection.jl. All distance units are in
 
 Drift correction uses entropy minimization to find polynomial drift models that minimize spatial entropy of localization data. The algorithm has two phases: intra-dataset (polynomial drift within each acquisition) and inter-dataset (constant shift between acquisitions). The primary interface follows the `f(data, config) -> (result, info)` tuple pattern used across JuliaSMLM.
 
-`dataset_mode` selects the inter-dataset algorithm. Registered mode is **CC-primary**: a cross-correlation seed on bin-count-capped histograms is entropy-refined, and an overlap arbiter picks among {refined, CC, incumbent}. With two datasets only the second is aligned, against the first. With three or more, every dataset including the reference is aligned against the others; moves within 30 nm of the incumbent are damped by (N-1)/N (N = number of datasets) to remove the overcount from updating all datasets at once. Larger moves into another basin are applied in full. Continuous mode instead seeds each inter-chunk shift by cross-correlating consecutive chunks; endpoint-chaining remains a per-boundary fallback. `quality=:fft` ignores `dataset_mode` and runs registered-style CC passes.
+`dataset_mode` selects the inter-dataset algorithm. Registered mode is **CC-primary**: a cross-correlation seed on bin-count-capped histograms is entropy-refined, and an overlap arbiter picks among {refined, CC, incumbent}. With two datasets only the second is aligned, against the first. With three or more, every dataset including the reference is aligned against the others; moves within 30 nm of the incumbent are damped by (N-1)/N (N = number of datasets) to remove the overcount from updating all datasets at once. Larger moves into another basin are applied in full. Datasets are counted only if they have localizations; an empty dataset is skipped. Continuous mode instead seeds each inter-chunk shift by cross-correlating consecutive chunks; endpoint-chaining remains a per-boundary fallback. `quality=:fft` ignores `dataset_mode` and runs registered-style CC passes.
 
 No tier, `:fft` included, applies a cross-correlation shift with a component over 5 μm. Registered `:singlepass` and `:iterative`, and `:fft` regardless of `dataset_mode`, warn once per dataset per call when a dropped CC overlaps clearly better than the shift the dataset ends with, indicating a likely collection failure (the stage moved between acquisitions). Continuous `:singlepass` and `:iterative` drop such a boundary CC and fall back to endpoint chaining at that boundary without a warning.
 
@@ -519,5 +519,4 @@ info.shifts  # [zeros(2), [dx, dy]]
 # Recovers anisotropic scale, rotation, shear, translation
 (aligned, info) = align_smld([smld_ch1, smld_ch2]; transform=:affine)
 info.transforms[2]  # AffineTransform2D(θ, scale, tx, ty)
-# ~3nm median residual, ~13s on 1M locs
 ```

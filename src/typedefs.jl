@@ -37,7 +37,8 @@ Transform: [x'; y'] = s * R(θ) * [x; y] + [tx; ty]
     `info.transforms[i]`. The exact per-dataset 6-parameter affine that was
     applied is available in `info.diagnostic.affine_coeffs[i]` as
     `(a, b, c, d, e, f)`, representing the correction
-    `Δx = a·x + b·y + c, Δy = d·x + e·y + f`.
+    `Δx = a·x + b·y + c, Δy = d·x + e·y + f` on coordinates from which
+    `info.diagnostic.global_shifts[i]` has first been subtracted.
 """
 struct AffineTransform2D <: AbstractAlignTransform
     θ::Float64       # rotation angle (radians)
@@ -229,7 +230,7 @@ Result metadata from `align_smld`.
 - `transform::Symbol`: Transform model used (`:shift` or `:affine`)
 - `backend::Symbol`: Computation backend (`:cpu`)
 - `diagnostic::Union{Nothing, NamedTuple}`: Extra per-dataset information. `nothing` for pure shift alignment. For `transform=:affine`, a NamedTuple with:
-    - `affine_coeffs::Vector{NTuple{6,Float64}}`: per-dataset `(a, b, c, d, e, f)` such that the applied correction was `x -> x - (a·x + b·y + c)`, `y -> y - (d·x + e·y + f)` (summed over the two refinement passes).
+    - `affine_coeffs::Vector{NTuple{6,Float64}}`: per-dataset `(a, b, c, d, e, f)` such that the applied correction was `x -> x - (a·x + b·y + c)`, `y -> y - (d·x + e·y + f)`, with `x` and `y` taken after the global shift is subtracted (the two refinement passes composed into one affine).
     - `global_shifts::Vector{Vector{Float64}}`: per-dataset global shift applied before the affine correction (summed over both passes).
 """
 struct AlignInfo <: AbstractSMLMInfo

@@ -553,7 +553,7 @@ Inter-dataset entropy cost: compute entropy contribution from dataset_n points
 when merged with reference datasets.
 
 OPTIMIZATION: Uses adaptive neighbor rebuilding - only rebuilds KDTree when
-shift changes by more than 0.5 μm. Since typical inter-dataset shifts are
+shift changes by more than the state's `rebuild_threshold` (0.1 μm in the package's callers). Since typical inter-dataset shifts are
 small, neighbors are stable across most optimizer iterations.
 
 When properly aligned, dataset_n points have lower entropy (neighbors are closer).
